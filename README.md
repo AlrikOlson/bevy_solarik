@@ -38,6 +38,8 @@ lights and foliage transmission, and uses a procedural sky.
 - The reference pathtracer keeps accumulating while the camera is still.
 - Light selection favors brighter lights and larger emitters. This reduced reference-render noise in the Bistro tests; it did not measurably improve the raw realtime output.
 
+The [aperture-light audit](docs/aperture-lights.md) rechecks lantern and Bistro pavement brightness against the current reference.
+
 The [lighting notes](docs/lighting.md) cover the implementation and tradeoffs. The [light-sampling measurements](docs/light-sampling.md) include the results and their limits.
 
 ## Usage
