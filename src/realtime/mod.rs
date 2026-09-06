@@ -91,12 +91,13 @@ impl Plugin for SolarikLightingPlugin {
             )
             .add_systems(
                 Core3d,
-                (
-                    solarik_lighting::<false>.before(main_opaque_pass_3d),
-                    solarik_lighting::<true>
-                        .after(main_opaque_pass_3d)
-                        .before(main_transparent_pass_3d),
-                )
+                (solarik_lighting::<false>, solarik_lighting::<true>)
+                    // Bevy 0.19 queues deferred alpha masks in the forward main
+                    // pass too. Resolve after it so raster lighting cannot
+                    // overwrite masked pixels. Depth-zero pixels retain sky.
+                    .chain()
+                    .after(main_opaque_pass_3d)
+                    .before(main_transparent_pass_3d)
                     .in_set(Core3dSystems::MainPass),
             );
     }

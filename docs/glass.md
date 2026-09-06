@@ -96,12 +96,14 @@ the 32-pane limit. The existing thin-glass and glossy GPU regressions also pass.
 A complete 640x320 realtime capture at the analytic camera, RR off, matches the
 tinted/clear/hole radiance oracle within 0.0031. The original integration failed
 with black panes because raster draws still covered the traced result. The
-opaque masked green control is saturated even with this compositor disabled;
-it matches the baseline byte for byte, but its photometry is unresolved and is
-tracked separately. The pathtracer check remains unchanged by default:
+opaque masked green control exposed a Bevy 0.19.1 render-order bug: its
+forward alpha-mask draw overwrote Solarik's deferred result. Solarik now resolves
+after the opaque/sky pass and before primary compositing and transparency.
+The control measures 0.9969 for expected radiance 1.0, versus a clipped value
+of at least 1.2 before the fix. Every pane now uses the physical oracle:
 
 ```text
-python tests/glass_scene.py --check ../artifacts/bevy-sponza/primary_glass_analytic/seq_0000.png --raster-baseline ../artifacts/bevy-sponza/primary_glass_raster_baseline/seq_0000.png
+python tests/glass_scene.py --check ../artifacts/bevy-sponza/mask_ownership_analytic/seq_0000.png
 ```
 
 ## Validation, 2026-09-06
