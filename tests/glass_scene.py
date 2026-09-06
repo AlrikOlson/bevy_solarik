@@ -42,6 +42,8 @@ def generate(destination, hidden_room=False):
                           "alphaCutoff": .5, "emissiveFactor": list(emission),
                           "pbrMetallicRoughness": {"baseColorFactor": color,
                               "metallicFactor": 0, "roughnessFactor": 1}})
+        if mode == "BLEND":
+            materials[-1]["extensions"] = {"KHR_materials_transmission": {"transmissionFactor": 1}}
         meshes.append({"primitives": [{"attributes": {"POSITION": pos, "NORMAL": normal,
                     "TEXCOORD_0": uv, "TANGENT": tangent}, "indices": indices,
                     "material": len(materials) - 1}]})
@@ -76,6 +78,7 @@ def generate(destination, hidden_room=False):
             panel("room " + name, position, scale, [0, 0, 0, 1],
                   double_sided=False, rotation=rotation)
     document = {"asset": {"version": "2.0", "generator": "Solarik analytic glass test"},
+                "extensionsUsed": ["KHR_materials_transmission"],
                 "buffers": [{"uri": "data:application/octet-stream;base64," +
                      base64.b64encode(data).decode(), "byteLength": len(data)}],
                 "bufferViews": views, "accessors": accessors, "materials": materials,

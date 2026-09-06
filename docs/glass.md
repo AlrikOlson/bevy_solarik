@@ -1,6 +1,15 @@
 # Thin glass transport
 
-The unreleased pathtracer treats `AlphaMode::Blend` surfaces as smooth thin panes.
+Thin panes require both `AlphaMode::Blend` and `specular_transmission = 1.0`.
+The corresponding glTF authoring is `KHR_materials_transmission.transmissionFactor = 1`
+plus `alphaMode: BLEND`. Alpha mode alone never identifies glass.
+Ordinary Blend, Premultiplied, Add and Multiply currently retain Bevy raster
+shading/compositing and are excluded from the TLAS (including ray shadows,
+reflections and pathtracer visibility). Fractional or invalid specular transmission
+also uses this fallback. Diffuse Blend ray transport is a separate follow-up.
+Raster-only cameras retain Bevy's behavior.
+
+The unreleased pathtracer treats explicitly authored glass as smooth thin panes.
 Camera and subsequent BSDF rays can reflect from the pane or transmit through
 its base-color tint. Realtime Solarik also resolves panes inside glossy reflection
 paths. Camera-visible panes now use a primary compositor after opaque and sky

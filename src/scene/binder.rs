@@ -196,6 +196,9 @@ pub fn prepare_raytracing_scene_bindings(
         }
     };
     for (asset_id, material) in material_assets.iter() {
+        if material_alpha(material).flags & 7 == 0 {
+            continue;
+        }
         let Some(base_color_texture_id) = process_texture(&material.base_color_texture) else {
             continue;
         };
@@ -591,8 +594,8 @@ const MATERIAL_FLAG_DOUBLE_SIDED: u32 = 8;
 
 /// How the rays treat a material's alpha: exactly one of `OPAQUE`,
 /// `ALPHA_MASK` (test the base colour alpha against `cutoff`) or
-/// `ALPHA_BLEND` (never a hit, glass is transparent to light), plus
-/// `DOUBLE_SIDED`.
+/// `ALPHA_BLEND` (explicit thin glass), plus `DOUBLE_SIDED`.
+/// No mode bit means raster fallback: never bind it in the TLAS.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MaterialAlpha {
     flags: u32,
@@ -604,8 +607,12 @@ fn material_alpha(material: &StandardMaterial) -> MaterialAlpha {
         AlphaMode::Opaque => (MATERIAL_FLAG_OPAQUE, 0.0),
         AlphaMode::Mask(cutoff) => (MATERIAL_FLAG_ALPHA_MASK, cutoff),
         AlphaMode::AlphaToCoverage => (MATERIAL_FLAG_ALPHA_MASK, 0.5),
-        AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply => {
+        AlphaMode::Blend if material.specular_transmission == 1.0 => {
             (MATERIAL_FLAG_ALPHA_BLEND, 0.0)
+        }
+        // Unsupported blend semantics stay in Bevy's raster pass, outside TLAS.
+        AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply => {
+            (0, 0.0)
         }
     };
     let double_sided = if material.double_sided {
@@ -822,6 +829,31 @@ mod tests {
     }
 
     #[test]
+    fn only_explicit_blend_transmission_is_thin_glass() {
+        let mut material = StandardMaterial::default();
+        for mode in [
+            AlphaMode::Blend,
+            AlphaMode::Premultiplied,
+            AlphaMode::Add,
+            AlphaMode::Multiply,
+        ] {
+            material.alpha_mode = mode;
+            for transmission in [0.0, 0.5, f32::NAN, f32::INFINITY] {
+                material.specular_transmission = transmission;
+                assert_eq!(material_alpha(&material).flags & 7, 0);
+            }
+            material.specular_transmission = 1.0;
+            assert_eq!(
+                material_alpha(&material).flags & 7,
+                if mode == AlphaMode::Blend {
+                    MATERIAL_FLAG_ALPHA_BLEND
+                } else {
+                    0
+                }
+            );
+        }
+    }
+    #[test]
     fn material_alpha_picks_one_mode_and_keeps_double_sidedness() {
         let mut material = StandardMaterial::default();
         assert_eq!(
@@ -853,10 +885,7 @@ mod tests {
         ] {
             material.alpha_mode = blended;
             let alpha = material_alpha(&material);
-            assert_eq!(
-                alpha.flags & MATERIAL_FLAG_ALPHA_BLEND,
-                MATERIAL_FLAG_ALPHA_BLEND
-            );
+            assert_eq!(alpha.flags & MATERIAL_FLAG_ALPHA_BLEND, 0);
             assert_eq!(
                 alpha.flags & MATERIAL_FLAG_OPAQUE,
                 0,
