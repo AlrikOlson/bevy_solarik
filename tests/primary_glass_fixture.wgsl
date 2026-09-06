@@ -4,6 +4,7 @@ const RAY_T_MIN = 0.0001;
 const RAY_T_MAX = 100000.0;
 const RAY_QUERY_INTERSECTION_NONE = 0u;
 const MATERIAL_FLAG_ALPHA_BLEND = 4u;
+const MATERIAL_FLAG_DIFFUSE_BLEND = 16u;
 struct Intersection { kind: u32, instance_index: u32, t: f32 }
 struct Material { flags: u32 }
 var<private> materials: array<Material, 2>;
@@ -32,7 +33,7 @@ fn resolve_material_alpha(material: Material, uv: vec2f) -> f32 { return inputs[
 fn trace_glossy_path(pixel: vec2u, surface: ResolvedGPixel, distance: f32, wi: vec3f, pdf: f32, rng: ptr<function, u32>) -> vec3f { return vec3(1.0, 0.0, 0.0); }
 @compute @workgroup_size(1)
 fn probe() {
-    materials[0].flags = MATERIAL_FLAG_ALPHA_BLEND;
+    materials[0].flags = select(MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, inputs[3].x > 0.0);
     materials[1].flags = 0u;
     material_ids[1] = 1u;
     var rng = 0u;

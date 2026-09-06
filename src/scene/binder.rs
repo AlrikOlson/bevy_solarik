@@ -196,7 +196,13 @@ pub fn prepare_raytracing_scene_bindings(
         }
     };
     for (asset_id, material) in material_assets.iter() {
-        if material_alpha(material).flags & 7 == 0 {
+        if material_alpha(material).flags
+            & (MATERIAL_FLAG_OPAQUE
+                | MATERIAL_FLAG_ALPHA_MASK
+                | MATERIAL_FLAG_ALPHA_BLEND
+                | MATERIAL_FLAG_DIFFUSE_BLEND)
+            == 0
+        {
             continue;
         }
         let Some(base_color_texture_id) = process_texture(&material.base_color_texture) else {
@@ -263,7 +269,9 @@ pub fn prepare_raytracing_scene_bindings(
         };
 
         raytracing_scene_bindings.has_foliage |= alpha_testing.0 && (material.flags >> 16) != 0;
-        if alpha_testing.0 && material.flags & MATERIAL_FLAG_ALPHA_BLEND != 0 {
+        if alpha_testing.0
+            && material.flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND) != 0
+        {
             raytracing_scene_bindings.glass_entities.insert(entity);
         }
         let transform = transform.to_matrix();
@@ -590,11 +598,13 @@ struct GpuMaterial {
 const MATERIAL_FLAG_OPAQUE: u32 = 1;
 const MATERIAL_FLAG_ALPHA_MASK: u32 = 2;
 const MATERIAL_FLAG_ALPHA_BLEND: u32 = 4;
+const MATERIAL_FLAG_DIFFUSE_BLEND: u32 = 16;
 const MATERIAL_FLAG_DOUBLE_SIDED: u32 = 8;
 
 /// How the rays treat a material's alpha: exactly one of `OPAQUE`,
 /// `ALPHA_MASK` (test the base colour alpha against `cutoff`) or
 /// `ALPHA_BLEND` (explicit thin glass), plus `DOUBLE_SIDED`.
+/// `DIFFUSE_BLEND` shades an ordinary surface with fractional coverage.
 /// No mode bit means raster fallback: never bind it in the TLAS.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MaterialAlpha {
@@ -609,6 +619,9 @@ fn material_alpha(material: &StandardMaterial) -> MaterialAlpha {
         AlphaMode::AlphaToCoverage => (MATERIAL_FLAG_ALPHA_MASK, 0.5),
         AlphaMode::Blend if material.specular_transmission == 1.0 => {
             (MATERIAL_FLAG_ALPHA_BLEND, 0.0)
+        }
+        AlphaMode::Blend if material.specular_transmission == 0.0 => {
+            (MATERIAL_FLAG_DIFFUSE_BLEND, 0.0)
         }
         // Unsupported blend semantics stay in Bevy's raster pass, outside TLAS.
         AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply => {
@@ -838,10 +851,19 @@ mod tests {
             AlphaMode::Multiply,
         ] {
             material.alpha_mode = mode;
-            for transmission in [0.0, 0.5, f32::NAN, f32::INFINITY] {
+            for transmission in [0.5, f32::NAN, f32::INFINITY] {
                 material.specular_transmission = transmission;
                 assert_eq!(material_alpha(&material).flags & 7, 0);
             }
+            material.specular_transmission = 0.0;
+            assert_eq!(
+                material_alpha(&material).flags & 23,
+                if mode == AlphaMode::Blend {
+                    MATERIAL_FLAG_DIFFUSE_BLEND
+                } else {
+                    0
+                }
+            );
             material.specular_transmission = 1.0;
             assert_eq!(
                 material_alpha(&material).flags & 7,

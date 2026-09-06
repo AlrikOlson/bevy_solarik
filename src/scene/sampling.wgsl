@@ -5,7 +5,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::lighting::D_GGX
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
-#import bevy_solarik::scene_bindings::{trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
     return balance_heuristic(f * f, g * g);
@@ -235,10 +235,15 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
         let barycentrics = triangle_barycentrics(light_sample.seed);
         let triangle_data = resolve_triangle_data_full(light_source.id, triangle_id, barycentrics);
 
+        let raw_material = materials[material_ids[light_source.id]];
+        var emission = triangle_data.material.emissive.rgb;
+        if (raw_material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
+            emission *= clamp(resolve_material_alpha(raw_material, triangle_data.uv), 0.0, 1.0);
+        }
         return ResolvedLightSample(
             vec4(triangle_data.world_position, LIGHT_SAMPLE_EMISSIVE_MESH),
             triangle_data.world_normal,
-            triangle_data.material.emissive.rgb,
+            emission,
             f32(triangle_count) * triangle_data.triangle_area,
             vec3(0.0, 0.0, 1.0),
             vec2(-1.0),

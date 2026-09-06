@@ -11,7 +11,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
 #import bevy_solarik::sampling::{sample_random_light, random_emissive_light_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
 #import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::world_cache::{query_world_cache, get_cell_size, WORLD_CACHE_CELL_LIFETIME}
 #import bevy_solarik::realtime_bindings::{view_output, gi_reservoirs_a, gbuffer, depth_buffer, view, constants}
 #ifdef DLSS_RR_GUIDE_BUFFERS
@@ -109,6 +109,19 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         }
         let ray_hit = resolve_ray_hit_full(ray);
         let material = materials[material_ids[ray.instance_index]];
+        if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
+#ifdef DLSS_RR_GUIDE_BUFFERS
+            psr_finished = true;
+#endif
+            let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+            if rand_f(rng) >= alpha {
+                if glass_interactions >= 32u { break; }
+                glass_interactions += 1u;
+                ray_origin = offset_thin_glass_ray(ray_hit.world_position,
+                    ray_hit.geometric_world_normal, wi, RAY_T_MIN);
+                continue;
+            }
+        }
         if (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
             if glass_interactions >= 32u { break; }
             glass_interactions += 1u;

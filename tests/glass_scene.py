@@ -11,7 +11,7 @@ from pathlib import Path
 import struct
 
 
-def generate(destination, hidden_room=False):
+def generate(destination, hidden_room=False, diffuse=False):
     """Five panes in front of white emission; red emission behind the camera."""
     data = bytearray()
     views, accessors = [], []
@@ -43,7 +43,13 @@ def generate(destination, hidden_room=False):
                           "pbrMetallicRoughness": {"baseColorFactor": color,
                               "metallicFactor": 0, "roughnessFactor": 1}})
         if mode == "BLEND":
-            materials[-1]["extensions"] = {"KHR_materials_transmission": {"transmissionFactor": 1}}
+            if diffuse:
+                coverage = {"tinted": .5, "clear": 1, "zero alpha": 0}[name]
+                materials[-1]["pbrMetallicRoughness"]["baseColorFactor"] = [0, 0, 0, coverage]
+                materials[-1]["emissiveFactor"] = [0, .5, 0]
+                materials[-1]["extensions"] = {"KHR_materials_specular": {"specularFactor": 0}}
+            else:
+                materials[-1]["extensions"] = {"KHR_materials_transmission": {"transmissionFactor": 1}}
         meshes.append({"primitives": [{"attributes": {"POSITION": pos, "NORMAL": normal,
                     "TEXCOORD_0": uv, "TANGENT": tangent}, "indices": indices,
                     "material": len(materials) - 1}]})
@@ -78,7 +84,7 @@ def generate(destination, hidden_room=False):
             panel("room " + name, position, scale, [0, 0, 0, 1],
                   double_sided=False, rotation=rotation)
     document = {"asset": {"version": "2.0", "generator": "Solarik analytic glass test"},
-                "extensionsUsed": ["KHR_materials_transmission"],
+                "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_specular"],
                 "buffers": [{"uri": "data:application/octet-stream;base64," +
                      base64.b64encode(data).decode(), "byteLength": len(data)}],
                 "bufferViews": views, "accessors": accessors, "materials": materials,
@@ -88,7 +94,7 @@ def generate(destination, hidden_room=False):
     destination.write_text(json.dumps(document), encoding="utf-8")
 
 
-def check(path, hidden_room=False):
+def check(path, hidden_room=False, diffuse=False):
     """Compare image patches to the emitter/Fresnel closed form at EV100=0."""
     import numpy as np
     from PIL import Image
@@ -121,6 +127,9 @@ def check(path, hidden_room=False):
         expected = np.array([1, 1, 1], dtype=float)
         if tint:
             expected = reflection * np.array([1, 0, 0]) + (1 - reflection) * np.array(tint)
+        if diffuse and name in ("tinted", "clear", "zero alpha"):
+            coverage = {"tinted": .5, "clear": 1, "zero alpha": 0}[name]
+            expected = (1 - coverage) * np.ones(3) + coverage * np.array([0, .5, 0])
         if name == "mask solid":
             expected = np.array([0, 1, 0])
         error = float(np.max(np.abs(measured - expected)))
@@ -136,9 +145,11 @@ if __name__ == "__main__":
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--generate", type=Path)
     action.add_argument("--check", type=Path)
-    parser.add_argument("--hidden-room", action="store_true")
+    fixture = parser.add_mutually_exclusive_group()
+    fixture.add_argument("--hidden-room", action="store_true")
+    fixture.add_argument("--diffuse", action="store_true")
     args = parser.parse_args()
     if args.generate:
-        generate(args.generate, args.hidden_room)
+        generate(args.generate, args.hidden_room, args.diffuse)
     else:
-        check(args.check, args.hidden_room)
+        check(args.check, args.hidden_room, args.diffuse)

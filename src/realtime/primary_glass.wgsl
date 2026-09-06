@@ -3,7 +3,7 @@ enable wgpu_ray_query;
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, offset_thin_glass_ray}
 #import bevy_solarik::gbuffer_utils::{reconstruct_world_position, ResolvedGPixel}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, RAY_T_MAX}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, RAY_T_MAX}
 #import bevy_solarik::specular_gi::trace_glossy_path
 #import bevy_solarik::surface_path::shade_surface_path
 #import bevy_solarik::realtime_bindings::{view_output, depth_buffer, view, constants}
@@ -46,7 +46,7 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
         let ray = trace_glass_ray(origin, direction, RAY_T_MIN, remaining);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE { return vec4(radiance + transmission * background, has_glass); }
         let material = materials[material_ids[ray.instance_index]];
-        if (material.flags & MATERIAL_FLAG_ALPHA_BLEND) == 0u {
+        if (material.flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) == 0u {
             // Raster depth bounds this query. An earlier opaque hit was omitted
             // by raster (e.g. a building's back-facing wall), so sky/background
             // cannot stand in for its radiance. Preserve nonglass pixels.
@@ -62,6 +62,19 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
         has_glass = 1.0;
         let hit = resolve_ray_hit_full(ray);
         let alpha = clamp(resolve_material_alpha(material, hit.uv), 0.0, 1.0);
+        if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
+            var surface_radiance = vec3(0.0);
+            if alpha > 0.0 {
+                for (var sample = 0u; sample < 4u; sample += 1u) {
+                    surface_radiance += shade_surface_path(hit, -direction, rng);
+                }
+            }
+            radiance += transmission * alpha * (surface_radiance / 4.0);
+            transmission *= 1.0 - alpha;
+            if all(transmission <= vec3(0.0)) { return vec4(radiance, has_glass); }
+            origin = offset_thin_glass_ray(hit.world_position, hit.geometric_world_normal, direction, RAY_T_MIN);
+            continue;
+        }
         let weights = thin_glass_weights(-direction, hit.geometric_world_normal, hit.material.base_color, alpha, hit.material.reflectance);
         radiance += transmission * alpha * hit.material.emissive;
         if weights.a > 0.0 {

@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
 #import bevy_solarik::sampling::{sample_random_light, sample_random_light_two_sided, LightContribution, random_emissive_light_pdf, ggx_vndf_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 
 #import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
 
@@ -48,6 +48,18 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let ray_hit = resolve_ray_hit_full(ray);
             let wo = -ray_direction;
             let material = materials[material_ids[ray.instance_index]];
+            if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
+                let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+                if rand_f(&rng) >= alpha {
+                    if glass_interactions >= 32u { break; }
+                    glass_interactions += 1u;
+                    ray_origin = offset_thin_glass_ray(ray_hit.world_position,
+                        ray_hit.geometric_world_normal, ray_direction, RAY_T_MIN);
+                    ray_t_min = RAY_T_MIN;
+                    continue;
+                }
+                // Accepted coverage uses the ordinary surface BRDF and emission.
+            }
             if (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
                 // Bound chains of parallel panes/mirrors without consuming the
                 // opaque BRDF path. Truncation loses only the remaining energy.

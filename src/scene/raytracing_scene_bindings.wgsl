@@ -62,6 +62,7 @@ struct Material {
 const MATERIAL_FLAG_OPAQUE = 1u;
 const MATERIAL_FLAG_ALPHA_MASK = 2u;
 const MATERIAL_FLAG_ALPHA_BLEND = 4u;
+const MATERIAL_FLAG_DIFFUSE_BLEND = 16u;
 const MATERIAL_FLAG_DOUBLE_SIDED = 8u;
 
 const TEXTURE_MAP_NONE = 0xFFFFFFFFu;
@@ -178,7 +179,7 @@ fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f3
     // committed only by the explicit glass-aware traversal.
     while rayQueryProceed(&rq) {
         let candidate = rayQueryGetCandidateIntersection(&rq);
-        if candidate.kind == RAY_QUERY_INTERSECTION_TRIANGLE && candidate_is_solid(candidate, include_glass) {
+        if candidate.kind == RAY_QUERY_INTERSECTION_TRIANGLE && candidate_is_solid(candidate, include_glass, ray_origin, ray_direction) {
             rayQueryConfirmIntersection(&rq);
         }
     }
@@ -186,15 +187,30 @@ fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f3
 }
 
 // Alpha test for a candidate hit on non-opaque geometry.
-fn candidate_is_solid(candidate: RayIntersection, include_glass: bool) -> bool {
+fn candidate_is_solid(candidate: RayIntersection, include_glass: bool, origin: vec3f, direction: vec3f) -> bool {
     let material = materials[material_ids[candidate.instance_index]];
     let glass = (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
     if glass && !include_glass { return false; }
-    if !glass && (material.flags & MATERIAL_FLAG_ALPHA_MASK) == 0u { return true; }
+    let diffuse = (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u;
+    if !glass && !diffuse && (material.flags & MATERIAL_FLAG_ALPHA_MASK) == 0u { return true; }
     let barycentrics = vec3(1.0 - candidate.barycentrics.x - candidate.barycentrics.y, candidate.barycentrics);
     let vertices = load_vertices(geometry_ids[candidate.instance_index], candidate.primitive_index);
     let uv = mat3x2(vertices[0].uv, vertices[1].uv, vertices[2].uv) * barycentrics;
     let alpha = resolve_material_alpha(material, uv);
+    if diffuse {
+        // Camera/glossy paths resolve coverage themselves. Other callers use
+        // stochastic alpha with a stable hash of the ray and instance (PBRT style).
+        if include_glass { return alpha > 0.0; }
+        let o = bitcast<vec3u>(origin);
+        let d = bitcast<vec3u>(direction);
+        var h = o.x ^ (o.y * 1664525u) ^ (o.z * 1013904223u)
+            ^ d.x ^ (d.y * 2246822519u) ^ (d.z * 3266489917u)
+            ^ (candidate.instance_index * 374761393u);
+        h = (h ^ (h >> 16u)) * 2246822519u;
+        h = (h ^ (h >> 13u)) * 3266489917u;
+        h = h ^ (h >> 16u);
+        return f32(h >> 8u) * (1.0 / 16777216.0) < clamp(alpha, 0.0, 1.0);
+    }
     // Zero-coverage glass is a hole, and must not consume a path interaction.
     return select(alpha >= material.alpha_cutoff, alpha > 0.0, glass);
 }

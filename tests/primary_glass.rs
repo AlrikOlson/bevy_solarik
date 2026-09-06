@@ -143,11 +143,58 @@ fn primary_glass_gpu() {
                     [2.0, 0.0, 0.0, 0.0],
                     [1.0; 3],
                 ),
+            ])
+            .chain([
+                (
+                    "diffuse half",
+                    [0.1, 0.8, 0.2, 0.5],
+                    [1.0, 100.0, 0.5, 0.0],
+                    [0.0, 0.2, 0.4, 0.6],
+                    [0.6, 0.7, 0.8],
+                ),
+                (
+                    "diffuse opaque",
+                    [0.1, 0.8, 0.2, 1.0],
+                    [1.0, 100.0, 0.5, 0.0],
+                    [0.0, 0.2, 0.4, 0.6],
+                    [0.2, 0.4, 0.6],
+                ),
+                (
+                    "diffuse hole",
+                    [0.1, 0.8, 0.2, 0.0],
+                    [1.0, 100.0, 0.5, 0.0],
+                    [0.0, 0.2, 0.4, 0.6],
+                    [1.0; 3],
+                ),
+                (
+                    "diffuse shadow",
+                    [1.0, 1.0, 1.0, 0.5],
+                    [1.0, 100.0, 0.5, 0.0],
+                    [0.0; 4],
+                    [0.5; 3],
+                ),
+                (
+                    "diffuse layers",
+                    [1.0, 1.0, 1.0, 0.5],
+                    [2.0, 100.0, 0.5, 0.0],
+                    [0.0, 0.2, 0.4, 0.6],
+                    [0.4, 0.55, 0.7],
+                ),
             ]);
         for (name, pane, config, hidden, expected) in cases {
+            let mode = [
+                if name.starts_with("diffuse") {
+                    1.0
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+                0.0,
+            ];
             let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(&[pane, config, hidden]),
+                contents: bytemuck::cast_slice(&[pane, config, hidden, mode]),
                 usage: wgpu::BufferUsages::STORAGE,
             });
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {

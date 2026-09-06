@@ -3,10 +3,11 @@
 Thin panes require both `AlphaMode::Blend` and `specular_transmission = 1.0`.
 The corresponding glTF authoring is `KHR_materials_transmission.transmissionFactor = 1`
 plus `alphaMode: BLEND`. Alpha mode alone never identifies glass.
-Ordinary Blend, Premultiplied, Add and Multiply currently retain Bevy raster
-shading/compositing and are excluded from the TLAS (including ray shadows,
-reflections and pathtracer visibility). Fractional or invalid specular transmission
-also uses this fallback. Diffuse Blend ray transport is a separate follow-up.
+Premultiplied, Add and Multiply retain Bevy raster shading/compositing and are
+excluded from the TLAS (including ray shadows, reflections and pathtracer
+visibility). Blend with fractional or invalid specular transmission also uses
+this fallback. Ordinary Blend with zero specular transmission uses ray-lit
+surface coverage as described below.
 Raster-only cameras retain Bevy's behavior.
 
 The unreleased pathtracer treats explicitly authored glass as smooth thin panes.
@@ -14,6 +15,31 @@ Camera and subsequent BSDF rays can reflect from the pane or transmit through
 its base-color tint. Realtime Solarik also resolves panes inside glossy reflection
 paths. Camera-visible panes now use a primary compositor after opaque and sky
 rendering, before the remaining raster transparency.
+
+## Diffuse alpha coverage
+
+`AlphaMode::Blend` with `specular_transmission = 0` uses its ordinary roughness,
+metallic, base color, normal map and emission. It is not a smooth dielectric.
+The primary compositor evaluates four shadowed surface paths and blends
+`alpha * surface + (1-alpha) * background`. Alpha multiplies base-factor and
+texture alpha; alpha zero is a hole and alpha one is a fully shaded surface.
+Successive layers composite front to back, sharing the 32-layer traversal cap.
+
+Reference and glossy rays use stochastic coverage before ordinary surface
+shading. Accepted coverage carries full BRDF/emission; rejected coverage keeps
+the incident direction and throughput. Shadow and diffuse rays use a stable
+hash of ray origin/direction and instance to sample coverage, following the
+[stochastic alpha principle](https://pbr-book.org/4ed/Primitives_and_Intersection_Acceleration/Primitive_Interface_and_Geometric_Primitives).
+This can produce persistent noise for repeated identical rays; it is not a
+fractional transmittance shadow solver. Raster draws are suppressed only when
+the shared compositor is ready, just like explicit glass. DLSS retains opaque
+background guides, so independently moving layers can ghost.
+
+The primary GPU suite adds five diffuse coverage cases; the glossy suite adds
+accepted/skipped half coverage and both alpha endpoints, with guide code on/off.
+`tests/glass_scene.py --diffuse` generates/checks a green-emissive coverage
+fixture against a white background for realtime and reference integration.
+Premultiplied/Add/Multiply are explicitly raster fallback, not ray-lit blends.
 
 ## Model and implementation
 

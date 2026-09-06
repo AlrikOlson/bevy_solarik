@@ -11,6 +11,7 @@ const RAY_T_MAX: f32 = 10000.0;
 const RAY_QUERY_INTERSECTION_NONE: u32 = 0u;
 const RAY_FLAG_NONE: u32 = 0u;
 const MATERIAL_FLAG_ALPHA_BLEND: u32 = 1u;
+const MATERIAL_FLAG_DIFFUSE_BLEND: u32 = 16u;
 const MIRROR_ROUGHNESS_THRESHOLD: f32 = 0.002;
 const DIFFUSE_GI_REUSE_ROUGHNESS_THRESHOLD: f32 = 0.4;
 const SPECULAR_GI_FOR_DI_ROUGHNESS_THRESHOLD: f32 = 0.0225;
@@ -63,6 +64,7 @@ fn power_heuristic(a: f32, b: f32) -> f32 { return a*a/(a*a+b*b); }
 fn luminance(c: vec3f) -> f32 { return dot(c, vec3(0.2126,0.7152,0.0722)); }
 @compute @workgroup_size(1)
 fn probe() {
+    if config[2].x > 0.0 { materials[0].flags = MATERIAL_FLAG_DIFFUSE_BLEND; }
     var rng = 0u;
     let primary = ResolvedGPixel(vec3(0.0),vec3(0.0,0.0,1.0),Material(vec3(1.0),vec3(0.0),config[1].w,1.0,0.5));
     let result = trace_glossy_path(vec2u(0u), primary, 1.0, vec3(0.0,0.0,-1.0), 0.5, &rng);

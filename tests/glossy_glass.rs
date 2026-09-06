@@ -133,10 +133,46 @@ fn glossy_glass_gpu() {
                     [0.0; 3],
                 ),
             ];
+            let cases = cases.into_iter().chain([
+                (
+                    "diffuse accepted",
+                    [1.0, 0.0, 0.0, 0.5],
+                    [0.5, 0.25, 1.0, 0.001],
+                    [0.0; 3],
+                ),
+                (
+                    "diffuse skipped",
+                    [1.0, 0.0, 0.0, 0.5],
+                    [0.5, 0.75, 1.0, 0.001],
+                    [1.0; 3],
+                ),
+                (
+                    "diffuse opaque",
+                    [1.0; 4],
+                    [0.5, 0.75, 1.0, 0.001],
+                    [0.0; 3],
+                ),
+                (
+                    "diffuse hole",
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.5, 0.0, 1.0, 0.001],
+                    [1.0; 3],
+                ),
+            ]);
             for (name, pane, config, expected) in cases {
+                let mode = [
+                    if name.starts_with("diffuse") {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    0.0,
+                    0.0,
+                    0.0,
+                ];
                 let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
-                    contents: bytemuck::cast_slice(&[pane, config]),
+                    contents: bytemuck::cast_slice(&[pane, config, mode]),
                     usage: wgpu::BufferUsages::STORAGE,
                 });
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
