@@ -2,7 +2,7 @@
 name = "bevy_solarik"
 version = "0.1.0"
 edition = "2024"
-description = "Ray-traced lighting for Bevy 0.19: bevy_solari with a sky, alpha-tested geometry and a working reference pathtracer"
+description = "Ray-traced lighting for Bevy 0.19 with sky illumination, analytic lights, glass transport and a reference pathtracer"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/AlrikOlson/bevy_solarik"
 readme = "README.md"
@@ -51,7 +51,7 @@ bytemuck = "1"
 derive_more = { version = "2", default-features = false, features = ["from"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
-# Upstream's lint set, kept so the diff against bevy_solari stays about code.
+# Solarik's lint policy; adjust it to support this crate's correctness and maintainability.
 [lints.clippy]
 alloc_instead_of_core = "warn"
 allow_attributes = "warn"

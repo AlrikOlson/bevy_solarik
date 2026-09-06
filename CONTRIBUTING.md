@@ -25,4 +25,8 @@ The default checks do not need the DLSS SDK. If you change the optional `dlss` i
 
 `cargo nextest` is installed separately. If you cannot run a check or a GPU capture, say so in the PR and include what you did run.
 
-Keep this fork's changes easy to compare with upstream `bevy_solari`. Include attribution for copied code and only share test assets you have permission to redistribute.
+Solarik has its own design and release criteria. Changes do not require upstream Solari parity, synchronization, source comparison or regenerated diffs. Evaluate correctness against documented Solarik behavior, analytical tests and its reference pathtracer; evaluate quality and performance with reproducible captures and measurements. Maintain compatibility with the Bevy APIs this crate uses.
+
+After rendering changes, refresh the README screenshots. Hold camera and lighting fixed, compare warm-up lengths to check that GI and temporal history have settled, and inspect the saved full-resolution images before publishing. Record the renderer revision and capture settings; a successful capture command alone does not establish image quality.
+
+Include attribution for copied code and only share test assets you have permission to redistribute. Historical provenance and license notices remain part of the project.

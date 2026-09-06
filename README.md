@@ -117,6 +117,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Credits and license
 
-Based on `bevy_solari` 0.19.1 by JMS55 and the Bevy contributors. The [upstream diff](docs/upstream-0.19.1.diff) records the fork's starting changes; [tools/upstream_diff.sh](tools/upstream_diff.sh) regenerates it from a local Cargo registry checkout.
+Originally based on `bevy_solari` 0.19.1 by JMS55 and the Bevy contributors. Solarik is developed independently under its [own contribution and validation criteria](CONTRIBUTING.md). The [historical source comparison](docs/upstream-0.19.1.diff) is an archived provenance snapshot and is not maintained as a current diff.
 
 Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), your choice.
