@@ -1,9 +1,9 @@
-# Thin glass in the reference pathtracer
+# Thin glass transport
 
 The unreleased pathtracer treats `AlphaMode::Blend` surfaces as smooth thin panes.
 Camera and subsequent BSDF rays can reflect from the pane or transmit through
-its base-color tint. Realtime Solarik still skips blended panes in its rays and
-draws them with the raster forward pass. Realtime primary-glass compositing and
+its base-color tint. Realtime Solarik also resolves panes inside glossy reflection
+paths. Camera-visible panes are still drawn with the raster forward pass. Realtime primary-glass compositing and
 DLSS guide ownership are separate work.
 
 ## Model and implementation
@@ -39,6 +39,33 @@ offsetting the outgoing ray to the correct side. A delta reflection stops
 competing with the previous direct-light sample; straight transmission retains
 that competition. A chain is capped at 32 consecutive glass interactions.
 Reaching that cap discards remaining energy rather than treating glass as diffuse.
+
+## Realtime glossy paths
+
+The glossy path uses the same glass-aware traversal and thin-pane sampler.
+Glass does not consume any of its three opaque bounces; each consecutive chain
+is capped at 32 glass interactions. A delta reflection owns subsequent emission,
+while straight transmission retains the previous light-sampling competition,
+including the primary ReSTIR DI ownership rule. Black transmitted throughput
+terminates immediately. Shadow and diffuse GI rays remain unattenuated.
+
+DLSS primary-surface replacement stops when a glossy path encounters glass.
+This retains the opaque primary guides instead of replacing them with a surface
+chosen by a stochastic glass branch. It is a conservative fallback, not a
+complete guide model for transparent reflections.
+
+The ignored `glossy_glass_gpu` test executes the production glossy transport
+and shared sampler against deterministic synthetic scene I/O. Ten cases run
+with and without DLSS guide code: tint, clear and zero-alpha panes, reflection,
+four panes retaining the opaque budget, chain truncation, black transmission,
+transmission/reflection emission ownership, and an opaque PSR control. It checks
+radiance within 1e-5 and counts replacement calls. The original shader failed
+the tint case with [1,1,1] instead of [0.2,0.5,0.8]. This isolates transport;
+it does not test actual acceleration structures, texture alpha, or convergence.
+
+```text
+cargo test --test glossy_glass -- --ignored --nocapture
+```
 
 ## Validation, 2026-09-06
 
@@ -112,6 +139,14 @@ Neither the 512-warmup moving-pose captures nor the 2048-warmup fixed-pose captu
 establish convergence or quantitative reflection quality. The analytic scene is
 the numerical acceptance evidence. Saved sample counts and Bistro convergence
 need a separate audit.
+
+Realtime Bistro captures at the same fixed poses also compile and run the full
+ray-query shader with DLSS RR enabled: 1280x720, 128 warmup frames, grade-only,
+`SCENE_SOLARI=1 SCENE_PATHTRACE=0 SCENE_RR=1`. Images and logs are in the
+local organizer's `artifacts/bevy-sponza/glossy_glass_140` and
+`glossy_glass_400`. Both captures were inspected and have no shader errors.
+They validate integration, not glass photometry or temporal convergence;
+camera-visible panes still need the primary compositor.
 
 ## Limits
 

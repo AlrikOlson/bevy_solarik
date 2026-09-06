@@ -12,7 +12,7 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 - Rays that leave the scene can pick up light from a sky cubemap.
 - Point and spot lights use Bevy's light units and falloff.
-- Alpha masks let rays pass through gaps in leaves. The unreleased reference pathtracer reflects and transmits through blended materials as [tinted thin glass](docs/glass.md). Realtime and shadow rays still skip them; leaf transmission is unsupported.
+- Alpha masks let rays pass through gaps in leaves. The unreleased reference pathtracer reflects and transmits through blended materials as [tinted thin glass](docs/glass.md). Realtime glossy paths also resolve thin glass. Diffuse and shadow rays still skip it; camera-visible realtime panes use raster shading and leaf transmission is unsupported.
 - The reference pathtracer keeps accumulating while the camera is still.
 - Light selection favors brighter lights and larger emitters. This reduced reference-render noise in the Bistro tests; it did not measurably improve the raw realtime output.
 
@@ -79,7 +79,7 @@ Imported glTF may need its u16 indices converted to u32 and tangents generated f
 - The deferred rendering path is required.
 - An emissive mesh can have at most 65,535 triangles. The scene can have at most 65,535 light sources in total.
 - The first realtime GI bounce importance-samples the sky cubemap with hemisphere MIS. The world cache and specular paths retain their existing sampling. See [measurements and limits](docs/sky-sampling.md).
-- Alpha testing adds GPU work. Thin glass transport currently applies to pathtracer camera and BSDF rays; shadow tint, rough/volumetric refraction and realtime glass compositing remain unsupported.
+- Alpha testing adds GPU work. Thin glass transport applies to pathtracer camera/BSDF rays and realtime glossy paths; shadow tint, rough/volumetric refraction and realtime glass compositing remain unsupported.
 - This is still an experimental renderer. Check the reference pathtracer when judging lighting changes.
 
 ## Building

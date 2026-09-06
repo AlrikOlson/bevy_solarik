@@ -10,7 +10,8 @@ enable wgpu_ray_query;
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_specular_brdf}
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
 #import bevy_solarik::sampling::{sample_random_light, random_emissive_light_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
-#import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::world_cache::{query_world_cache, get_cell_size, WORLD_CACHE_CELL_LIFETIME}
 #import bevy_solarik::realtime_bindings::{view_output, gi_reservoirs_a, gbuffer, depth_buffer, view, constants}
 #ifdef DLSS_RR_GUIDE_BUFFERS
@@ -87,16 +88,18 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
     var wi = initial_wi;
     var p_bounce = initial_p_bounce;
     var path_roughness = primary_surface.material.roughness;
+    var glass_interactions = 0u;
+    var delta_reflection = false;
 
 #ifdef DLSS_RR_GUIDE_BUFFERS
     var mirror_rotations = reflection_matrix(primary_surface.world_normal);
     var psr_finished = false;
 #endif
 
-    // Trace up to three bounces
-    for (var i = 0u; i < 3u; i += 1u) {
+    // Three opaque bounces; thin panes have their own bounded budget.
+    for (var i = 0u; i < 3u;) {
         // Trace ray
-        let ray = trace_ray(ray_origin, wi, RAY_T_MIN, RAY_T_MAX, RAY_FLAG_NONE);
+        let ray = trace_glass_ray(ray_origin, wi, RAY_T_MIN, RAY_T_MAX);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE {
             // The ray left the scene: it sees the sky. Nothing else samples
             // the sky for this lobe (the sky is not in the light list), so
@@ -105,6 +108,33 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             break;
         }
         let ray_hit = resolve_ray_hit_full(ray);
+        let material = materials[material_ids[ray.instance_index]];
+        if (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
+            if glass_interactions >= 32u { break; }
+            glass_interactions += 1u;
+            let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+            let emission_weight = select(
+                emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit),
+                1.0, delta_reflection);
+            radiance += throughput * emission_weight * alpha * ray_hit.material.emissive;
+            let next = sample_thin_glass(-wi, ray_hit.geometric_world_normal,
+                ray_hit.material.base_color, alpha, ray_hit.material.reflectance, rand_f(rng));
+            throughput *= next.throughput;
+            if all(throughput <= vec3(0.0)) { break; }
+            wi = next.wi;
+            ray_origin = offset_thin_glass_ray(ray_hit.world_position,
+                ray_hit.geometric_world_normal, wi, RAY_T_MIN);
+            // Straight transmission keeps the preceding NEE competition; a
+            // delta reflection bends away from it and owns subsequent emission.
+            delta_reflection = delta_reflection || next.reflected;
+#ifdef DLSS_RR_GUIDE_BUFFERS
+            // A stochastic glass branch cannot provide stable single-surface
+            // PSR guides. Retain the raster primary guides for this path.
+            psr_finished = true;
+#endif
+            continue;
+        }
+        glass_interactions = 0u;
 
         let TBN = orthonormalize(ray_hit.world_normal);
         let T = TBN[0];
@@ -115,7 +145,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         let wo_tangent = vec3(dot(wo, T), dot(wo, B), dot(wo, N));
 
         // Add emissive contribution
-        let mis_weight = emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit);
+        let mis_weight = select(emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit), 1.0, delta_reflection);
         radiance += throughput * mis_weight * ray_hit.material.emissive;
 
         // Should not perform NEE for mirror-like surfaces
@@ -164,6 +194,8 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             throughput /= p_bounce;
         }
         path_roughness += ray_hit.material.roughness;
+        delta_reflection = false;
+        i += 1u;
 
         // Russian roulette for early termination
         let p = luminance(throughput);

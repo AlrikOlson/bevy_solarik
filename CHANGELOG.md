@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Realtime glossy reflections now resolve thin glass with tinted transmission, bounded pane chains and emission weighting. Glass stops DLSS primary-surface replacement; camera-visible glass compositing remains separate. The production transport GPU test covers both DLSS guide variants.
+
 - Reference-pathtracer thin glass: Fresnel reflection, tinted straight-through transmission, texture-alpha coverage and two-sided outgoing offsets. [GPU and integrated scene validation, reproduction and limits](docs/glass.md). Realtime glass compositing remains separate.
 
 - Sky cubemap importance sampling with cosine-hemisphere MIS for the first realtime GI bounce; black-sky fallback and counted zero samples.
