@@ -5,7 +5,8 @@ enable wgpu_ray_query;
 #import bevy_pbr::lighting::D_GGX
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
-#import bevy_solarik::scene_bindings::{trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::thin_glass::thin_glass_weights
+#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
     return balance_heuristic(f * f, g * g);
@@ -253,7 +254,7 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
 
         let raw_material = materials[material_ids[light_source.id]];
         var emission = triangle_data.material.emissive.rgb;
-        if (raw_material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
+        if (raw_material.flags & (MATERIAL_FLAG_DIFFUSE_BLEND | MATERIAL_FLAG_ALPHA_BLEND)) != 0u {
             emission *= clamp(resolve_material_alpha(raw_material, triangle_data.uv), 0.0, 1.0);
         }
         return ResolvedLightSample(
@@ -325,6 +326,58 @@ fn resolve_and_calculate_light_contribution(light_sample: LightSample, ray_origi
     let light_contribution = calculate_resolved_light_contribution(resolved_light_sample, ray_origin, origin_world_normal);
     return LightContributionNoPdf(light_contribution.radiance, light_contribution.wi);
 }
+
+struct TransmittedLightContribution {
+    light: LightContribution,
+    continuation_probability: f32,
+}
+
+// RGB transport is intentionally separate from scalar ReSTIR visibility.
+fn sample_random_light_transmitted(ray_origin: vec3<f32>, world_normal: vec3<f32>, geometric_normal: vec3<f32>, rng: ptr<function, u32>) -> TransmittedLightContribution {
+    let sample = generate_random_light_sample(rng).resolved_light_sample;
+    var light = calculate_resolved_light_contribution(sample, ray_origin, world_normal);
+    let side = select(-1.0, 1.0, dot(geometric_normal, light.wi) >= 0.0);
+    let origin = ray_origin + geometric_normal * (side * RAY_T_MIN);
+    var direction = sample.world_position.xyz;
+    var distance = RAY_T_MAX;
+    if sample.world_position.w != LIGHT_SAMPLE_DIRECTIONAL {
+        let delta = sample.world_position.xyz - origin;
+        distance = length(delta);
+        direction = delta / max(distance, 0.000001);
+    }
+    let transmission = trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
+    light.radiance *= transmission.rgb;
+    return TransmittedLightContribution(light, transmission.a);
+}
+
+// RGB straight-through energy plus probability of the competing BSDF path.
+// Preserve one ray origin and advance t_min, so panes cannot extend past the light.
+fn trace_shadow_transmission(origin: vec3<f32>, direction: vec3<f32>, ray_t_max: f32) -> vec4<f32> {
+    var transmission = vec4(1.0);
+    var ray_t_min = RAY_T_MIN;
+    for (var panes = 0u; panes <= 32u; panes += 1u) {
+        if ray_t_max < ray_t_min { return transmission; }
+        let ray = trace_glass_ray(origin, direction, ray_t_min, ray_t_max);
+        if ray.kind == RAY_QUERY_INTERSECTION_NONE { return transmission; }
+        if panes == 32u { return vec4(0.0); }
+        let raw_material = materials[material_ids[ray.instance_index]];
+        let hit = resolve_ray_hit_full(ray);
+        let alpha = clamp(resolve_material_alpha(raw_material, hit.uv), 0.0, 1.0);
+        if (raw_material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
+            let weights = thin_glass_weights(-direction, hit.geometric_world_normal,
+                hit.material.base_color, alpha, hit.material.reflectance);
+            transmission *= vec4(weights.rgb, 1.0 - weights.a);
+        } else if (raw_material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
+            transmission *= 1.0 - alpha;
+        } else {
+            return vec4(0.0);
+        }
+        if all(transmission.rgb <= vec3(0.0)) { return vec4(0.0); }
+        ray_t_min = ray.t + RAY_T_MIN;
+    }
+    return vec4(0.0);
+}
+// End shadow transport
 
 fn trace_light_visibility(ray_origin: vec3<f32>, light_sample_world_position: vec4<f32>) -> f32 {
     var ray_direction = light_sample_world_position.xyz;

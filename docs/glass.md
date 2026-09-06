@@ -27,7 +27,7 @@ Successive layers composite front to back, sharing the 32-layer traversal cap.
 
 Reference and glossy rays use stochastic coverage before ordinary surface
 shading. Accepted coverage carries full BRDF/emission; rejected coverage keeps
-the incident direction and throughput. Shadow and diffuse rays use a stable
+the incident direction and throughput. Realtime reservoir shadows and diffuse rays use a stable
 hash of ray origin/direction and instance to sample coverage, following the
 [stochastic alpha principle](https://pbr-book.org/4ed/Primitives_and_Intersection_Acceleration/Primitive_Interface_and_Geometric_Primitives).
 This can produce persistent noise for repeated identical rays; it is not a
@@ -82,7 +82,9 @@ Glass does not consume any of its three opaque bounces; each consecutive chain
 is capped at 32 glass interactions. A delta reflection owns subsequent emission,
 while straight transmission retains the previous light-sampling competition,
 including the primary ReSTIR DI ownership rule. Black transmitted throughput
-terminates immediately. Shadow and diffuse GI rays remain unattenuated.
+terminates immediately. Reference and glossy direct-light shadows now use the
+colored transport below. ReSTIR/cache and bounded primary-surface paths retain
+their existing visibility until the dependent realtime shadow chunk.
 
 DLSS primary-surface replacement stops when a glossy path encounters glass.
 This retains the opaque primary guides instead of replacing them with a surface
@@ -101,6 +103,54 @@ it does not test actual acceleration structures, texture alpha, or convergence.
 ```text
 cargo test --test glossy_glass -- --ignored --nocapture
 ```
+
+## Reference and glossy shadow transport
+
+Reference and glossy NEE now walk the same alpha-tested glass-aware scene.
+Each thin pane multiplies RGB shadow energy by `(1-a) + a(1-R)c`, while
+diffuse coverage multiplies it by `1-a`. Opaque or accepted masked geometry
+blocks the shadow. The endpoint remains the sampled light; panes beyond it
+cannot occlude it. Up to 32 consecutive panes are supported, with a 33rd
+blocking the remaining energy.
+
+Shadow traversal also returns the competing BSDF continuation probability:
+the product of `1-aR` for glass and `1-a` for skipped diffuse coverage.
+NEE compares its solid-angle PDF against the BRDF PDF times that probability.
+Straight-through BSDF paths multiply their stored PDF by the same factors;
+their RGB throughput remains divided by the branch probability exactly once.
+Reflection retains its existing delta ownership. Sampled glass emission now
+uses alpha coverage just as directly hit glass emission does.
+
+`cargo test --test glass_shadow -- --ignored --nocapture` executes the production
+traversal with synthetic intersections. Twelve configurations cover tint,
+coverage endpoints/partial coverage, oblique Fresnel, four panes, both sides
+of the 32-pane bound, an opaque blocker, a light before the pane, and diffuse
+coverage. RGB energy and continuation probability match the closed form within
+2e-5. The existing thin-glass stochastic and glossy transport suites also pass.
+
+The complete reference renderer was tested with a point light behind a pane
+and a low-albedo receiver visible directly to the camera. At 2048 warmup
+samples, 320×180, EV100=2, control radiance was 2.51474 nits/channel; tinted
+radiance was [0.58122, 1.16351, 1.74491]. The transmission ratio
+[0.23112, 0.46267, 0.69387] agrees with `12/13 * [0.25,0.5,0.75]`
+within 0.00157. The opaque control was black. The checker allows 0.03 for
+PNG quantization, finite sphere sampling and small receiver/pane interreflection.
+
+Reproduce in the sibling rig: generate with
+`python tests/glass_shadow_scene.py --generate ../bevy-sponza/assets/scenes/bistro`.
+For each `control`, `tinted`, `opaque`, capture
+`SCENE_GLTF=scenes/bistro/shadow_<name>.gltf`, `SCENE=bistro`,
+`SCENE_PATHTRACE=1 SCENE_LINEAR=1 SCENE_CAM_FROM=0,0,0.5 SCENE_LOOK_FROM=0,0,0`,
+`SCENE_FOV=40 SCENE_DAY_EV=2 SCENE_NIGHT_EV=2`,
+`SCENE_SUN_SCALE=0 SCENE_MOON_SCALE=0 SCENE_IBL_SCALE=0 SCENE_MIN_LUMENS=0`,
+`NR_START=400 NR_CAPTURE=1 NR_WARMUP=2048 NR_RES=320x180`,
+with `NR_OUT=../artifacts/shadow-scene/<name>`.
+Then run `python tests/glass_shadow_scene.py --check ../artifacts/shadow-scene`.
+
+RGB visibility has deliberately not been inserted into scalar ReSTIR reservoir
+weights. Realtime DI/GI/cache reuse and primary-surface path transport are a
+separate pending chunk. Analytic-light delta reflections are also pending;
+the broader glass-shadow roadmap parent is not complete.
 
 ## Primary camera panes
 
@@ -261,15 +311,14 @@ or numerical equality. The analytic fixture is the quantitative glass evidence.
 
 ## Limits
 
-- Shadow rays still pass through glass without Fresnel loss or tint. This makes
-  next-event lighting through panes approximate; do not use it as a complete
-  dielectric photometric reference. Emissive light sampling also retains its
-  existing coverage treatment.
+- ReSTIR/cache and primary-surface shadow paths retain their previous glass
+  visibility. Reference/glossy NEE has colored transmission, but the full
+  realtime renderer is not yet a matching dielectric photometric reference.
 - Analytic point, spot and directional lights cannot be hit by delta reflected
   rays. Reflections see emissive geometry and sky; analytic-light reflections
   need a separate sampling strategy.
-- Every Blend material gets the thin-pane interpretation, including blended
-  foliage or curtains. Alpha alone cannot identify physically authored glass.
+- Glass requires explicit transmission authoring; ordinary Blend uses diffuse
+  coverage and special blend modes retain raster fallback as described above.
 - Roughness and metallic controls do not change this smooth dielectric model.
   A mesh with two modeled pane faces is treated as two thin panes.
 - `SolarikAlphaTesting(false)` retains the existing opaque-geometry fallback.

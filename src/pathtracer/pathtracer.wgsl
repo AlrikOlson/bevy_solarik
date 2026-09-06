@@ -5,10 +5,10 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::{rand_f, rand_vec2f}
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
-#import bevy_solarik::sampling::{sample_random_light, sample_random_light_two_sided, LightContribution, random_emissive_light_solid_angle_pdf, ggx_vndf_pdf, power_heuristic}
+#import bevy_solarik::sampling::{sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, ggx_vndf_pdf, power_heuristic}
 #import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 
-#import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
+#import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 
 @group(1) @binding(0) var accumulation_texture: texture_storage_2d<rgba32float, read_write>;
 @group(1) @binding(1) var view_output: texture_storage_2d<rgba16float, write>;
@@ -54,6 +54,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 if rand_f(&rng) >= alpha {
                     if glass_interactions >= 32u { break; }
                     glass_interactions += 1u;
+                    p_bounce *= 1.0 - alpha;
                     ray_origin = offset_thin_glass_ray(ray_hit.world_position,
                         ray_hit.geometric_world_normal, ray_direction, RAY_T_MIN);
                     ray_t_min = RAY_T_MIN;
@@ -74,6 +75,8 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 radiance += emission_weight * throughput * alpha * ray_hit.material.emissive;
                 // Geometric normal avoids normal maps bending transmission or
                 // reflecting a ray through the wrong side of a thin interface.
+                let weights = thin_glass_weights(wo, ray_hit.geometric_world_normal,
+                    ray_hit.material.base_color, alpha, ray_hit.material.reflectance);
                 let next = sample_thin_glass(wo, ray_hit.geometric_world_normal,
                     ray_hit.material.base_color, alpha, ray_hit.material.reflectance, rand_f(&rng));
                 throughput *= next.throughput;
@@ -85,6 +88,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // A delta reflection cannot compete with the prior NEE ray.
                 // Straight-through transmission keeps that competition alive.
                 if next.reflected { p_bounce = 0.0; }
+                else { p_bounce *= 1.0 - weights.a; }
                 continue;
             }
             glass_interactions = 0u;
@@ -101,17 +105,14 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // TODO: randomly choose to use NEE or not with probability proportional to roughness and metallicness
             let is_perfectly_specular = ray_hit.material.roughness <= MIRROR_ROUGHNESS_THRESHOLD && ray_hit.material.metallic > 0.9999;
             if !is_perfectly_specular {
-                var direct_lighting: LightContribution;
-                if ray_hit.material.diffuse_transmission > 0.0 {
-                    direct_lighting = sample_random_light_two_sided(ray_hit.world_position, ray_hit.world_normal, ray_hit.geometric_world_normal, &rng);
-                } else {
-                    direct_lighting = sample_random_light(ray_hit.world_position, ray_hit.world_normal, &rng);
-                }
+                let shadow_sample = sample_random_light_transmitted(ray_hit.world_position,
+                    ray_hit.world_normal, ray_hit.geometric_world_normal, &rng);
+                let direct_lighting = shadow_sample.light;
 
                 mis_weight = 1.0;
                 if direct_lighting.brdf_rays_can_hit {
                     let pdf_of_bounce = evaluate_brdf_pdf(wo, direct_lighting.wi, ray_hit.world_normal, ray_hit.material);
-                    mis_weight = power_heuristic(direct_lighting.solid_angle_pdf, pdf_of_bounce);
+                    mis_weight = power_heuristic(direct_lighting.solid_angle_pdf, pdf_of_bounce * shadow_sample.continuation_probability);
                 }
 
                 let direct_lighting_brdf = evaluate_brdf(wo, direct_lighting.wi, ray_hit.world_normal, ray_hit.material);
