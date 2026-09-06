@@ -5,7 +5,7 @@ enable wgpu_ray_query;
 #import bevy_render::maths::PI
 #import bevy_render::view::View
 #import bevy_solarik::presample_light_tiles::{ResolvedLightSamplePacked, unpack_resolved_light_sample}
-#import bevy_solarik::sampling::{calculate_resolved_light_contribution, trace_light_visibility}
+#import bevy_solarik::sampling::{calculate_resolved_light_contribution, trace_light_transmission}
 #import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, RAY_T_MAX}
 #import bevy_solarik::world_cache::{
     WORLD_CACHE_MAX_TEMPORAL_SAMPLES,
@@ -126,11 +126,11 @@ fn sample_random_light_ris(world_position: vec3<f32>, world_normal: vec3<f32>, w
     }
 
     var unbiased_contribution_weight = 0.0;
-    if all(selected_sample_radiance != vec3(0.0)) {
+    if any(selected_sample_radiance > vec3(0.0)) {
         let inverse_target_function = select(0.0, 1.0 / selected_sample_target_function, selected_sample_target_function > 0.0);
         unbiased_contribution_weight = weight_sum * inverse_target_function;
 
-        unbiased_contribution_weight *= trace_light_visibility(world_position + (world_normal * RAY_T_MIN), selected_sample_world_position);
+        selected_sample_radiance *= trace_light_transmission(world_position + (world_normal * RAY_T_MIN), selected_sample_world_position).rgb;
     }
 
     return selected_sample_radiance * unbiased_contribution_weight;

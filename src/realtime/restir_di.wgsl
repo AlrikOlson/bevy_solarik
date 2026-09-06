@@ -11,7 +11,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::brdf::{evaluate_diffuse_brdf, evaluate_specular_brdf}
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
 #import bevy_solarik::presample_light_tiles::unpack_resolved_light_sample
-#import bevy_solarik::sampling::{LightSample, ResolvedLightSample, NULL_LIGHT_ID, calculate_resolved_light_contribution, resolve_and_calculate_light_contribution, resolve_light_sample, trace_light_visibility, balance_heuristic}
+#import bevy_solarik::sampling::{LightSample, ResolvedLightSample, NULL_LIGHT_ID, calculate_resolved_light_contribution, resolve_and_calculate_light_contribution, resolve_light_sample, trace_light_transmission, balance_heuristic}
 #import bevy_solarik::scene_bindings::{light_sources, previous_frame_light_id_translations, LIGHT_NOT_PRESENT_THIS_FRAME, RAY_T_MIN}
 #import bevy_solarik::specular_gi::SPECULAR_GI_FOR_DI_ROUGHNESS_THRESHOLD
 #import bevy_solarik::realtime_bindings::{view_output, light_tile_samples, light_tile_resolved_samples, di_reservoirs_a, di_reservoirs_b, gbuffer, depth_buffer, motion_vectors, previous_gbuffer, previous_depth_buffer, view, previous_view, constants, ResolvedLightSamplePacked}
@@ -62,21 +62,11 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let spatial = load_spatial_reservoir(global_id.xy, depth, surface.world_position, surface.world_normal, &rng);
     let merge_result = merge_reservoirs(input_reservoir, surface.world_position, surface.world_normal, diffuse_brdf,
         spatial.reservoir, spatial.world_position, spatial.world_normal, spatial.diffuse_brdf, &rng);
-    var combined_reservoir = merge_result.merged_reservoir;
+    let combined_reservoir = merge_result.merged_reservoir;
 
-    // More accuracy, less stability
-#ifndef BIASED_RESAMPLING
+    // Reusable weights use an unoccluded target in both resampling modes.
+    // RGB connection transport belongs only to this receiver's shading.
     store_reservoir_a(global_id.xy, combined_reservoir);
-#endif
-
-    if reservoir_valid(combined_reservoir) {
-        combined_reservoir.unbiased_contribution_weight *= trace_light_visibility(surface.world_position + (surface.world_normal * RAY_T_MIN), merge_result.selected_light_world_position);
-    }
-
-    // More stability, less accuracy (shadows extend further out than they should)
-#ifdef BIASED_RESAMPLING
-    store_reservoir_a(global_id.xy, combined_reservoir);
-#endif
 
     let wo = normalize(view.world_position - surface.world_position);
     var brdf = evaluate_diffuse_brdf(wo, merge_result.wi, surface.world_normal, surface.material);
@@ -85,11 +75,18 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
         brdf += evaluate_specular_brdf(wo, merge_result.wi, surface.world_normal, surface.material);
     }
 
-    var pixel_color = merge_result.selected_sample_radiance * combined_reservoir.unbiased_contribution_weight;
+    var pixel_color = shade_di_reservoir(merge_result, surface.world_position, surface.world_normal);
     pixel_color *= brdf;
     pixel_color += surface.material.emissive;
     pixel_color *= view.exposure;
     textureStore(view_output, global_id.xy, vec4(pixel_color, 1.0));
+}
+
+fn shade_di_reservoir(result: ReservoirMergeResult, world_position: vec3<f32>, world_normal: vec3<f32>) -> vec3<f32> {
+    if !reservoir_valid(result.merged_reservoir) { return vec3(0.0); }
+    let transmission = trace_light_transmission(world_position + world_normal * RAY_T_MIN,
+        result.selected_light_world_position);
+    return result.selected_sample_radiance * result.merged_reservoir.unbiased_contribution_weight * transmission.rgb;
 }
 
 fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>, diffuse_brdf: vec3<f32>, workgroup_id: vec2<u32>, rng: ptr<function, u32>) -> Reservoir {
@@ -101,7 +98,6 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
     let mis_weight = 1.0 / f32(INITIAL_SAMPLES);
 
     var reservoir_target_function = 0.0;
-    var light_sample_world_position = vec4(0.0);
     var selected_tile_sample = 0u;
     for (var i = 0u; i < INITIAL_SAMPLES; i++) {
         let tile_sample = light_tile_start + rand_range_u(1024u, rng);
@@ -115,7 +111,6 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
 
         if rand_f(rng) < resampling_weight / weight_sum {
             reservoir_target_function = target_function;
-            light_sample_world_position = resolved_light_sample.world_position;
             selected_tile_sample = tile_sample;
         }
     }
@@ -127,8 +122,6 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
     if reservoir_valid(reservoir) {
         let inverse_target_function = select(0.0, 1.0 / reservoir_target_function, reservoir_target_function > 0.0);
         reservoir.unbiased_contribution_weight = weight_sum * inverse_target_function;
-
-        reservoir.unbiased_contribution_weight *= trace_light_visibility(world_position + (world_normal * RAY_T_MIN), light_sample_world_position);
     }
 
     reservoir.confidence_weight = 1.0;

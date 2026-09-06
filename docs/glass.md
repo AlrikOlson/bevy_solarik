@@ -82,9 +82,9 @@ Glass does not consume any of its three opaque bounces; each consecutive chain
 is capped at 32 glass interactions. A delta reflection owns subsequent emission,
 while straight transmission retains the previous light-sampling competition,
 including the primary ReSTIR DI ownership rule. Black transmitted throughput
-terminates immediately. Reference and glossy direct-light shadows now use the
-colored transport below. ReSTIR/cache and bounded primary-surface paths retain
-their existing visibility until the dependent realtime shadow chunk.
+terminates immediately. Reference, glossy, ReSTIR DI and cache direct-light shadows now use the
+colored transport below. GI connections and bounded primary-surface paths
+remain separate dependent work.
 
 DLSS primary-surface replacement stops when a glossy path encounters glass.
 This retains the opaque primary guides instead of replacing them with a surface
@@ -147,9 +147,20 @@ For each `control`, `tinted`, `opaque`, capture
 with `NR_OUT=../artifacts/shadow-scene/<name>`.
 Then run `python tests/glass_shadow_scene.py --check ../artifacts/shadow-scene`.
 
-RGB visibility has deliberately not been inserted into scalar ReSTIR reservoir
-weights. Realtime DI/GI/cache reuse and primary-surface path transport are a
-separate pending chunk. Analytic-light delta reflections are also pending;
+ReSTIR DI keeps unoccluded scalar targets and weights, including initial samples
+and both resampling modes. The selected light receives RGB transmission only
+when shading the current receiver; stored reservoirs never accumulate tint.
+Cache direct-light RIS likewise tints selected radiance once. This trades the
+old visibility reuse bias for potentially greater variance near occluders.
+
+The production DI GPU fixture checks 0–256 repeated merges and clear, colored,
+black and single-channel transmission. Full realtime control/tinted/opaque
+captures (RR off, 256 warmup frames, same setup above with SCENE_PATHTRACE=0)
+measure transmission [0.23083, 0.46366, 0.69607], within 0.00376 of the same
+closed form as the reference; the opaque control is black. Evidence lives in
+`artifacts/bevy-sponza/restir-shadow` in the organizer. Run
+`cargo test --test restir_shadow -- --ignored` for the isolated reuse fixture.
+GI connections/cache bounces and primary-surface transport remain dependent work. Analytic-light delta reflections are also pending;
 the broader glass-shadow roadmap parent is not complete.
 
 ## Primary camera panes
@@ -311,8 +322,8 @@ or numerical equality. The analytic fixture is the quantitative glass evidence.
 
 ## Limits
 
-- ReSTIR/cache and primary-surface shadow paths retain their previous glass
-  visibility. Reference/glossy NEE has colored transmission, but the full
+- GI connections/cache bounces and primary-surface paths retain their previous
+  glass visibility. DI/cache direct shadows have colored transmission, but the full
   realtime renderer is not yet a matching dielectric photometric reference.
 - Analytic point, spot and directional lights cannot be hit by delta reflected
   rays. Reflections see emissive geometry and sky; analytic-light reflections

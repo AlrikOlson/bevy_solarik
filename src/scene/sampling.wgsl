@@ -338,16 +338,22 @@ fn sample_random_light_transmitted(ray_origin: vec3<f32>, world_normal: vec3<f32
     var light = calculate_resolved_light_contribution(sample, ray_origin, world_normal);
     let side = select(-1.0, 1.0, dot(geometric_normal, light.wi) >= 0.0);
     let origin = ray_origin + geometric_normal * (side * RAY_T_MIN);
-    var direction = sample.world_position.xyz;
-    var distance = RAY_T_MAX;
-    if sample.world_position.w != LIGHT_SAMPLE_DIRECTIONAL {
-        let delta = sample.world_position.xyz - origin;
-        distance = length(delta);
-        direction = delta / max(distance, 0.000001);
-    }
-    let transmission = trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
+    let transmission = trace_light_transmission(origin, sample.world_position);
     light.radiance *= transmission.rgb;
     return TransmittedLightContribution(light, transmission.a);
+}
+
+// Connection energy and competing straight-through BSDF probability.
+fn trace_light_transmission(origin: vec3<f32>, light_position: vec4<f32>) -> vec4<f32> {
+    var direction = light_position.xyz;
+    var distance = RAY_T_MAX;
+    if light_position.w != LIGHT_SAMPLE_DIRECTIONAL {
+        let delta = light_position.xyz - origin;
+        distance = length(delta);
+        if distance <= RAY_T_MIN { return vec4(0.0); }
+        direction = delta / distance;
+    }
+    return trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
 }
 
 // RGB straight-through energy plus probability of the competing BSDF path.
