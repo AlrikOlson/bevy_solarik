@@ -11,7 +11,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
 #import bevy_solarik::sampling::{sample_random_light_transmitted, shade_gi_connection, balance_heuristic, isnan}
 #import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, RAY_T_MAX}
-#import bevy_solarik::world_cache::{query_world_cache, WORLD_CACHE_CELL_LIFETIME}
+#import bevy_solarik::world_cache::{query_two_sided_world_cache, WORLD_CACHE_CELL_LIFETIME}
 #import bevy_solarik::realtime_bindings::{view_output, gi_reservoirs_a, gi_reservoirs_b, gbuffer, depth_buffer, motion_vectors, previous_gbuffer, previous_depth_buffer, view, previous_view, constants, Reservoir}
 #import bevy_solarik::specular_gi::DIFFUSE_GI_REUSE_ROUGHNESS_THRESHOLD
 
@@ -121,14 +121,32 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
 
     reservoir.sample_point_world_position = sample_point.world_position;
     reservoir.sample_point_world_normal = sample_point.world_normal;
+    if sample_point.material.diffuse_transmission > 0.0 {
+        // One reservoir holds outgoing radiance for the sampled leaf side.
+        // Use the physical plane for its Jacobian support: a tilted shading
+        // normal must not let that radiance be reused across the leaf.
+        let triangle_normal = sample_point.triangle_world_normal;
+        reservoir.sample_point_world_normal = select(-triangle_normal, triangle_normal,
+            dot(triangle_normal, world_position - sample_point.world_position) >= 0.0);
+    }
     reservoir.confidence_weight = 1.0;
 
 #ifdef NO_WORLD_CACHE
     let direct_lighting = sample_random_light_transmitted(sample_point.world_position, sample_point.world_normal, sample_point.geometric_world_normal, rng).light;
-    reservoir.radiance = direct_lighting.radiance * saturate(dot(direct_lighting.wi, sample_point.world_normal));
+    let light_cosine = dot(direct_lighting.wi, sample_point.world_normal);
+    var diffuse_cosine = saturate(light_cosine);
+    if sample_point.material.diffuse_transmission > 0.0 {
+        let t = sample_point.material.diffuse_transmission;
+        diffuse_cosine = abs(light_cosine) * select(1.0 - t, t, light_cosine < 0.0);
+    }
+    reservoir.radiance = direct_lighting.radiance * diffuse_cosine;
     reservoir.unbiased_contribution_weight = direct_lighting.inverse_pdf * direction_sample.inverse_pdf;
 #else
-    reservoir.radiance = query_world_cache(sample_point.world_position, sample_point.geometric_world_normal, view.world_position, ray.t, WORLD_CACHE_CELL_LIFETIME, rng);
+    // Cache entries are incident hemisphere irradiance; only the endpoint
+    // consumes material weights, before the existing albedo / PI below.
+    reservoir.radiance = query_two_sided_world_cache(sample_point.world_position,
+        sample_point.geometric_world_normal, sample_point.material.diffuse_transmission,
+        view.world_position, ray.t, WORLD_CACHE_CELL_LIFETIME, rng);
     reservoir.unbiased_contribution_weight = direction_sample.inverse_pdf;
 #endif
 

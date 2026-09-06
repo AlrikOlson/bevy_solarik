@@ -16,12 +16,12 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 Native 4K captures from the September 6, 2026 development renderer, with DLSS
 Ray Reconstruction, the matching Bistro interior and the corrected mesh-visibility
-lookup in Solarik's renderer fork, refreshed after foliage cache propagation.
+lookup in Solarik's renderer fork, refreshed after foliage GI endpoint support.
 They show development code beyond the `v0.1.0` tag.
 Capture settings and source provenance are in [the capture record](docs/readme-captures.md).
 The day image uses 512 warmup frames and dusk uses 1,024. Fixed-camera checks
-found up to 2.5% regional change from 128 to 512 frames by day; a further dusk
-check from 512 to 1,024 frames reduced the largest measured shift to 2.8%.
+found up to 2.6% regional change from 128 to 512 frames by day and 2.8% from
+512 to 1,024 frames at dusk.
 Softness and spatial variation remain.
 See the [renderer validation](docs/renderer-fork.md) and the earlier
 [capture audit](docs/pathtracer-convergence.md).
@@ -38,17 +38,18 @@ lights and foliage transmission, and uses a procedural sky.
 
 ![Bistro after sunset with bounded GI history](docs/images/bistro-temporal-response.png)
 
-Current development capture at 1280×720 with Ray Reconstruction and the matching
-Bistro interior. GI now limits old endpoint lifetime and accounts for world-cache
-update cadence. The [response test](docs/temporal-response.md) documents the
-measured reduction in lingering daylight and remaining variation. The 4K pair
-above also includes this change.
+Refreshed development night control at 1280×720 with Ray Reconstruction, the
+matching Bistro interior and 2,048 fixed-pose warmup frames. GI limits old
+endpoint lifetime and accounts for world-cache update cadence. The
+[response test](docs/temporal-response.md) preserves the earlier transition
+measurements; this image shows the current renderer at a fixed night state.
+The [capture record](docs/readme-captures.md) documents the remaining settling.
 
 ## What changed
 
 - Rays that leave the scene can pick up light from a sky cubemap.
 - Point and spot lights use Bevy's light units and falloff.
-- Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer, primary-foliage realtime pass and bounded glossy/glass reflections. World-cache GI propagation also combines both leaf hemispheres; [foliage notes](docs/foliage.md#world-cache-propagation) describe its approximation and the remaining ReSTIR integration.
+- Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer, primary-foliage realtime pass and bounded glossy/glass reflections. World-cache propagation and ReSTIR GI secondary endpoints also combine both leaf hemispheres; [foliage notes](docs/foliage.md#restir-gi-endpoints) describe side-safe reuse and the remaining primary receiver integration.
 - Development builds resolve [tinted thin glass](docs/glass.md) in reference, realtime camera and glossy paths. Camera panes replace their raster draws when ready. Opaque walls behind glass block the distant background even when raster culling omits them. Direct-light shadows and GI connections include straight pane tint and Fresnel loss.
 - The reference pathtracer keeps accumulating while the camera is still.
 - Light selection favors brighter lights and larger emitters. This reduced reference-render noise in the Bistro tests; it did not measurably improve the raw realtime output.
@@ -131,7 +132,7 @@ Imported glTF may need its u16 indices converted to u32 and tangents generated f
 
 ## Known limits
 
-- The deferred rendering path is required. Authored double-sided masked diffuse transmission is supported by the reference pathtracer and bounded realtime primary/reflected foliage paths. Reused reservoirs and world caches remain one-sided. See [foliage setup and validation](docs/foliage.md).
+- The deferred rendering path is required. Authored double-sided masked diffuse transmission is supported by the reference pathtracer and bounded realtime primary/reflected foliage paths. GI secondary endpoints preserve the sampled leaf side during reuse; primary ReSTIR receiver payloads still lack foliage transmission. See [foliage setup and validation](docs/foliage.md).
 - An emissive mesh can have at most 65,535 triangles. The scene can have at most 65,535 light sources in total.
 - The first realtime GI bounce importance-samples the sky cubemap with hemisphere MIS. The world cache and specular paths retain their existing sampling. See [measurements and limits](docs/sky-sampling.md).
 - Alpha testing adds GPU work. Thin glass transport applies to pathtracer camera/BSDF rays and realtime glossy paths; primary panes composite after opaque lighting. Reference and realtime direct-light shadows and GI connections include pane tint and Fresnel loss. Smooth reflections see finite point/spot spheres and directional disks. Rough/volumetric refraction remains unsupported.

@@ -164,8 +164,8 @@ captures. The old shader fails at t=0.25: red irradiance contribution 0.4 versus
 the analytic 0.8 for the fixture's front/back fields.
 
 This is the cache-propagation portion of foliage integration. Primary ReSTIR
-material payloads, two-sided receiver targets/PDFs, GI endpoint reuse and removal
-of the dedicated primary-foliage pass remain follow-up work.
+material payloads, two-sided receiver targets/PDFs and removal of the dedicated
+primary-foliage pass remain follow-up work. GI endpoint support is described below.
 
 ### Cache-propagation capture checks
 
@@ -204,6 +204,77 @@ Use `NR_WARMUP=512` for the settling comparison; use `NR_RES=640x360`,
 `NR_CAPTURE=24` and `NR_WARMUP=128` for motion. Local captures and measurement
 reports use the `fc-*` prefix in the organizer's `artifacts/bevy-sponza`.
 The [README capture record](readme-captures.md) documents the refreshed 4K pair.
+
+## ReSTIR GI endpoints
+
+GI initialization now decodes authored leaf transmission and stores
+`base_color / PI * ((1-t) * E(front) + t * E(back))` as endpoint radiance.
+The two cache queries keep their independent incident-irradiance keys and
+history. With `NO_WORLD_CACHE`, the existing light sample instead uses the
+signed shading-normal cosine and the corresponding reflection/transmission
+weight; its shadow ray already starts on the outgoing side. Light and primary
+direction PDFs retain their original measures and normalization.
+
+A reservoir holds the radiance of the sampled side. For transmitting leaves,
+its stored endpoint normal is the actual triangle normal oriented toward the
+initial receiver. The existing Jacobian then rejects connections across that
+plane, including when a shading normal tilts past it. Reuse within the supported
+side retains the existing Jacobian cap and target functions. Rough-specular
+shading consumes the reservoir already merged for that same receiver.
+
+This keeps the 48-byte reservoir layout, 16-frame endpoint age limit and
+current-connection visibility/tint. Opaque endpoint radiance, normal and random
+sequence are preserved. Sky samples and emissive-hit exclusion are unchanged.
+The cache endpoint remains a Lambertian approximation without the bounded
+surface path's angular Fresnel layering. A single stored leaf-side value
+cannot represent both outgoing hemispheres; this is the same representation
+limit described in [RTXDI's GI integration notes](https://github.com/NVIDIA-RTX/RTXDI/blob/main/Doc/RestirGI.md).
+
+`cargo test --test gi_foliage -- --ignored --test-threads=1` runs two production
+GPU tests, with 36 scenarios in each of the cache and direct modes. They cover
+t=0/0.25/0.5/1, both orientations, light sides, tilted shading normals,
+source weights, outgoing offsets, current-connection tint, repeated merges,
+same-side Jacobians, opposite-side rejection, sky/emissive controls and age
+expiry. At t=0.25 the old cache shader produces red radiance 0.12732 instead
+of 0.25465; the direct fallback produces zero instead of 0.00637. Scene I/O is
+controlled in these tests; rig captures exercise the complete shaders and
+real traversal.
+
+### Endpoint capture checks
+
+September 6, 2026, RTX 4090/Vulkan, Solarik `e76ec36` before versus this change,
+playground `90f532a`, RR enabled. Frame-0 Bistro at 1280x720, grade only and
+128 fixed-pose warmup frames changes display-linear RGB RMSE by 0.00075 in
+the trunk region, 0.00648 on the wall and 0.01221 in the canopy. Wall/canopy
+mean luminance changes are +1.86%/+1.58%; independent 128/512 warmups of the
+new renderer still change these means by +2.83%/+3.06%. The comparison does
+not isolate an accuracy improvement from settling and stochastic variation.
+The very dark trunk mean changes by 0.000134 in display-linear luminance.
+
+The diffuse-indirect GPU span measures 0.966 ms before (0.884–1.048) and
+0.954 ms after (0.918–0.990), with only two diagnostic samples per run after
+scene loading and before screenshot readback. These overlapping measurements
+do not establish a speedup. Partial transmission adds a second cache lookup
+only for foliage endpoints; the primary-foliage pass remains unchanged.
+
+Over 24 moving 640x360 Bistro frames, before/after RGB RMSE is 0.01044.
+Median adjacent-frame RMSE is 0.00453 in both runs, with maximum whole-image
+mean-luminance steps 0.000154/0.000161. This is a short motion/lighting probe,
+not a flicker guarantee. Under-canopy darkness and foliage softness remain.
+
+The unchanged bounded reflection path remains a control: in the 640x320
+reflected fixture, before/after half/full leaf patch changes are at most
+0.00143 per channel. Maximum error against the earlier 2,048-sample reference
+is 0.00596. The opaque reflected card remains black; its pre-existing indirect
+light loss and the mirror-background arcs are still tracked separately. All 60
+reflected motion frames pass the existing patch check; maximum adjacent-frame
+leaf-channel change is 0.00414, and the opaque control stays below 0.000184.
+
+Local captures, logs and measurements use the `fe-*` prefix under the
+organizer's `artifacts/bevy-sponza`. Use the cache-propagation commands above
+with that prefix for fixed/moving Bistro; use the reflected-foliage recipe for
+the reflection controls. The [README capture record](readme-captures.md)
+documents the complete image refresh.
 
 ## Bistro frame 0
 

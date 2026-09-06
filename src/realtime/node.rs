@@ -777,7 +777,10 @@ pub fn init_solari_lighting_pipelines(
             "initial_and_temporal",
             load_embedded_asset!(asset_server.as_ref(), "restir_gi.wgsl"),
             None,
-            vec!["WORLD_CACHE_FIRST_BOUNCE_LIGHT_LEAK_PREVENTION".into()],
+            vec![
+                "WORLD_CACHE_FIRST_BOUNCE_LIGHT_LEAK_PREVENTION".into(),
+                "FOLIAGE_TRANSMISSION".into(),
+            ],
         ),
         gi_spatial_and_shade_pipeline: create_pipeline(
             "solarik_lighting_gi_spatial_and_shade_pipeline",
