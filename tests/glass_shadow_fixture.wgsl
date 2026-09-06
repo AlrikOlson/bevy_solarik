@@ -26,6 +26,6 @@ fn probe() {
     if config[2].x>0.0 { materials[0].flags=0u; }
     let cosine=config[2].y;
     let direction=vec3(sqrt(1.0-cosine*cosine),0.0,cosine);
-    output[0]=trace_shadow_transmission(vec3(0.0),direction,config[1].z);
+    output[0]=trace_shadow_transmission_impl(vec3(0.0),direction,config[1].z,config[1].w<2.0);
 }
 

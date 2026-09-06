@@ -83,8 +83,8 @@ is capped at 32 glass interactions. A delta reflection owns subsequent emission,
 while straight transmission retains the previous light-sampling competition,
 including the primary ReSTIR DI ownership rule. Black transmitted throughput
 terminates immediately. Reference, glossy, ReSTIR DI and cache direct-light shadows now use the
-colored transport below. GI connections and bounded primary-surface paths
-remain separate dependent work.
+colored transport below. GI/cache connections now include straight glass
+transmission; bounded primary-surface paths remain separate dependent work.
 
 DLSS primary-surface replacement stops when a glossy path encounters glass.
 This retains the opaque primary guides instead of replacing them with a surface
@@ -160,7 +160,21 @@ measure transmission [0.23083, 0.46366, 0.69607], within 0.00376 of the same
 closed form as the reference; the opaque control is black. Evidence lives in
 `artifacts/bevy-sponza/restir-shadow` in the organizer. Run
 `cargo test --test restir_shadow -- --ignored` for the isolated reuse fixture.
-GI connections/cache bounces and primary-surface transport remain dependent work. Analytic-light delta reflections are also pending;
+GI reservoirs also keep endpoint outgoing radiance and scalar weights free of
+receiver transmission. Diffuse GI and its rough-specular consumer both evaluate
+the current connection at shading. Cache GI applies transmission only to its
+new sample, before temporal blending; cache-free secondary direct lighting uses
+colored NEE. Existing stochastic diffuse-coverage visibility is retained, with
+glass-only connection energy so coverage is not applied twice.
+
+The production GI merge fixture tests unchanged endpoint radiance/weights through
+0–256 reuse steps and five connection colors. Two shadow fixtures additionally
+check that pre-sampled diffuse coverage is not attenuated again. All nine GPU
+suites pass. The full realtime shader pipeline captures the pane scene in
+`artifacts/bevy-sponza/gi-shadow/tinted`. This is integration evidence, not an
+independent GI convergence measurement. These straight diffuse connections do
+not sample glass-reflected caustics or refraction through thick solids.
+Bounded primary-surface transport remains dependent work. Analytic-light delta reflections are also pending;
 the broader glass-shadow roadmap parent is not complete.
 
 ## Primary camera panes
@@ -322,8 +336,8 @@ or numerical equality. The analytic fixture is the quantitative glass evidence.
 
 ## Limits
 
-- GI connections/cache bounces and primary-surface paths retain their previous
-  glass visibility. DI/cache direct shadows have colored transmission, but the full
+- Bounded primary-surface paths retain their previous glass visibility.
+  DI/GI/cache straight connections have colored transmission, but the full
   realtime renderer is not yet a matching dielectric photometric reference.
 - Analytic point, spot and directional lights cannot be hit by delta reflected
   rays. Reflections see emissive geometry and sky; analytic-light reflections

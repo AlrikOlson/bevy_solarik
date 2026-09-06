@@ -343,6 +343,19 @@ fn sample_random_light_transmitted(ray_origin: vec3<f32>, world_normal: vec3<f32
     return TransmittedLightContribution(light, transmission.a);
 }
 
+// A GI reservoir stores outgoing endpoint radiance, never receiver transmission.
+// Both diffuse and rough-specular consumers evaluate the current connection.
+fn shade_gi_connection(world_position: vec3<f32>, world_normal: vec3<f32>, endpoint: vec3<f32>, radiance: vec3<f32>, weight: f32) -> vec3<f32> {
+    if weight <= 0.0 || all(radiance <= vec3(0.0)) { return vec3(0.0); }
+    let origin = world_position + world_normal * RAY_T_MIN;
+    if trace_point_visibility(origin, endpoint) == 0.0 { return vec3(0.0); }
+    let delta = endpoint - origin;
+    let distance = length(delta);
+    if distance <= RAY_T_MIN { return vec3(0.0); }
+    let transmission = trace_shadow_transmission_impl(origin, delta / distance, distance - RAY_T_MIN, false);
+    return radiance * weight * transmission.rgb;
+}
+
 // Connection energy and competing straight-through BSDF probability.
 fn trace_light_transmission(origin: vec3<f32>, light_position: vec4<f32>) -> vec4<f32> {
     var direction = light_position.xyz;
@@ -359,6 +372,11 @@ fn trace_light_transmission(origin: vec3<f32>, light_position: vec4<f32>) -> vec
 // RGB straight-through energy plus probability of the competing BSDF path.
 // Preserve one ray origin and advance t_min, so panes cannot extend past the light.
 fn trace_shadow_transmission(origin: vec3<f32>, direction: vec3<f32>, ray_t_max: f32) -> vec4<f32> {
+    return trace_shadow_transmission_impl(origin, direction, ray_t_max, true);
+}
+
+// GI endpoint/visibility tracing already samples diffuse alpha coverage.
+fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t_max: f32, include_coverage: bool) -> vec4<f32> {
     var transmission = vec4(1.0);
     var ray_t_min = RAY_T_MIN;
     for (var panes = 0u; panes <= 32u; panes += 1u) {
@@ -374,7 +392,7 @@ fn trace_shadow_transmission(origin: vec3<f32>, direction: vec3<f32>, ray_t_max:
                 hit.material.base_color, alpha, hit.material.reflectance);
             transmission *= vec4(weights.rgb, 1.0 - weights.a);
         } else if (raw_material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
-            transmission *= 1.0 - alpha;
+            if include_coverage { transmission *= 1.0 - alpha; }
         } else {
             return vec4(0.0);
         }

@@ -9,7 +9,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_specular_brdf}
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
-#import bevy_solarik::sampling::{sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
+#import bevy_solarik::sampling::{shade_gi_connection, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 #import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::world_cache::{query_world_cache, get_cell_size, WORLD_CACHE_CELL_LIFETIME}
@@ -45,7 +45,8 @@ fn specular_gi(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Surface is very rough, reuse the ReSTIR GI reservoir
         let gi_reservoir = gi_reservoirs_a[pixel_index];
         wi = normalize(gi_reservoir.sample_point_world_position - surface.world_position);
-        radiance = gi_reservoir.radiance * gi_reservoir.unbiased_contribution_weight;
+        radiance = shade_gi_connection(surface.world_position, surface.world_normal,
+            gi_reservoir.sample_point_world_position, gi_reservoir.radiance, gi_reservoir.unbiased_contribution_weight);
     } else {
         // Surface is glossy or mirror-like, trace a new path
         let TBN = orthonormalize(surface.world_normal);

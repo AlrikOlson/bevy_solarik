@@ -5,7 +5,7 @@ enable wgpu_ray_query;
 #import bevy_render::maths::PI
 #import bevy_render::view::View
 #import bevy_solarik::presample_light_tiles::{ResolvedLightSamplePacked, unpack_resolved_light_sample}
-#import bevy_solarik::sampling::{calculate_resolved_light_contribution, trace_light_transmission}
+#import bevy_solarik::sampling::{calculate_resolved_light_contribution, trace_light_transmission, trace_shadow_transmission_impl}
 #import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, RAY_T_MAX}
 #import bevy_solarik::world_cache::{
     WORLD_CACHE_MAX_TEMPORAL_SAMPLES,
@@ -57,15 +57,19 @@ fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
     // distance is not mistaken for sky; such far hits contribute nothing, as
     // upstream's shorter ray had them.
     let ray = trace_ray(geometry_data.world_position + (geometry_data.world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, RAY_T_MAX, RAY_FLAG_NONE);
+    // trace_ray skips thin panes when finding the endpoint. Apply their energy
+    // to this new cache sample once, excluding the endpoint itself.
+    let connection_distance = select(ray.t - RAY_T_MIN, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE);
+    let transmission = trace_shadow_transmission_impl(geometry_data.world_position + geometry_data.world_normal * RAY_T_MIN, ray_direction, connection_distance, false).rgb;
     if ray.kind == RAY_QUERY_INTERSECTION_NONE {
         // Escaped to the sky: cosine sampling turns radiance into irradiance
         // with a factor of pi, the same units the cached direct light is in.
-        world_cache_active_cells_new_radiance[active_cell_id.x] += PI * sample_sky(ray_direction);
+        world_cache_active_cells_new_radiance[active_cell_id.x] += transmission * PI * sample_sky(ray_direction);
     } else if ray.t <= WORLD_CACHE_MAX_GI_RAY_DISTANCE {
         let ray_hit = resolve_ray_hit_full(ray);
         let cell_life = atomicLoad(&world_cache_life[cell_index]);
         let radiance = query_world_cache(ray_hit.world_position, ray_hit.geometric_world_normal, view.world_position, ray.t, cell_life, &rng);
-        world_cache_active_cells_new_radiance[active_cell_id.x] += ray_hit.material.base_color * radiance;
+        world_cache_active_cells_new_radiance[active_cell_id.x] += transmission * ray_hit.material.base_color * radiance;
     }
 }
 

@@ -9,7 +9,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::brdf::evaluate_diffuse_brdf
 #import bevy_solarik::sky_sampling::sample_sky_mixture
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
-#import bevy_solarik::sampling::{sample_random_light, trace_point_visibility, balance_heuristic, isnan}
+#import bevy_solarik::sampling::{sample_random_light_transmitted, shade_gi_connection, balance_heuristic, isnan}
 #import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, RAY_T_MAX}
 #import bevy_solarik::world_cache::{query_world_cache, WORLD_CACHE_CELL_LIFETIME}
 #import bevy_solarik::realtime_bindings::{view_output, gi_reservoirs_a, gi_reservoirs_b, gbuffer, depth_buffer, motion_vectors, previous_gbuffer, previous_depth_buffer, view, previous_view, constants, Reservoir}
@@ -72,23 +72,14 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
         spatial.reservoir, spatial.world_position, spatial.world_normal, spatial.diffuse_brdf, &rng);
     var combined_reservoir = merge_result.merged_reservoir;
 
-    // More accuracy, less stability
-#ifndef BIASED_RESAMPLING
+    // Endpoint radiance and unoccluded scalar weights survive reuse unchanged.
     gi_reservoirs_a[pixel_index] = combined_reservoir;
-#endif
-
-    combined_reservoir.unbiased_contribution_weight *= trace_point_visibility(surface.world_position + (surface.world_normal * RAY_T_MIN), combined_reservoir.sample_point_world_position);
-
-    // More stability, less accuracy (shadows extend further out than they should)
-#ifdef BIASED_RESAMPLING
-    gi_reservoirs_a[pixel_index] = combined_reservoir;
-#endif
 
     let wo = normalize(view.world_position - surface.world_position);
     let brdf = evaluate_diffuse_brdf(wo, merge_result.wi, surface.world_normal, surface.material);
 
     var pixel_color = textureLoad(view_output, global_id.xy);
-    pixel_color += vec4(merge_result.selected_sample_radiance * combined_reservoir.unbiased_contribution_weight * view.exposure * brdf, 0.0);
+    pixel_color += vec4(shade_gi_connection(surface.world_position, surface.world_normal, combined_reservoir.sample_point_world_position, combined_reservoir.radiance, combined_reservoir.unbiased_contribution_weight) * view.exposure * brdf, 0.0);
     textureStore(view_output, global_id.xy, pixel_color);
 }
 
@@ -131,7 +122,7 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
     reservoir.confidence_weight = 1.0;
 
 #ifdef NO_WORLD_CACHE
-    let direct_lighting = sample_random_light(sample_point.world_position, sample_point.world_normal, rng);
+    let direct_lighting = sample_random_light_transmitted(sample_point.world_position, sample_point.world_normal, sample_point.geometric_world_normal, rng).light;
     reservoir.radiance = direct_lighting.radiance * saturate(dot(direct_lighting.wi, sample_point.world_normal));
     reservoir.unbiased_contribution_weight = direct_lighting.inverse_pdf * direction_sample.inverse_pdf;
 #else
