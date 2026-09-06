@@ -29,6 +29,16 @@ Scene: [Amazon Lumberyard Bistro, via NVIDIA ORCA](https://developer.nvidia.com/
 The local import converts materials/textures, rescales geometry, adds lamp
 lights and foliage transmission, and uses a procedural sky.
 
+## Day-to-night response
+
+![Bistro after sunset with bounded GI history](docs/images/bistro-temporal-response.png)
+
+Current development capture at 1280×720 with Ray Reconstruction and the matching
+Bistro interior. GI now limits old endpoint lifetime and accounts for world-cache
+update cadence. The [response test](docs/temporal-response.md) documents the
+measured reduction in lingering daylight and remaining variation. The 4K pair
+above predates this change.
+
 ## What changed
 
 - Rays that leave the scene can pick up light from a sky cubemap.

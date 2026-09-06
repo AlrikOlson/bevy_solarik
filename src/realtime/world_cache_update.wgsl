@@ -88,9 +88,8 @@ fn blend_new_samples(@builtin(global_invocation_id) active_cell_id: vec3<u32>) {
 
     // https://bsky.app/profile/gboisse.bsky.social/post/3m5blga3ftk2a
     let sample_count = min(old_radiance.a + 1.0, WORLD_CACHE_MAX_TEMPORAL_SAMPLES);
-    let alpha = abs(luminance_delta) / max(luminance(old_radiance.rgb), 0.001);
-    let max_sample_count = mix(WORLD_CACHE_MAX_TEMPORAL_SAMPLES, 1.0, pow(saturate(alpha), 1.0 / 8.0));
-    var blend_amount = 1.0 / min(sample_count, max_sample_count);
+    let update_probability = min(1.0, f32(WORLD_CACHE_CELL_UPDATES_SOFT_CAP) / f32(world_cache_active_cells_count));
+    var blend_amount = cache_blend_amount(sample_count, luminance(old_radiance.rgb), luminance_delta, update_probability);
     if bool(constants.reset) {
         blend_amount = 1.0;
     }
@@ -100,6 +99,15 @@ fn blend_new_samples(@builtin(global_invocation_id) active_cell_id: vec3<u32>) {
 
     world_cache_radiance[cell_index] = vec4(blended_radiance, sample_count);
     world_cache_luminance_deltas[cell_index] = blended_luminance_delta;
+}
+
+// Convert the history horizon from rendered frames to successful cell updates.
+// Otherwise the update budget silently stretches history as the cache grows.
+fn cache_blend_amount(sample_count: f32, old_luminance: f32, luminance_delta: f32, update_probability: f32) -> f32 {
+    let alpha = abs(luminance_delta) / max(old_luminance, 0.001);
+    let max_sample_count = mix(WORLD_CACHE_MAX_TEMPORAL_SAMPLES, 1.0, pow(saturate(alpha), 1.0 / 8.0));
+    let frame_limited_samples = max(1.0, 16.0 * clamp(update_probability, 0.0, 1.0));
+    return 1.0 / min(sample_count, min(max_sample_count, frame_limited_samples));
 }
 
 fn sample_random_light_ris(world_position: vec3<f32>, world_normal: vec3<f32>, workgroup_id: vec2<u32>, rng: ptr<function, u32>) -> vec3<f32> {

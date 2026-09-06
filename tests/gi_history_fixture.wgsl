@@ -19,10 +19,24 @@ fn probe() {
  for(var i=0u;i<u32(config[0].a);i++) {
   output[0]=vec4(shade_gi_connection(p,n,r.sample_point_world_position,r.radiance,r.unbiased_contribution_weight),0.0);
   r.confidence_weight=min(r.confidence_weight,8.0);
+  // The selected endpoint has already survived several frames. Spatial
+  // reuse must preserve its age rather than making it fresh again.
+  r.sample_age = 7.0;
   r=merge_reservoirs(r,p,n,vec3(1.0),r,p,n,vec3(1.0),&rng).merged_reservoir;
  }
  output[0]=vec4(shade_gi_connection(p,n,r.sample_point_world_position,r.radiance,r.unbiased_contribution_weight),0.0);
  output[1]=vec4(r.radiance,0.0);
- output[2]=vec4(r.unbiased_contribution_weight,0.0,0.0,0.0);
+ output[2]=vec4(r.unbiased_contribution_weight,r.sample_age,0.0,0.0);
+ // A bright endpoint must die within the production frame bound, even if
+ // it wins spatial reuse repeatedly between every temporal step.
+ var history=r; history.sample_age=0.0;
+ for(var frame=0u;frame<u32(MAX_GI_SAMPLE_AGE);frame++) {
+  history=age_temporal_reservoir(history);
+  for(var neighbor=0u;neighbor<4u;neighbor++) {
+   history=merge_reservoirs(history,p,n,vec3(1.0),history,p,n,vec3(1.0),&rng).merged_reservoir;
+  }
+ }
+ output[2].z=history.confidence_weight;
+ output[2].w=length(history.radiance);
 }
 

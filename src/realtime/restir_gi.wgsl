@@ -17,6 +17,8 @@ enable wgpu_ray_query;
 
 const SPATIAL_REUSE_RADIUS_PIXELS = 30.0;
 const CONFIDENCE_WEIGHT_CAP = 8.0;
+// Confidence limits influence, not lifetime. Bright old samples can keep winning.
+const MAX_GI_SAMPLE_AGE = 16.0;
 // Where a sample that escaped to the sky is said to sit: far enough along its
 // ray that the resampling jacobians read as 1 and the neighbours' visibility
 // re-trace covers the whole scene, and under RAY_T_MAX.
@@ -72,7 +74,7 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
         spatial.reservoir, spatial.world_position, spatial.world_normal, spatial.diffuse_brdf, &rng);
     var combined_reservoir = merge_result.merged_reservoir;
 
-    // Endpoint radiance and unoccluded scalar weights survive reuse unchanged.
+    // Endpoint radiance, age and unoccluded weights survive spatial reuse.
     gi_reservoirs_a[pixel_index] = combined_reservoir;
 
     let wo = normalize(view.world_position - surface.world_position);
@@ -152,9 +154,19 @@ fn load_temporal_reservoir(pixel_id: vec2<u32>, depth: f32, world_position: vec3
     let permuted_temporal_pixel_id = permute_pixel(point_temporal_pixel_id, constants.frame_index, view.main_pass_viewport.zw);
     var temporal = load_temporal_reservoir_inner(permuted_temporal_pixel_id, depth, world_position, world_normal);
 
-    temporal.reservoir.confidence_weight = min(temporal.reservoir.confidence_weight, CONFIDENCE_WEIGHT_CAP);
+    temporal.reservoir = age_temporal_reservoir(temporal.reservoir);
 
     return temporal;
+}
+
+fn age_temporal_reservoir(input: Reservoir) -> Reservoir {
+    var reservoir = input;
+    reservoir.sample_age += 1.0;
+    if reservoir.sample_age >= MAX_GI_SAMPLE_AGE {
+        return empty_reservoir();
+    }
+    reservoir.confidence_weight = min(reservoir.confidence_weight, CONFIDENCE_WEIGHT_CAP);
+    return reservoir;
 }
 
 fn load_temporal_reservoir_inner(temporal_pixel_id: vec2<u32>, depth: f32, world_position: vec3<f32>, world_normal: vec3<f32>) -> NeighborInfo {
@@ -308,24 +320,26 @@ fn merge_reservoirs(
     // Perform resampling
     var combined_reservoir = empty_reservoir();
     combined_reservoir.confidence_weight = canonical_reservoir.confidence_weight + other_reservoir.confidence_weight;
-    combined_reservoir.weight_sum = canonical_sample_resampling_weight + other_sample_resampling_weight;
+    let weight_sum = canonical_sample_resampling_weight + other_sample_resampling_weight;
 
-    if rand_f(rng) < other_sample_resampling_weight / combined_reservoir.weight_sum {
+    if rand_f(rng) < other_sample_resampling_weight / weight_sum {
         combined_reservoir.sample_point_world_position = other_reservoir.sample_point_world_position;
         combined_reservoir.sample_point_world_normal = other_reservoir.sample_point_world_normal;
         combined_reservoir.radiance = other_reservoir.radiance;
+        combined_reservoir.sample_age = other_reservoir.sample_age;
 
         let inverse_target_function = select(0.0, 1.0 / canonical_target_function_other_sample, canonical_target_function_other_sample > 0.0);
-        combined_reservoir.unbiased_contribution_weight = combined_reservoir.weight_sum * inverse_target_function;
+        combined_reservoir.unbiased_contribution_weight = weight_sum * inverse_target_function;
 
         return ReservoirMergeResult(combined_reservoir, other_reservoir.radiance, other_sample_wi);
     } else {
         combined_reservoir.sample_point_world_position = canonical_reservoir.sample_point_world_position;
         combined_reservoir.sample_point_world_normal = canonical_reservoir.sample_point_world_normal;
         combined_reservoir.radiance = canonical_reservoir.radiance;
+        combined_reservoir.sample_age = canonical_reservoir.sample_age;
 
         let inverse_target_function = select(0.0, 1.0 / canonical_target_function_canonical_sample, canonical_target_function_canonical_sample > 0.0);
-        combined_reservoir.unbiased_contribution_weight = combined_reservoir.weight_sum * inverse_target_function;
+        combined_reservoir.unbiased_contribution_weight = weight_sum * inverse_target_function;
 
         return ReservoirMergeResult(combined_reservoir, canonical_reservoir.radiance, canonical_sample_wi);
     }
