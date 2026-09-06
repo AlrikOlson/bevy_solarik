@@ -3,10 +3,9 @@ enable wgpu_ray_query;
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
 #import bevy_pbr::pbr_functions::calculate_F0
 #import bevy_pbr::utils::{rand_f, rand_vec2f}
-#import bevy_render::maths::{PI, orthonormalize}
 #import bevy_render::view::View
-#import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, fresnel}
-#import bevy_solarik::sampling::{sample_random_light, random_emissive_light_pdf, ggx_vndf_pdf, power_heuristic}
+#import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
+#import bevy_solarik::sampling::{sample_random_light, sample_random_light_two_sided, LightContribution, random_emissive_light_pdf, ggx_vndf_pdf, power_heuristic}
 #import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 
 #import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
@@ -89,11 +88,16 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // TODO: randomly choose to use NEE or not with probability proportional to roughness and metallicness
             let is_perfectly_specular = ray_hit.material.roughness <= MIRROR_ROUGHNESS_THRESHOLD && ray_hit.material.metallic > 0.9999;
             if !is_perfectly_specular {
-                let direct_lighting = sample_random_light(ray_hit.world_position, ray_hit.world_normal, &rng);
+                var direct_lighting: LightContribution;
+                if ray_hit.material.diffuse_transmission > 0.0 {
+                    direct_lighting = sample_random_light_two_sided(ray_hit.world_position, ray_hit.world_normal, ray_hit.geometric_world_normal, &rng);
+                } else {
+                    direct_lighting = sample_random_light(ray_hit.world_position, ray_hit.world_normal, &rng);
+                }
 
                 mis_weight = 1.0;
                 if direct_lighting.brdf_rays_can_hit {
-                    let pdf_of_bounce = brdf_pdf(wo, direct_lighting.wi, ray_hit);
+                    let pdf_of_bounce = evaluate_brdf_pdf(wo, direct_lighting.wi, ray_hit.world_normal, ray_hit.material);
                     mis_weight = power_heuristic(1.0 / direct_lighting.inverse_pdf, pdf_of_bounce);
                 }
 
@@ -105,7 +109,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let next_bounce = evaluate_and_sample_brdf(wo, ray_hit.world_normal, ray_hit.material, &rng);
             if next_bounce.pdf == 0.0 { break; }
             ray_direction = next_bounce.wi;
-            ray_origin = ray_hit.world_position + (ray_hit.geometric_world_normal * RAY_T_MIN);
+            ray_origin = offset_thin_glass_ray(ray_hit.world_position, ray_hit.geometric_world_normal, ray_direction, RAY_T_MIN);
             ray_t_min = RAY_T_MIN;
             p_bounce = next_bounce.pdf;
             throughput *= next_bounce.throughput;
@@ -135,24 +139,3 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 #endif
 }
 
-fn brdf_pdf(wo: vec3<f32>, wi: vec3<f32>, ray_hit: ResolvedRayHitFull) -> f32 {
-    let NdotV = max(dot(ray_hit.world_normal, wo), 0.0001);
-    let F0 = calculate_F0(ray_hit.material.base_color, ray_hit.material.metallic, vec3(ray_hit.material.reflectance));
-    let df = 1.0 - luminance(fresnel(F0, NdotV));
-
-    let diffuse_weight = mix(df, 0.0, ray_hit.material.metallic);
-    let specular_weight = 1.0 - diffuse_weight;
-
-    let TBN = orthonormalize(ray_hit.world_normal);
-    let T = TBN[0];
-    let B = TBN[1];
-    let N = TBN[2];
-
-    let wo_tangent = vec3(dot(wo, T), dot(wo, B), dot(wo, N));
-    let wi_tangent = vec3(dot(wi, T), dot(wi, B), dot(wi, N));
-
-    let diffuse_pdf = wi_tangent.z / PI;
-    let specular_pdf = ggx_vndf_pdf(wo_tangent, wi_tangent, ray_hit.material.roughness);
-    let pdf = (diffuse_weight * diffuse_pdf) + (specular_weight * specular_pdf);
-    return pdf;
-}

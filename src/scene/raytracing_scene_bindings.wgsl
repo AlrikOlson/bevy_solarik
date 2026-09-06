@@ -222,6 +222,7 @@ struct ResolvedMaterial {
     perceptual_roughness: f32,
     roughness: f32,
     metallic: f32,
+    diffuse_transmission: f32,
 }
 
 struct ResolvedRayHitFull {
@@ -251,6 +252,12 @@ fn resolve_material(material: Material, uv: vec2<f32>) -> ResolvedMaterial {
     }
 
     m.reflectance = material.reflectance;
+    // Realtime estimators opt in only once both hemispheres are supported.
+#ifdef FOLIAGE_TRANSMISSION
+    m.diffuse_transmission = f32(material.flags >> 16u) / 65535.0;
+#else
+    m.diffuse_transmission = 0.0;
+#endif
 
     m.perceptual_roughness = material.perceptual_roughness;
     m.metallic = material.metallic;

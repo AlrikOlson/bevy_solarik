@@ -137,6 +137,17 @@ fn sample_random_light(ray_origin: vec3<f32>, origin_world_normal: vec3<f32>, rn
     return light_contribution;
 }
 
+// A thin diffuse receiver can see lights on either side. Evaluate geometry
+// at the true surface; offset only the visibility ray toward the sampled side.
+fn sample_random_light_two_sided(ray_origin: vec3<f32>, origin_world_normal: vec3<f32>, geometric_normal: vec3<f32>, rng: ptr<function, u32>) -> LightContribution {
+    let sample = generate_random_light_sample(rng);
+    var contribution = calculate_resolved_light_contribution(sample.resolved_light_sample, ray_origin, origin_world_normal);
+    let side = select(-1.0, 1.0, dot(geometric_normal, contribution.wi) >= 0.0);
+    let origin = ray_origin + geometric_normal * (side * RAY_T_MIN);
+    contribution.radiance *= trace_light_visibility(origin, sample.resolved_light_sample.world_position);
+    return contribution;
+}
+
 fn random_emissive_light_pdf(hit: ResolvedRayHitFull) -> f32 {
     let area = f32(hit.triangle_count) * hit.triangle_area;
     if area <= 0.0 { return 0.0; }

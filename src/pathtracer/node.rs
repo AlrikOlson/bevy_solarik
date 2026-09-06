@@ -49,9 +49,12 @@ pub fn init_pathtracer_pipelines(
         ],
         shader: load_embedded_asset!(asset_server.as_ref(), "pathtracer.wgsl"),
         shader_defs: if std::env::var("SOLARIK_PATHTRACER_DEBUG_SAMPLE_COUNT").is_ok() {
-            vec!["PATHTRACER_DEBUG_SAMPLE_COUNT".into()]
+            vec![
+                "FOLIAGE_TRANSMISSION".into(),
+                "PATHTRACER_DEBUG_SAMPLE_COUNT".into(),
+            ]
         } else {
-            vec![]
+            vec!["FOLIAGE_TRANSMISSION".into()]
         },
         ..default()
     });

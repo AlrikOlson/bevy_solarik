@@ -41,7 +41,12 @@ fn evaluate_and_sample_brdf(
     var wi_tangent: vec3<f32>;
     let diffuse_selected = rand_f(rng) < diffuse_weight;
     if diffuse_selected {
-        wi = sample_cosine_hemisphere(world_normal, rng);
+        // Preserve the old random sequence when transmission is disabled.
+        var normal = world_normal;
+        if material.diffuse_transmission > 0.0 {
+            if rand_f(rng) < material.diffuse_transmission { normal = -normal; }
+        }
+        wi = sample_cosine_hemisphere(normal, rng);
         wi_tangent = vec3(dot(wi, T), dot(wi, B), dot(wi, N));
     } else {
         wi_tangent = sample_ggx_vndf(wo_tangent, material.roughness, rng);
@@ -51,9 +56,8 @@ fn evaluate_and_sample_brdf(
         wi = wi_tangent.x * T + wi_tangent.y * B + wi_tangent.z * N;
     }
 
-    let diffuse_pdf = wi_tangent.z / PI;
-    let specular_pdf = ggx_vndf_pdf(wo_tangent, wi_tangent, material.roughness);
-    let pdf = (diffuse_weight * diffuse_pdf) + (specular_weight * specular_pdf);
+    let pdf = evaluate_brdf_pdf(wo, wi, world_normal, material);
+    if pdf <= 0.0 { return EvaluateAndSampleBrdfResult(wi, vec3(0.0), 0.0); }
 
     var throughput = evaluate_brdf(wo, wi, world_normal, material);
     if diffuse_selected || material.roughness > MIRROR_ROUGHNESS_THRESHOLD {
@@ -79,14 +83,16 @@ fn evaluate_diffuse_brdf(wo: vec3<f32>, wi: vec3<f32>, world_normal: vec3<f32>, 
 
     let NdotL = dot(world_normal, wi);
     let NdotV = dot(world_normal, wo);
-    if NdotL < 0.0001 || NdotV < 0.0001 { return vec3(0.0); }
+    if abs(NdotL) < 0.0001 || NdotV < 0.0001 { return vec3(0.0); }
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
-    let layering = (1.0 - fresnel(F0, NdotL)) * (1.0 - fresnel(F0, NdotV));
+    let layering = (1.0 - fresnel(F0, abs(NdotL))) * (1.0 - fresnel(F0, NdotV));
 
-    return diffuse_color * layering * NdotL;
+    let side_weight = select(1.0 - material.diffuse_transmission, material.diffuse_transmission, NdotL < 0.0);
+    return diffuse_color * layering * abs(NdotL) * side_weight;
 }
 
 fn evaluate_specular_brdf(wo: vec3<f32>, wi: vec3<f32>, world_normal: vec3<f32>, material: ResolvedMaterial) -> vec3<f32> {
+    if dot(world_normal, wi) < 0.0001 { return vec3(0.0); }
     let H = normalize(wi + wo);
     let NdotL = dot(world_normal, wi);
     let NdotH = dot(world_normal, H);
@@ -118,4 +124,21 @@ fn fresnel(f0: vec3<f32>, LdotH: f32) -> vec3<f32> {
 // Scale/bias approximation
 fn F_AB(perceptual_roughness: f32, NdotV: f32) -> vec2<f32> {
     return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;
+}
+
+// Solid-angle PDF shared by continuation sampling and light-sample MIS.
+fn evaluate_brdf_pdf(wo: vec3<f32>, wi: vec3<f32>, world_normal: vec3<f32>, material: ResolvedMaterial) -> f32 {
+    let NdotV = dot(world_normal, wo);
+    if NdotV < 0.0001 { return 0.0; }
+    let NdotL = dot(world_normal, wi);
+    let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
+    let diffuse_weight = mix(1.0 - luminance(fresnel(F0, NdotV)), 0.0, material.metallic);
+    let side_weight = select(1.0 - material.diffuse_transmission, material.diffuse_transmission, NdotL < 0.0);
+    let diffuse_pdf = diffuse_weight * side_weight * abs(NdotL) / PI;
+    // GGX has support only on the reflection hemisphere.
+    if NdotL <= 0.0 { return diffuse_pdf; }
+    let TBN = orthonormalize(world_normal);
+    let wo_tangent = transpose(TBN) * wo;
+    let wi_tangent = transpose(TBN) * wi;
+    return diffuse_pdf + (1.0 - diffuse_weight) * ggx_vndf_pdf(wo_tangent, wi_tangent, material.roughness);
 }

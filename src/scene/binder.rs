@@ -608,8 +608,18 @@ fn material_alpha(material: &StandardMaterial) -> MaterialAlpha {
     } else {
         0
     };
+    // Preserve the 64-byte GPU ABI: the high 16 flag bits hold unorm16
+    // diffuse transmission. Only explicitly authored two-sided masks opt in.
+    let transmission = if material.double_sided
+        && matches!(material.alpha_mode, AlphaMode::Mask(_))
+        && material.diffuse_transmission.is_finite()
+    {
+        (material.diffuse_transmission.clamp(0.0, 1.0) * 65535.0).round() as u32
+    } else {
+        0
+    };
     MaterialAlpha {
-        flags: mode | double_sided,
+        flags: mode | double_sided | (transmission << 16),
         cutoff,
     }
 }
@@ -761,6 +771,42 @@ fn tlas_transform(transform: &Mat4) -> [f32; 12] {
 mod tests {
     use super::*;
     use bevy_transform::components::Transform;
+
+    #[test]
+    fn foliage_flags_restrict_and_quantize_authored_transmission() {
+        let mut material = StandardMaterial {
+            diffuse_transmission: 0.5,
+            double_sided: true,
+            alpha_mode: AlphaMode::Mask(0.5),
+            ..Default::default()
+        };
+        assert_eq!(material_alpha(&material).flags >> 16, 32768);
+        assert_eq!(material_alpha(&material).flags & 0xffff, 10);
+        for (value, expected) in [
+            (0.0, 0),
+            (1.0, 65535),
+            (2.0, 65535),
+            (-1.0, 0),
+            (f32::NAN, 0),
+            (f32::INFINITY, 0),
+        ] {
+            material.diffuse_transmission = value;
+            assert_eq!(material_alpha(&material).flags >> 16, expected);
+        }
+        material.diffuse_transmission = 1.0;
+        material.double_sided = false;
+        assert_eq!(material_alpha(&material).flags >> 16, 0);
+        material.double_sided = true;
+        for mode in [
+            AlphaMode::Opaque,
+            AlphaMode::Blend,
+            AlphaMode::AlphaToCoverage,
+        ] {
+            material.alpha_mode = mode;
+            assert_eq!(material_alpha(&material).flags >> 16, 0);
+        }
+        assert_eq!(GpuMaterial::min_size().get(), 64);
+    }
 
     #[test]
     fn sky_intensity_is_zero_without_a_bound_image() {

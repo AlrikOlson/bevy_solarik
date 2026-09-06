@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reference foliage transmission: authored two-sided masked materials split diffuse energy across both hemispheres, with matching sampling/MIS PDFs and outgoing visibility offsets. CPU packing, production diffuse GPU contracts and a three-card backlight capture validate the implementation.
+
 - Primary realtime glass now composites tinted transmission and ray-traced reflections after opaque rendering. Ready views suppress only TLAS-present pane draws, retaining raster fallback and deterministic background DLSS guides. Eleven production WGSL cases and an analytic scene validate transport.
 
 - Realtime glossy reflections now resolve thin glass with tinted transmission, bounded pane chains and emission weighting. Glass stops DLSS primary-surface replacement; primary camera glass is handled by the compositor. The production transport GPU test covers both DLSS guide variants.
