@@ -9,7 +9,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_specular_brdf}
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
-#import bevy_solarik::sampling::{sample_random_light, random_emissive_light_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
+#import bevy_solarik::sampling::{sample_random_light, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
 #import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
 #import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::world_cache::{query_world_cache, get_cell_size, WORLD_CACHE_CELL_LIFETIME}
@@ -87,6 +87,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
     var ray_origin = primary_surface.world_position + (primary_surface.world_normal * RAY_T_MIN);
     var wi = initial_wi;
     var p_bounce = initial_p_bounce;
+    var previous_scatter_position = primary_surface.world_position;
     var path_roughness = primary_surface.material.roughness;
     var glass_interactions = 0u;
     var delta_reflection = false;
@@ -127,7 +128,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             glass_interactions += 1u;
             let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
             let emission_weight = select(
-                emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit),
+                emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit, previous_scatter_position),
                 1.0, delta_reflection);
             radiance += throughput * emission_weight * alpha * ray_hit.material.emissive;
             let next = sample_thin_glass(-wi, ray_hit.geometric_world_normal,
@@ -158,7 +159,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         let wo_tangent = vec3(dot(wo, T), dot(wo, B), dot(wo, N));
 
         // Add emissive contribution
-        let mis_weight = select(emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit), 1.0, delta_reflection);
+        let mis_weight = select(emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit, previous_scatter_position), 1.0, delta_reflection);
         radiance += throughput * mis_weight * ray_hit.material.emissive;
 
         // Should not perform NEE for mirror-like surfaces
@@ -190,7 +191,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             // Sample direct lighting (NEE)
             let direct_lighting = sample_random_light(ray_hit.world_position, ray_hit.world_normal, rng);
             let direct_lighting_brdf = evaluate_brdf(wo, direct_lighting.wi, ray_hit.world_normal, ray_hit.material);
-            let mis_weight = nee_mis_weight(direct_lighting.inverse_pdf, direct_lighting.brdf_rays_can_hit, wo_tangent, direct_lighting.wi, ray_hit, TBN);
+            let mis_weight = nee_mis_weight(direct_lighting.solid_angle_pdf, direct_lighting.brdf_rays_can_hit, wo_tangent, direct_lighting.wi, ray_hit, TBN);
             radiance += throughput * mis_weight * direct_lighting.radiance * direct_lighting.inverse_pdf * direct_lighting_brdf;
         }
 
@@ -207,7 +208,8 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             throughput /= p_bounce;
         }
         path_roughness += ray_hit.material.roughness;
-        delta_reflection = false;
+        previous_scatter_position = ray_hit.world_position;
+        delta_reflection = surface_perfect_mirror;
         i += 1u;
 
         // Russian roulette for early termination
@@ -219,9 +221,9 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
     return radiance;
 }
 
-fn emissive_mis_weight(i: u32, initial_roughness: f32, p_bounce: f32, ray_hit: ResolvedRayHitFull) -> f32 {
+fn emissive_mis_weight(i: u32, initial_roughness: f32, p_bounce: f32, ray_hit: ResolvedRayHitFull, previous_position: vec3<f32>) -> f32 {
     if i != 0u {
-        let p_light = random_emissive_light_pdf(ray_hit);
+        let p_light = random_emissive_light_solid_angle_pdf(ray_hit, previous_position);
         return power_heuristic(p_bounce, p_light);
     } else {
         // The first bounce gets MIS weight 0.0 or 1.0 depending on if ReSTIR DI shaded using the specular lobe or not
@@ -233,7 +235,7 @@ fn emissive_mis_weight(i: u32, initial_roughness: f32, p_bounce: f32, ray_hit: R
     }
 }
 
-fn nee_mis_weight(inverse_p_light: f32, brdf_rays_can_hit: bool, wo_tangent: vec3<f32>, wi: vec3<f32>, ray_hit: ResolvedRayHitFull, TBN: mat3x3<f32>) -> f32 {
+fn nee_mis_weight(p_light: f32, brdf_rays_can_hit: bool, wo_tangent: vec3<f32>, wi: vec3<f32>, ray_hit: ResolvedRayHitFull, TBN: mat3x3<f32>) -> f32 {
     if !brdf_rays_can_hit {
         return 1.0;
     }
@@ -243,7 +245,6 @@ fn nee_mis_weight(inverse_p_light: f32, brdf_rays_can_hit: bool, wo_tangent: vec
     let N = TBN[2];
     let wi_tangent = vec3(dot(wi, T), dot(wi, B), dot(wi, N));
 
-    let p_light = 1.0 / inverse_p_light;
     let p_bounce = ggx_vndf_pdf(wo_tangent, wi_tangent, ray_hit.material.roughness);
     return power_heuristic(p_light, p_bounce);
 }

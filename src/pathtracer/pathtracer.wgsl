@@ -5,7 +5,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::{rand_f, rand_vec2f}
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
-#import bevy_solarik::sampling::{sample_random_light, sample_random_light_two_sided, LightContribution, random_emissive_light_pdf, ggx_vndf_pdf, power_heuristic}
+#import bevy_solarik::sampling::{sample_random_light, sample_random_light_two_sided, LightContribution, random_emissive_light_solid_angle_pdf, ggx_vndf_pdf, power_heuristic}
 #import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 
 #import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
@@ -41,6 +41,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var radiance = vec3(0.0);
     var throughput = vec3(1.0);
     var p_bounce = 0.0;
+    var previous_scatter_position = ray_origin;
     var glass_interactions = 0u;
     loop {
         let ray = trace_glass_ray(ray_origin, ray_direction, ray_t_min, RAY_T_MAX);
@@ -68,7 +69,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
                 var emission_weight = 1.0;
                 if p_bounce != 0.0 {
-                    emission_weight = power_heuristic(p_bounce, random_emissive_light_pdf(ray_hit));
+                    emission_weight = power_heuristic(p_bounce, random_emissive_light_solid_angle_pdf(ray_hit, previous_scatter_position));
                 }
                 radiance += emission_weight * throughput * alpha * ray_hit.material.emissive;
                 // Geometric normal avoids normal maps bending transmission or
@@ -91,7 +92,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Emissive contribution
             var mis_weight = 1.0;
             if p_bounce != 0.0 { // Not first bounce
-                let p_light = random_emissive_light_pdf(ray_hit);
+                let p_light = random_emissive_light_solid_angle_pdf(ray_hit, previous_scatter_position);
                 mis_weight = power_heuristic(p_bounce, p_light);
             }
             radiance += mis_weight * throughput * ray_hit.material.emissive;
@@ -110,7 +111,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 mis_weight = 1.0;
                 if direct_lighting.brdf_rays_can_hit {
                     let pdf_of_bounce = evaluate_brdf_pdf(wo, direct_lighting.wi, ray_hit.world_normal, ray_hit.material);
-                    mis_weight = power_heuristic(1.0 / direct_lighting.inverse_pdf, pdf_of_bounce);
+                    mis_weight = power_heuristic(direct_lighting.solid_angle_pdf, pdf_of_bounce);
                 }
 
                 let direct_lighting_brdf = evaluate_brdf(wo, direct_lighting.wi, ray_hit.world_normal, ray_hit.material);
@@ -123,7 +124,8 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             ray_direction = next_bounce.wi;
             ray_origin = offset_thin_glass_ray(ray_hit.world_position, ray_hit.geometric_world_normal, ray_direction, RAY_T_MIN);
             ray_t_min = RAY_T_MIN;
-            p_bounce = next_bounce.pdf;
+            previous_scatter_position = ray_hit.world_position;
+            p_bounce = select(next_bounce.pdf, 0.0, is_perfectly_specular);
             throughput *= next_bounce.throughput;
 
             // Russian roulette for early termination

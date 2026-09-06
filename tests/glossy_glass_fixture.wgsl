@@ -5,7 +5,7 @@ struct ResolvedRayHitFull { world_position: vec3f, world_normal: vec3f, geometri
 struct Ray { kind: u32, instance_index: u32, t: f32 }
 struct RawMaterial { flags: u32 }
 struct View { world_position: vec3f }
-struct Light { wi: vec3f, inverse_pdf: f32, brdf_rays_can_hit: bool, radiance: vec3f }
+struct Light { wi: vec3f, inverse_pdf: f32, brdf_rays_can_hit: bool, radiance: vec3f, solid_angle_pdf: f32 }
 const RAY_T_MIN: f32 = 0.001;
 const RAY_T_MAX: f32 = 10000.0;
 const RAY_QUERY_INTERSECTION_NONE: u32 = 0u;
@@ -54,12 +54,12 @@ fn sample_sky(wi: vec3f) -> vec3f { return vec3(0.0); }
 fn orthonormalize(n: vec3f) -> mat3x3f { return mat3x3f(vec3(1.0,0.0,0.0),vec3(0.0,1.0,0.0),n); }
 fn get_cell_size(p: vec3f, eye: vec3f, rng: ptr<function,u32>) -> f32 { return 100.0; }
 fn query_world_cache(p: vec3f, n: vec3f, eye: vec3f, t: f32, life: u32, rng: ptr<function,u32>) -> vec3f { return vec3(0.0); }
-fn sample_random_light(p: vec3f, n: vec3f, rng: ptr<function,u32>) -> Light { return Light(n,1.0,false,vec3(0.0)); }
+fn sample_random_light(p: vec3f, n: vec3f, rng: ptr<function,u32>) -> Light { return Light(n,1.0,false,vec3(0.0),0.0); }
 fn evaluate_brdf(wo: vec3f, wi: vec3f, n: vec3f, m: Material) -> vec3f { return vec3(0.0); }
 fn sample_ggx_vndf(wo: vec3f, r: f32, rng: ptr<function,u32>) -> vec3f { return vec3(0.0); }
 fn ggx_vndf_sample_invalid(wi: vec3f) -> bool { return true; }
 fn ggx_vndf_pdf(wo: vec3f, wi: vec3f, r: f32) -> f32 { return 0.5; }
-fn random_emissive_light_pdf(hit: ResolvedRayHitFull) -> f32 { return 0.5; }
+fn random_emissive_light_solid_angle_pdf(hit: ResolvedRayHitFull, previous_position: vec3f) -> f32 { return 0.5; }
 fn power_heuristic(a: f32, b: f32) -> f32 { return a*a/(a*a+b*b); }
 fn luminance(c: vec3f) -> f32 { return dot(c, vec3(0.2126,0.7152,0.0722)); }
 @compute @workgroup_size(1)

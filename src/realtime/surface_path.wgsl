@@ -1,9 +1,8 @@
 enable wgpu_ray_query;
 #define_import_path bevy_solarik::surface_path
 
-#import bevy_solarik::foliage_math::foliage_solid_angle_pdf
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
-#import bevy_solarik::sampling::{generate_random_light_sample, calculate_resolved_light_contribution, trace_light_visibility, random_emissive_light_pdf, power_heuristic}
+#import bevy_solarik::sampling::{generate_random_light_sample, calculate_resolved_light_contribution, trace_light_visibility, random_emissive_light_solid_angle_pdf, power_heuristic}
 #import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, light_sources, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::thin_glass::offset_thin_glass_ray
 
@@ -22,8 +21,7 @@ fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: p
             let light = calculate_resolved_light_contribution(sample, hit.world_position, hit.world_normal);
             var weight = 1.0;
             if light.brdf_rays_can_hit && !last {
-                let delta = sample.world_position.xyz - hit.world_position;
-                let p_light = foliage_solid_angle_pdf(1.0 / light.inverse_pdf, dot(delta, delta), dot(-light.wi, sample.world_normal));
+                let p_light = light.solid_angle_pdf;
                 weight = power_heuristic(p_light, evaluate_brdf_pdf(wo, light.wi, hit.world_normal, hit.material));
             }
             let origin = offset_thin_glass_ray(hit.world_position, hit.geometric_world_normal, light.wi, RAY_T_MIN);
@@ -47,8 +45,7 @@ fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: p
         wo = -next.wi;
         var emission_weight = 1.0;
         if !mirror {
-            let delta = hit.world_position - previous_position;
-            let p_light = foliage_solid_angle_pdf(random_emissive_light_pdf(hit), dot(delta, delta), dot(wo, hit.geometric_world_normal));
+            let p_light = random_emissive_light_solid_angle_pdf(hit, previous_position);
             emission_weight = power_heuristic(next.pdf, p_light);
         }
         radiance += throughput * hit.material.emissive * emission_weight;

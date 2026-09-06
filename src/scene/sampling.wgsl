@@ -118,6 +118,8 @@ struct LightContribution {
     inverse_pdf: f32,
     wi: vec3<f32>,
     brdf_rays_can_hit: bool,
+    // Solid-angle density for MIS only; inverse_pdf remains in area measure.
+    solid_angle_pdf: f32,
 }
 
 struct LightContributionNoPdf {
@@ -146,6 +148,20 @@ fn sample_random_light_two_sided(ray_origin: vec3<f32>, origin_world_normal: vec
     let origin = ray_origin + geometric_normal * (side * RAY_T_MIN);
     contribution.radiance *= trace_light_visibility(origin, sample.resolved_light_sample.world_position);
     return contribution;
+}
+
+// Convert area density to solid angle at the previous scattering vertex.
+fn area_to_solid_angle_pdf(area_pdf: f32, distance_squared: f32, light_cosine: f32) -> f32 {
+    if area_pdf <= 0.0 || distance_squared <= 0.0 { return 0.0; }
+    return area_pdf * distance_squared / max(abs(light_cosine), 0.000001);
+}
+
+fn random_emissive_light_solid_angle_pdf(hit: ResolvedRayHitFull, previous_position: vec3<f32>) -> f32 {
+    let delta = hit.world_position - previous_position;
+    let distance_squared = dot(delta, delta);
+    if distance_squared <= 0.0 { return 0.0; }
+    let cosine = dot(-delta / sqrt(distance_squared), hit.triangle_world_normal);
+    return area_to_solid_angle_pdf(random_emissive_light_pdf(hit), distance_squared, cosine);
 }
 
 fn random_emissive_light_pdf(hit: ResolvedRayHitFull) -> f32 {
@@ -242,7 +258,7 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
         }
         return ResolvedLightSample(
             vec4(triangle_data.world_position, LIGHT_SAMPLE_EMISSIVE_MESH),
-            triangle_data.world_normal,
+            triangle_data.triangle_world_normal,
             emission,
             f32(triangle_count) * triangle_data.triangle_area,
             vec3(0.0, 0.0, 1.0),
@@ -269,7 +285,12 @@ fn calculate_resolved_light_contribution(resolved_light_sample: ResolvedLightSam
     // Only emissive meshes are geometry a BRDF ray can hit; the others are
     // reached by next-event estimation alone, so their MIS weight is 1.
     let brdf_rays_can_hit = resolved_light_sample.world_position.w == LIGHT_SAMPLE_EMISSIVE_MESH;
-    return LightContribution(radiance, resolved_light_sample.inverse_pdf, wi, brdf_rays_can_hit);
+    var solid_angle_pdf = 0.0;
+    if brdf_rays_can_hit && resolved_light_sample.inverse_pdf > 0.0 {
+        solid_angle_pdf = area_to_solid_angle_pdf(1.0 / resolved_light_sample.inverse_pdf,
+            light_distance_squared, dot(-wi, resolved_light_sample.world_normal));
+    }
+    return LightContribution(radiance, resolved_light_sample.inverse_pdf, wi, brdf_rays_can_hit, solid_angle_pdf);
 }
 
 // The raster path's cone and range on a point or spot light sample

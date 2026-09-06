@@ -249,6 +249,8 @@ struct ResolvedRayHitFull {
     world_tangent: vec4<f32>,
     uv: vec2<f32>,
     triangle_area: f32,
+    // Actual triangle normal for area/solid-angle Jacobians, never normal-mapped.
+    triangle_world_normal: vec3<f32>,
     triangle_count: u32,
     light_probability: f32,
     material: ResolvedMaterial,
@@ -375,6 +377,7 @@ fn resolve_triangle_data_full(instance_id: u32, triangle_id: u32, barycentrics: 
         world_tangent,
         uv,
         triangle_area,
+        normalize(cross(triangle_edge0, triangle_edge1)),
         instance_geometry_ids.triangle_count,
         instance_geometry_ids.light_probability,
         resolved_material,
