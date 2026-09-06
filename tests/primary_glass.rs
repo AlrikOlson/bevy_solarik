@@ -111,10 +111,43 @@ fn primary_glass_gpu() {
             ("exact budget", [1.0; 4], [32.0, 100.0, 0.0, 0.0], [1.0; 3]),
             ("chain bound", [1.0; 4], [33.0, 100.0, 0.0, 0.0], [0.0; 3]),
         ];
-        for (name, pane, config, expected) in cases {
+        let cases = cases
+            .into_iter()
+            .map(|(name, pane, config, expected)| (name, pane, config, [0.0; 4], expected))
+            .chain([
+                (
+                    "hidden black wall",
+                    [1.0; 4],
+                    [1.0, 100.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0, 0.0],
+                    [0.0; 3],
+                ),
+                (
+                    "hidden green wall",
+                    [1.0; 4],
+                    [1.0, 100.0, 0.5, 0.0],
+                    [2.0, 0.0, 0.5, 0.0],
+                    [r, 0.5 * (1.0 - r), 0.0],
+                ),
+                (
+                    "opaque before glass preserves raster",
+                    [1.0; 4],
+                    [1.0, 100.0, 0.0, 0.0],
+                    [0.5, 0.0, 0.0, 0.0],
+                    [1.0; 3],
+                ),
+                (
+                    "wall beyond raster preserves raster",
+                    [1.0; 4],
+                    [1.0, 1.5, 0.0, 0.0],
+                    [2.0, 0.0, 0.0, 0.0],
+                    [1.0; 3],
+                ),
+            ]);
+        for (name, pane, config, hidden, expected) in cases {
             let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(&[pane, config]),
+                contents: bytemuck::cast_slice(&[pane, config, hidden]),
                 usage: wgpu::BufferUsages::STORAGE,
             });
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {

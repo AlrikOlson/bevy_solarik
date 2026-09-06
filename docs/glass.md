@@ -89,7 +89,8 @@ all guides on the same deterministic surface. This is a conservative ownership
 policy, not an exact reconstruction model for two independently moving layers.
 
 The ignored `primary_glass_gpu` test executes the production compositor against
-synthetic scene I/O: 11 cases cover tint, clear/zero-alpha panes, opaque occlusion,
+synthetic scene I/O: 15 cases cover tint, clear/zero-alpha panes, opaque occlusion,
+hidden black/green walls and raster ownership controls,
 two panes, black transmission, perfect reflection, emission and both sides of
 the 32-pane limit. The existing thin-glass and glossy GPU regressions also pass.
 
@@ -105,6 +106,35 @@ of at least 1.2 before the fix. Every pane now uses the physical oracle:
 ```text
 python tests/glass_scene.py --check ../artifacts/bevy-sponza/mask_ownership_analytic/seq_0000.png
 ```
+
+## Opaque interiors behind glass
+
+A ray-visible wall can be absent from the raster background when its material
+culls backfaces. Previously the compositor found that wall but returned the
+raster sky or more distant building. It now shades the actual opaque hit using
+the same bounded four-path estimator as primary foliage. The query stops before
+raster depth, so a visible opaque background still reuses its existing shading.
+Pixels without an intervening pane retain their raster ownership. Authored
+double-sided flags and normals are unchanged.
+
+The `--hidden-room` variant of `tests/glass_scene.py` encloses a room with a
+glass front and five outward-facing, single-sided walls. A green emissive back
+wall lies in front of a bright white emitter; a red emitter tests reflection.
+At normal incidence the expected radiance is [1/13, 6/13, 0]. Before the fix,
+the room measured [0.9969, 0.9221, 0.9218], revealing the white emitter through
+the wall. Afterward it measures [0.0778, 0.4637, 0.00002], maximum error 0.00218.
+
+Generate with `--generate <asset path> --hidden-room`, use the analytic camera
+and exposure below with `SCENE_SOLARI=1 SCENE_RR=0 NR_WARMUP=240`, then verify:
+
+```text
+python tests/glass_scene.py --hidden-room --check ../artifacts/bevy-sponza/glass_closed_room_fixed/seq_0000.png
+```
+
+Missing interior geometry cannot be reconstructed. A single-sided backface
+blocks transmission but retains its authored shading orientation. Hidden
+surfaces use bounded paths without temporal reservoirs; raster depth/motion
+and DLSS background guides remain unchanged, so moving glass can still ghost.
 
 ## Validation, 2026-09-06
 
