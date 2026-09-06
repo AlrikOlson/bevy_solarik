@@ -91,7 +91,7 @@ pub fn pathtracer(
     // Accumulation diagnostics: how often the history was dropped (a camera
     // that holds still should show 0; `SOLARIK_PATHTRACER_DEBUG_SAMPLE_COUNT`
     // in the environment at startup draws the per-pixel sample count instead
-    // of the image, white at 512).
+    // of the image as little-endian RGB bytes; disable postprocessing).
     reset_stats.0 += 1;
     reset_stats.1 += u32::from(pathtracer_settings.reset);
     if reset_stats.0.is_multiple_of(100) {

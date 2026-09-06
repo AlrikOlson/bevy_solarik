@@ -18,6 +18,8 @@ Native 4K captures from the September 6, 2026 development renderer, with DLSS
 Ray Reconstruction. These include colored glass shadows, GI transmission and
 analytic-light reflections; they show development code beyond the `v0.1.0` tag.
 Capture settings and source provenance are in [the capture record](docs/readme-captures.md).
+The night image retains shadow blotching and foliage softness after 2,048
+warm-up frames; see the [capture audit](docs/pathtracer-convergence.md).
 The camera exposure and lights use the scene preset; the rig's extra contrast
 and saturation boost is disabled. No DLSS 5 Neural Rendering is applied.
 

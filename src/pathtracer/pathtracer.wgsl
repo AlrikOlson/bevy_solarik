@@ -155,6 +155,17 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(accumulation_texture, global_id.xy, vec4(new_color, old_color.a + 1.0));
     textureStore(view_output, global_id.xy, vec4(new_color, 1.0));
 #ifdef PATHTRACER_DEBUG_SAMPLE_COUNT
-    textureStore(view_output, global_id.xy, vec4(vec3((old_color.a + 1.0) / 512.0) / view.exposure, 1.0));
+    textureStore(view_output, global_id.xy, vec4(encode_sample_count(old_color.a + 1.0), 1.0));
 #endif
+}
+
+// Diagnostic only: little-endian RGB bytes, decoded to linear for an sRGB
+// screenshot target. Disable tonemapping and all postprocessing when reading.
+// Independent of camera exposure; clamps at the largest 24-bit integer.
+fn encode_sample_count(samples: f32) -> vec3<f32> {
+    let count = u32(clamp(samples, 0.0, 16777215.0));
+    let srgb = vec3<f32>(f32(count & 255u), f32((count >> 8u) & 255u),
+        f32((count >> 16u) & 255u)) / 255.0;
+    return select(pow((srgb + 0.055) / 1.055, vec3(2.4)), srgb / 12.92,
+        srgb <= vec3(0.04045));
 }
