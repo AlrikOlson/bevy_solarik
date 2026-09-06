@@ -68,7 +68,7 @@ def generate(destination):
     destination.write_text(json.dumps(document), encoding="utf-8")
 
 
-def check(path):
+def check(path, raster_baseline=None):
     """Compare image patches to the emitter/Fresnel closed form at EV100=0."""
     import numpy as np
     from PIL import Image
@@ -76,6 +76,10 @@ def check(path):
     linear = np.where(srgb <= .04045, srgb / 12.92, ((srgb + .055) / 1.055) ** 2.4)
     # Bevy exposure is 2^-EV100 / 1.2.
     radiance = linear * 1.2
+    baseline = None
+    if raster_baseline:
+        baseline = np.asarray(Image.open(raster_baseline).convert("RGB"), dtype=np.float64) / 255
+        assert baseline.shape == srgb.shape, "baseline dimensions"
     height, width, _ = radiance.shape
     focal = height / (2 * math.tan(math.radians(60) / 2))
     rows = []
@@ -96,7 +100,14 @@ def check(path):
         error = float(np.max(np.abs(measured - expected)))
         rows.append({"pane": name, "measured": measured.tolist(), "expected": expected.tolist(),
                      "max_error": error})
-        assert error < .04, rows[-1]
+        if name == "mask solid" and baseline is not None:
+            # Realtime's opaque control is already saturated without compositing.
+            # Require exact preservation, not a claim of correct photometry.
+            region = (slice(height // 2 - 8, height // 2 + 8), slice(px - 8, px + 8))
+            assert np.array_equal(srgb[region], baseline[region]), "opaque control changed"
+            rows[-1]["validation"] = "unchanged from raster baseline; photometry unresolved"
+        else:
+            assert error < .04, rows[-1]
     print(json.dumps(rows, indent=2))
 
 
@@ -105,8 +116,9 @@ if __name__ == "__main__":
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--generate", type=Path)
     action.add_argument("--check", type=Path)
+    parser.add_argument("--raster-baseline", type=Path, help="For realtime primary glass: verify opaque control is unchanged from a raster-pane baseline")
     args = parser.parse_args()
     if args.generate:
         generate(args.generate)
     else:
-        check(args.check)
+        check(args.check, args.raster_baseline)

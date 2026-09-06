@@ -7,7 +7,7 @@ use bevy_app::{App, Plugin};
 use bevy_asset::embedded_asset;
 use bevy_camera::Hdr;
 use bevy_core_pipeline::{
-    core_3d::main_opaque_pass_3d,
+    core_3d::{main_opaque_pass_3d, main_transparent_pass_3d},
     prepass::{
         DeferredPrepass, DeferredPrepassDoubleBuffer, DepthPrepass, DepthPrepassDoubleBuffer,
         MotionVectorPrepass,
@@ -22,7 +22,10 @@ use bevy_render::{
 };
 use bevy_shader::load_shader_library;
 use extract::extract_solari_lighting;
-use node::{init_solari_lighting_pipelines, solarik_lighting};
+use node::{
+    PrimaryGlassViews, init_solari_lighting_pipelines, prepare_primary_glass,
+    restore_primary_glass, solarik_lighting,
+};
 use prepare::prepare_solari_lighting_resources;
 use tracing::warn;
 
@@ -41,6 +44,7 @@ impl Plugin for SolarikLightingPlugin {
         embedded_asset!(app, "restir_gi.wgsl");
         load_shader_library!(app, "sky_sampling.wgsl");
         load_shader_library!(app, "specular_gi.wgsl");
+        embedded_asset!(app, "primary_glass.wgsl");
         load_shader_library!(app, "world_cache_query.wgsl");
         embedded_asset!(app, "world_cache_compact.wgsl");
         embedded_asset!(app, "world_cache_update.wgsl");
@@ -64,6 +68,19 @@ impl Plugin for SolarikLightingPlugin {
         }
 
         render_app
+            .init_resource::<PrimaryGlassViews>()
+            .add_systems(
+                Render,
+                restore_primary_glass
+                    .after(RenderSystems::PrepareViews)
+                    .before(RenderSystems::Queue),
+            )
+            .add_systems(
+                Render,
+                prepare_primary_glass
+                    .after(RenderSystems::PrepareResources)
+                    .before(RenderSystems::PrepareResourcesBatchPhases),
+            )
             .add_systems(RenderStartup, init_solari_lighting_pipelines)
             .add_systems(ExtractSchedule, extract_solari_lighting)
             .add_systems(
@@ -72,8 +89,12 @@ impl Plugin for SolarikLightingPlugin {
             )
             .add_systems(
                 Core3d,
-                solarik_lighting
-                    .before(main_opaque_pass_3d)
+                (
+                    solarik_lighting::<false>.before(main_opaque_pass_3d),
+                    solarik_lighting::<true>
+                        .after(main_opaque_pass_3d)
+                        .before(main_transparent_pass_3d),
+                )
                     .in_set(Core3dSystems::MainPass),
             );
     }

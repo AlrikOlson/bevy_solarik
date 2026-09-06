@@ -3,8 +3,8 @@
 The unreleased pathtracer treats `AlphaMode::Blend` surfaces as smooth thin panes.
 Camera and subsequent BSDF rays can reflect from the pane or transmit through
 its base-color tint. Realtime Solarik also resolves panes inside glossy reflection
-paths. Camera-visible panes are still drawn with the raster forward pass. Realtime primary-glass compositing and
-DLSS guide ownership are separate work.
+paths. Camera-visible panes now use a primary compositor after opaque and sky
+rendering, before the remaining raster transparency.
 
 ## Model and implementation
 
@@ -65,6 +65,43 @@ it does not test actual acceleration structures, texture alpha, or convergence.
 
 ```text
 cargo test --test glossy_glass -- --ignored --nocapture
+```
+
+## Primary camera panes
+
+The camera pass splits reflection and transmission deterministically using the
+same thin-pane energy weights as the stochastic sampler. It walks up to 32 panes
+front to back, traces each reflected direction with the existing glossy path,
+and applies the accumulated transmission to the already shaded opaque/sky pixel.
+An exact 32-pane chain may reach its background; a 33rd pane truncates remaining
+energy. Near-plane ray construction works for perspective and orthographic views.
+
+Only blended instances actually bound in the current TLAS lose their raster
+draws, and only when the pipelines and view resources are ready. The phase uses
+main-world entity IDs (its render entity may be a placeholder), so suppression
+resolves that identity explicitly. Items are removed before batching and restored
+before the next visibility/material queue update, preserving reload fallback and
+other cameras. Alpha testing disabled keeps the raster path.
+
+Depth and ordinary motion remain the opaque background. Pane pixels restore
+background albedo, normal/roughness and specular motion after glossy PSR, keeping
+all guides on the same deterministic surface. This is a conservative ownership
+policy, not an exact reconstruction model for two independently moving layers.
+
+The ignored `primary_glass_gpu` test executes the production compositor against
+synthetic scene I/O: 11 cases cover tint, clear/zero-alpha panes, opaque occlusion,
+two panes, black transmission, perfect reflection, emission and both sides of
+the 32-pane limit. The existing thin-glass and glossy GPU regressions also pass.
+
+A complete 640x320 realtime capture at the analytic camera, RR off, matches the
+tinted/clear/hole radiance oracle within 0.0031. The original integration failed
+with black panes because raster draws still covered the traced result. The
+opaque masked green control is saturated even with this compositor disabled;
+it matches the baseline byte for byte, but its photometry is unresolved and is
+tracked separately. The pathtracer check remains unchanged by default:
+
+```text
+python tests/glass_scene.py --check ../artifacts/bevy-sponza/primary_glass_analytic/seq_0000.png --raster-baseline ../artifacts/bevy-sponza/primary_glass_raster_baseline/seq_0000.png
 ```
 
 ## Validation, 2026-09-06
@@ -145,8 +182,15 @@ ray-query shader with DLSS RR enabled: 1280x720, 128 warmup frames, grade-only,
 `SCENE_SOLARI=1 SCENE_PATHTRACE=0 SCENE_RR=1`. Images and logs are in the
 local organizer's `artifacts/bevy-sponza/glossy_glass_140` and
 `glossy_glass_400`. Both captures were inspected and have no shader errors.
-They validate integration, not glass photometry or temporal convergence;
-camera-visible panes still need the primary compositor.
+They validate the earlier secondary-path integration, not glass photometry or
+temporal convergence.
+
+Primary-compositor Bistro captures at frames 140 and 400 use the same fixed
+poses, 1280x720, 128 warmup frames and RR. Images and logs are in
+`primary_glass_140` and `primary_glass_400`. They were compared visually with
+`glass_fixed_140` and `glass_fixed_400`: windows, lamps and the Vespa render,
+but the noisy reference and differing resolution do not establish convergence
+or numerical equality. The analytic fixture is the quantitative glass evidence.
 
 ## Limits
 
@@ -162,7 +206,7 @@ camera-visible panes still need the primary compositor.
 - Roughness and metallic controls do not change this smooth dielectric model.
   A mesh with two modeled pane faces is treated as two thin panes.
 - `SolarikAlphaTesting(false)` retains the existing opaque-geometry fallback.
-- Realtime camera-visible panes need a new primary-glass path: its current
-  specular pass begins at the opaque G-buffer, so changing secondary rays alone
-  cannot produce that result. Raster reflection suppression must ship with that
-  compositor to avoid double reflections.
+- Primary transmission reuses opaque/sky shading. Non-raytraced transparent
+  objects are still drawn later and cannot interleave correctly with traced panes.
+- A single background DLSS guide cannot describe both reflection and transmission;
+  moving reflections may ghost. Layer-aware reconstruction remains future work.

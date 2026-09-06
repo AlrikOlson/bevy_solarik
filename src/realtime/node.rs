@@ -6,11 +6,13 @@ use crate::scene::RaytracingSceneBindings;
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 use bevy_anti_alias::dlss::ViewDlssRayReconstructionTextures;
 use bevy_asset::{AssetServer, Handle, load_embedded_asset};
+use bevy_core_pipeline::core_3d::Transparent3d;
 use bevy_core_pipeline::prepass::{
     PreviousViewData, PreviousViewUniformOffset, PreviousViewUniforms, ViewPrepassTextures,
 };
 use bevy_diagnostic::FrameCount;
 use bevy_ecs::{prelude::*, resource::Resource, system::Commands};
+use bevy_platform::collections::HashSet;
 use bevy_render::{
     diagnostic::RecordDiagnostics as _,
     render_resource::{
@@ -24,6 +26,10 @@ use bevy_render::{
     },
     renderer::{RenderContext, RenderDevice, ViewQuery},
     view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
+};
+use bevy_render::{
+    render_phase::ViewSortedRenderPhases,
+    view::{ExtractedView, RetainedViewEntity},
 };
 use bevy_shader::{Shader, ShaderDefVal};
 use bevy_utils::default;
@@ -50,6 +56,9 @@ pub struct SolarikLightingPipelines {
     gi_initial_and_temporal_pipeline: CachedComputePipelineId,
     gi_spatial_and_shade_pipeline: CachedComputePipelineId,
     specular_gi_pipeline: CachedComputePipelineId,
+    primary_glass_pipeline: CachedComputePipelineId,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    primary_glass_rr_pipeline: CachedComputePipelineId,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     specular_gi_with_psr_pipeline: CachedComputePipelineId,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -59,6 +68,7 @@ pub struct SolarikLightingPipelines {
 #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
 type SolarikLightingViewQuery = (
     &'static SolarikLighting,
+    &'static ExtractedView,
     &'static SolarikLightingResources,
     &'static ViewTarget,
     &'static ViewPrepassTextures,
@@ -69,6 +79,7 @@ type SolarikLightingViewQuery = (
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 type SolarikLightingViewQuery = (
     &'static SolarikLighting,
+    &'static ExtractedView,
     &'static SolarikLightingResources,
     &'static ViewTarget,
     &'static ViewPrepassTextures,
@@ -77,9 +88,124 @@ type SolarikLightingViewQuery = (
     Option<&'static ViewDlssRayReconstructionTextures>,
 );
 
-pub fn solarik_lighting(
+/// Views whose raster panes are owned by the primary compositor this frame.
+#[derive(Resource, Default)]
+pub struct PrimaryGlassViews(
+    HashSet<RetainedViewEntity>,
+    Vec<(RetainedViewEntity, Transparent3d)>,
+);
+
+/// Restore retained entries before Bevy updates visibility and materials.
+/// Pipeline reloads and disabled cameras must regain their raster fallback.
+pub fn restore_primary_glass(
+    mut state: ResMut<PrimaryGlassViews>,
+    mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
+) {
+    for (view, item) in state.1.drain(..) {
+        if let Some(phase) = phases.get_mut(&view) {
+            phase.add_retained(item);
+        }
+    }
+}
+
+/// Runs after resource preparation and before phase batching, so a glass item
+/// cannot share a raster batch with an instance that remains raster-owned.
+pub fn prepare_primary_glass(
+    views: Query<SolarikLightingViewQuery>,
+    main_entities: Query<&bevy_render::sync_world::MainEntity>,
+    pipelines: Option<Res<SolarikLightingPipelines>>,
+    cache: Res<PipelineCache>,
+    scene: Res<RaytracingSceneBindings>,
+    view_uniforms: Res<ViewUniforms>,
+    previous_uniforms: Res<PreviousViewUniforms>,
+    mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
+    mut ready_views: ResMut<PrimaryGlassViews>,
+) {
+    ready_views.0.clear();
+    let Some(p) = pipelines else {
+        return;
+    };
+    if scene.bind_group.is_none()
+        || scene.glass_entities.is_empty()
+        || view_uniforms.uniforms.binding().is_none()
+        || previous_uniforms.uniforms.binding().is_none()
+    {
+        return;
+    }
+    let ids = [
+        p.build_sky_rows_pipeline,
+        p.build_sky_marginal_pipeline,
+        p.decay_world_cache_pipeline,
+        p.compact_world_cache_single_block_pipeline,
+        p.compact_world_cache_blocks_pipeline,
+        p.compact_world_cache_write_active_cells_pipeline,
+        p.sample_di_for_world_cache_pipeline,
+        p.sample_gi_for_world_cache_pipeline,
+        p.blend_new_world_cache_samples_pipeline,
+        p.presample_light_tiles_pipeline,
+        p.di_initial_and_temporal_pipeline,
+        p.di_spatial_and_shade_pipeline,
+        p.gi_initial_and_temporal_pipeline,
+        p.gi_spatial_and_shade_pipeline,
+        p.specular_gi_pipeline,
+        p.primary_glass_pipeline,
+    ];
+    if ids
+        .into_iter()
+        .any(|id| cache.get_compute_pipeline(id).is_none())
+    {
+        return;
+    }
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    if [
+        p.primary_glass_rr_pipeline,
+        p.specular_gi_with_psr_pipeline,
+        p.resolve_dlss_rr_textures_pipeline,
+    ]
+    .into_iter()
+    .any(|id| cache.get_compute_pipeline(id).is_none())
+    {
+        return;
+    }
+    let glass_main_entities: HashSet<_> = scene
+        .glass_entities
+        .iter()
+        .filter_map(|entity| main_entities.get(*entity).ok().copied())
+        .collect();
+    for view in &views {
+        #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
+        let (_, extracted, _, _, textures, _, _) = view;
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        let (_, extracted, _, _, textures, _, _, _) = view;
+        if textures.deferred_view().is_none()
+            || textures.depth_view().is_none()
+            || textures.motion_vectors_view().is_none()
+            || textures.previous_deferred_view().is_none()
+            || textures.previous_depth_view().is_none()
+        {
+            continue;
+        }
+        let Some(phase) = phases.get_mut(&extracted.retained_view_entity) else {
+            continue;
+        };
+        let keys: Vec<_> = phase
+            .items
+            .keys()
+            .filter(|(_, main_entity)| glass_main_entities.contains(main_entity))
+            .copied()
+            .collect();
+        for key in keys {
+            if let Some(item) = phase.items.shift_remove(&key) {
+                ready_views.1.push((extracted.retained_view_entity, item));
+            }
+        }
+        ready_views.0.insert(extracted.retained_view_entity);
+    }
+}
+pub fn solarik_lighting<const PRIMARY: bool>(
     view: ViewQuery<SolarikLightingViewQuery>,
     solarik_pipelines: Option<Res<SolarikLightingPipelines>>,
+    primary_views: Res<PrimaryGlassViews>,
     pipeline_cache: Res<PipelineCache>,
     scene_bindings: Res<RaytracingSceneBindings>,
     view_uniforms: Res<ViewUniforms>,
@@ -91,6 +217,7 @@ pub fn solarik_lighting(
     #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
     let (
         solarik_lighting,
+        extracted_view,
         solarik_lighting_resources,
         view_target,
         view_prepass_textures,
@@ -101,6 +228,7 @@ pub fn solarik_lighting(
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     let (
         solarik_lighting,
+        extracted_view,
         solarik_lighting_resources,
         view_target,
         view_prepass_textures,
@@ -108,6 +236,14 @@ pub fn solarik_lighting(
         previous_view_uniform_offset,
         view_dlss_rr_textures,
     ) = view.into_inner();
+
+    if PRIMARY
+        && !primary_views
+            .0
+            .contains(&extracted_view.retained_view_entity)
+    {
+        return;
+    }
 
     let Some(pipelines) = solarik_pipelines else {
         return;
@@ -183,6 +319,18 @@ pub fn solarik_lighting(
         return;
     };
 
+    let primary_pipeline = pipelines.primary_glass_pipeline;
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    let primary_pipeline = if view_dlss_rr_textures.is_some() {
+        pipelines.primary_glass_rr_pipeline
+    } else {
+        primary_pipeline
+    };
+    let primary_pipeline = pipeline_cache.get_compute_pipeline(primary_pipeline);
+    if PRIMARY && primary_pipeline.is_none() {
+        return;
+    }
+
     let view_target_attachment = view_target.get_unsampled_color_attachment();
 
     let s = solarik_lighting_resources;
@@ -248,7 +396,7 @@ pub fn solarik_lighting(
     let command_encoder = ctx.command_encoder();
 
     // Clear the view target if we're the first node to write to it
-    if matches!(view_target_attachment.ops.load, LoadOp::Clear(_)) {
+    if !PRIMARY && matches!(view_target_attachment.ops.load, LoadOp::Clear(_)) {
         command_encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("solarik_lighting_clear"),
             color_attachments: &[Some(view_target_attachment)],
@@ -276,6 +424,19 @@ pub fn solarik_lighting(
             previous_view_uniform_offset.offset,
         ],
     );
+
+    if PRIMARY {
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        if let Some(group) = &bind_group_resolve_dlss_rr_textures {
+            pass.set_bind_group(2, group, &[]);
+        }
+        if let Some(pipeline) = primary_pipeline {
+            pass.set_pipeline(pipeline);
+            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32]));
+            pass.dispatch_workgroups(dx, dy, 1);
+        }
+        return;
+    }
 
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     if let Some(bind_group_resolve_dlss_rr_textures) = &bind_group_resolve_dlss_rr_textures {
@@ -598,6 +759,21 @@ pub fn init_solari_lighting_pipelines(
             load_embedded_asset!(asset_server.as_ref(), "restir_gi.wgsl"),
             None,
             vec![],
+        ),
+        primary_glass_pipeline: create_pipeline(
+            "solarik_primary_glass",
+            "primary_glass",
+            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wgsl"),
+            None,
+            vec![],
+        ),
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        primary_glass_rr_pipeline: create_pipeline(
+            "solarik_primary_glass_rr",
+            "primary_glass",
+            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wgsl"),
+            Some(&bind_group_layout_resolve_dlss_rr_textures),
+            vec!["DLSS_RR_GUIDE_BUFFERS".into()],
         ),
         specular_gi_pipeline: create_pipeline(
             "solarik_lighting_specular_gi_pipeline",

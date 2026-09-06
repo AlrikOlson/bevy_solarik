@@ -11,9 +11,14 @@ fn resolve_dlss_rr_textures(@builtin(global_invocation_id) global_id: vec3<u32>)
     let pixel_id = global_id.xy;
     if any(pixel_id >= vec2u(view.main_pass_viewport.zw)) { return; }
 
+    resolve_background_guides(pixel_id);
+}
+
+// Primary panes retain the same opaque-background surface as depth and motion.
+fn resolve_background_guides(pixel_id: vec2u) {
     textureStore(specular_motion_vectors, pixel_id, textureLoad(motion_vectors, pixel_id, 0));
 
-    let depth = textureLoad(depth_buffer, global_id.xy, 0);
+    let depth = textureLoad(depth_buffer, pixel_id, 0);
     if depth == 0.0 {
         textureStore(diffuse_albedo, pixel_id, vec4(0.0));
         textureStore(specular_albedo, pixel_id, vec4(0.5));

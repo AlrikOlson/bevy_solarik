@@ -92,6 +92,8 @@ fn sky_shader_intensity(intensity: f32, image_bound: bool) -> f32 {
 pub struct RaytracingSceneBindings {
     pub bind_group: Option<BindGroup>,
     pub bind_group_layout: BindGroupLayoutDescriptor,
+    /// Render entities whose blended material and geometry are in this frame's TLAS.
+    pub(crate) glass_entities: HashSet<Entity>,
     previous_frame_light_entities: Vec<Entity>,
 }
 
@@ -121,6 +123,7 @@ pub fn prepare_raytracing_scene_bindings(
     mut raytracing_scene_bindings: ResMut<RaytracingSceneBindings>,
 ) {
     raytracing_scene_bindings.bind_group = None;
+    raytracing_scene_bindings.glass_entities.clear();
 
     let mut this_frame_entity_to_light_id = EntityHashMap::<u32>::default();
     let previous_frame_light_entities: Vec<_> = raytracing_scene_bindings
@@ -253,6 +256,9 @@ pub fn prepare_raytracing_scene_bindings(
             continue;
         };
 
+        if alpha_testing.0 && material.flags & MATERIAL_FLAG_ALPHA_BLEND != 0 {
+            raytracing_scene_bindings.glass_entities.insert(entity);
+        }
         let transform = transform.to_matrix();
         *tlas.get_mut_single(instance_id).unwrap() = Some(TlasInstance::new(
             blas,
@@ -498,6 +504,7 @@ impl RaytracingSceneBindings {
                 ),
             ),
             previous_frame_light_entities: Vec::new(),
+            glass_entities: HashSet::default(),
         }
     }
 }

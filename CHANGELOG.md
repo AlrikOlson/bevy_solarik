@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-- Realtime glossy reflections now resolve thin glass with tinted transmission, bounded pane chains and emission weighting. Glass stops DLSS primary-surface replacement; camera-visible glass compositing remains separate. The production transport GPU test covers both DLSS guide variants.
+- Primary realtime glass now composites tinted transmission and ray-traced reflections after opaque rendering. Ready views suppress only TLAS-present pane draws, retaining raster fallback and deterministic background DLSS guides. Eleven production WGSL cases and an analytic scene validate transport.
 
-- Reference-pathtracer thin glass: Fresnel reflection, tinted straight-through transmission, texture-alpha coverage and two-sided outgoing offsets. [GPU and integrated scene validation, reproduction and limits](docs/glass.md). Realtime glass compositing remains separate.
+- Realtime glossy reflections now resolve thin glass with tinted transmission, bounded pane chains and emission weighting. Glass stops DLSS primary-surface replacement; primary camera glass is handled by the compositor. The production transport GPU test covers both DLSS guide variants.
+
+- Reference-pathtracer thin glass: Fresnel reflection, tinted straight-through transmission, texture-alpha coverage and two-sided outgoing offsets. [GPU and integrated scene validation, reproduction and limits](docs/glass.md).
 
 - Sky cubemap importance sampling with cosine-hemisphere MIS for the first realtime GI bounce; black-sky fallback and counted zero samples.
 - GPU sampling validation and [Bistro brightness and cost measurements](docs/sky-sampling.md). The measured baseline already meets the brightness target; faster convergence is not established.

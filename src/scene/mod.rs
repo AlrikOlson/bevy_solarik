@@ -85,7 +85,7 @@ impl Plugin for RaytracingScenePlugin {
                     compact_raytracing_blas
                         .in_set(RenderSystems::PrepareAssets)
                         .after(prepare_raytracing_blas),
-                    prepare_raytracing_scene_bindings.in_set(RenderSystems::PrepareBindGroups),
+                    prepare_raytracing_scene_bindings.in_set(RenderSystems::PrepareResources),
                 ),
             );
     }
