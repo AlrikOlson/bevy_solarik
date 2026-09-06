@@ -20,12 +20,20 @@ foliage is shaded. It traces four independent paths with at most four scattering
 events each, using two-sided NEE and solid-angle MIS for emissive meshes.
 DLSS receives the original primary leaf depth, normal, albedo and motion.
 
-Existing ReSTIR receivers and world caches remain one-sided. Foliage paths
-bypass those caches; other pixels retain their old lighting. Secondary foliage
-seen exclusively through those old caches/glossy paths still lacks transmission.
-Paths in the new pass skip blended glass as the old diffuse GI does; primary
-glass can still composite over the finished foliage. Bounce truncation can lose
-indirect light, raw output is noisy, and the pass adds GPU cost. Coplanar,
+Glossy rays, including reflections launched by primary glass, hand authored
+transmissive leaf hits to the same two-sided surface estimator. The incoming
+path retains its emissive MIS weight and mirror surface replacement before
+the handoff. Four scattering vertices follow the leaf hit, with at most 32
+thin-pane events between vertices. Primary glass also uses this estimator for
+foliage hidden behind an opaque raster-depth boundary. Thin glass and diffuse
+coverage keep their existing transport within these surface paths.
+
+Existing ReSTIR receivers and world caches remain one-sided. Leaf handoffs
+bypass those caches; zero-transmission materials keep the existing glossy
+estimator. Foliage seen exclusively through reused reservoirs or cache radiance
+still lacks transmission. This change does not reduce primary-foliage query
+cost. Bounce truncation can lose indirect light, raw output is noisy, and
+reflections add GPU work. Coplanar,
 unregistered raster-only surfaces can remain ambiguous without material IDs.
 
 Explicitly select `OpaqueRendererMethod::Deferred` when authoring foliage for
@@ -65,6 +73,65 @@ transmission (0.0799,0.1993,0.3188), full (0.1758,0.4391,0.7021);
 maximum absolute error is 0.0323 with only four samples per pixel.
 The zero card remains exactly black on the unchanged realtime opaque path.
 
+
+## Reflected foliage validation
+
+The glossy handoff runs one bounded surface path per leaf hit. It keeps the
+incoming path's emission MIS and RR surface replacement, and never writes
+two-sided leaf radiance into the one-sided world cache. The existing
+`shade_surface_path` wrapper still includes initial emission for primary callers.
+
+`cargo test --test glossy_foliage -- --ignored` executes the production glossy
+path, surface path, diffuse BSDF and PDF with synthetic scene I/O. Eight cases
+run with RR guides disabled and enabled, using 32,768 samples each: opaque,
+half/full transmission, backlit NEE, initial emission owned by the path or DI,
+rough-path cache bypass, and a tinted pane before foliage. They check energy,
+outgoing offsets, finite values, traversal bounds and guide ownership.
+The pre-change shader fails the half-transmission test with zero energy.
+Existing foliage, glossy-glass, primary-glass and surface-shadow GPU suites pass.
+
+Generate the reflected fixture with `foliage_scene.py --generate <path> --reflected`.
+For motion, copy `tests/foliage_reflection_scene.toml` to the separate rig's
+`assets/scenes/foliage-reflection/scene.toml` and generate its `scene.gltf` beside it.
+After a release build, use these Git Bash settings in the rig:
+
+```bash
+SCENE=foliage-reflection SCENE_LINEAR=1 SCENE_RR=1 \
+SCENE_SUN_SCALE=0 SCENE_MOON_SCALE=0 NR_RES=640x320 \
+NR_START=0 NR_TIMELINE=60 NR_CAPTURE=60 NR_WARMUP=128 \
+NR_OUT=../artifacts/bevy-sponza/fg-motion ./capture.sh off
+python ../bevy_solarik/tests/foliage_scene.py \
+  --check ../artifacts/bevy-sponza/fg-motion --motion
+```
+
+A fixed view adds `SCENE_CAM_FROM=0,0,3 SCENE_LOOK_FROM=0,0,0 SCENE_FOV=60`
+and uses `NR_CAPTURE=1`. Capture raw realtime with `SCENE_RR=0`, and the reference
+with `SCENE_PATHTRACE=1 SCENE_RR=0 NR_WARMUP=2048`. Check raw/RR against the
+reference with `--check <PNG> --reflected --reference <reference PNG>`.
+The large mirror illuminates both hemispheres, so this image comparison uses
+the pathtracer; the GPU probe separately supplies the one-hemisphere analytic test.
+
+September 6, 2026, RTX 4090/Vulkan, 640×320, EV100 0, no post effects or Neural
+Rendering: the original glossy path renders all three reflected cards black.
+The new t=0.5 card measures RGB (0.18349, 0.44179, 0.69914) raw versus
+(0.18336, 0.44076, 0.69894) in the 2,048-sample reference. The t=1 card measures
+(0.18391, 0.44309, 0.70035) versus (0.18677, 0.44862, 0.71045).
+Maximum channel error across both leaf patches is 0.01010 raw and 0.00512 with RR.
+This is a small scene comparison, not a general convergence claim.
+
+All 60 RR motion frames retain lit leaf patches. Their largest adjacent-frame
+patch-channel change is 0.00523, while the opaque control remains below 0.00016.
+The glossy-pass GPU median before screenshot readback rises from 0.054 ms
+(range 0.044–0.065, 23 samples) to 0.077 ms (0.067–0.104, 16 samples), excluding
+the first three diagnostic measurements. This tiny fixture does not predict
+Bistro cost; the primary-foliage pass is unchanged.
+
+The t=0 control deliberately retains its old black realtime result even though
+the reference lights it. Opaque secondary diffuse transport is separate backlog.
+RR also shows broad arcs in this fixture's flat mirror background, including
+an all-zero-transmission control. The patch metrics do not establish whole-image
+quality or freedom from temporal artifacts.
+
 ## Bistro frame 0
 
 The rig preset authors t=0.5 only on
@@ -89,8 +156,9 @@ python ../bevy_solarik/tests/foliage_scene.py --check ../artifacts/bevy-sponza/f
 
 The dedicated pass costs 2.40–2.65 ms on RTX4090/Vulkan at this pose/resolution
 (before capture readback); it is skipped when the TLAS has no authored foliage.
-This is a correctness-first fallback. Reservoir integration, reflected-leaf
-transport, denoising and performance improvements remain follow-up work.
+Reservoir integration, denoising and primary-pass performance improvements
+remain follow-up work. Reflected-leaf transport now uses the bounded handoff
+described above.
 
 PDF conversion follows [PBRT light sampling](https://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Sampling_Light_Sources):
 area density becomes solid-angle density through distance squared divided by

@@ -46,10 +46,12 @@ fn surface_shadow_gpu() {
             .collect::<Vec<_>>()
             .join("\n");
         let mut source = format!("{glass}\n{}", include_str!("surface_shadow_fixture.wgsl"));
-        source.push_str(
-            &function(surface, "shade_surface_path")
-                .replace("arrayLength(&light_sources)", "arrayLength(&config)"),
-        );
+        for name in ["shade_surface_path", "shade_surface_scattering"] {
+            source.push_str(
+                &function(surface, name)
+                    .replace("arrayLength(&light_sources)", "arrayLength(&config)"),
+            );
+        }
         for name in ["power_heuristic", "balance_heuristic"] {
             source.push_str(&function(sampling, name));
         }

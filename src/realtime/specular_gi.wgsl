@@ -8,6 +8,7 @@ enable wgpu_ray_query;
 #import bevy_render::maths::{orthonormalize, PI}
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_specular_brdf}
+#import bevy_solarik::surface_path::shade_surface_scattering
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
 #import bevy_solarik::sampling::{analytic_light_radiance, shade_gi_connection, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
@@ -187,6 +188,14 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             }
         }
 #endif
+
+        // Two-sided leaf radiance cannot terminate in the one-sided cache.
+        // The incoming emission/MIS and PSR above remain owned by this path;
+        // continue scattering with the bounded two-sided surface estimator.
+        if ray_hit.material.diffuse_transmission > 0.0 {
+            radiance += throughput * shade_surface_scattering(ray_hit, wo, rng);
+            break;
+        }
 
         // Terminate path in the world cache if the ray is long enough and the path spread is large enough
         var rng_copy = *rng;

@@ -11,10 +11,16 @@ enable wgpu_ray_query;
 // Four ordinary scattering events; final vertex uses NEE alone. Thin panes
 // have a separate 32-event budget between ordinary vertices.
 fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: ptr<function, u32>) -> vec3<f32> {
+    return initial.material.emissive + shade_surface_scattering(initial, initial_wo, rng);
+}
+
+// The incoming path owns initial emission and its MIS weight. This entry
+// point adds only scattering, so a secondary handoff cannot count it twice.
+fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: ptr<function, u32>) -> vec3<f32> {
     var hit = initial;
     var wo = initial_wo;
     var throughput = vec3(1.0);
-    var radiance = hit.material.emissive;
+    var radiance = vec3(0.0);
     for (var bounce = 0u; bounce < 4u; bounce += 1u) {
         let last = bounce == 3u;
         let mirror = hit.material.roughness <= MIRROR_ROUGHNESS_THRESHOLD && hit.material.metallic > 0.9999;

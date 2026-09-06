@@ -1,0 +1,43 @@
+# Copy beside the generated scene.gltf in the capture rig's assets/scenes/foliage-reflection/.
+name = "Reflected foliage probe"
+model = "scenes/foliage-reflection/scene.gltf"
+
+[render]
+solari = true
+
+[[render.foliage]]
+material = "leaf zero"
+transmission = 0.0
+[[render.foliage]]
+material = "leaf half"
+transmission = 0.5
+[[render.foliage]]
+material = "leaf full"
+transmission = 1.0
+
+[sun]
+elevation = [-30.0, -30.0]
+azimuth = [0.0, 0.0]
+
+[exposure]
+day_ev = 0.0
+night_ev = 0.0
+
+[sky]
+ibl_scale = 0.0
+
+[camera]
+f_stops = 64.0
+
+[fog]
+density = 0.0
+
+[[shot]]
+frames = 60
+from = [-0.5, 0.0, 3.0]
+to = [0.5, 0.0, 3.0]
+look_from = [-0.5, 0.0, 0.0]
+look_to = [0.5, 0.0, 0.0]
+fov = [60.0, 60.0]
+focus = [9.0, 9.0]
+

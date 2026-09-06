@@ -806,7 +806,7 @@ pub fn init_solari_lighting_pipelines(
             "primary_glass",
             load_embedded_asset!(asset_server.as_ref(), "primary_glass.wgsl"),
             None,
-            vec![],
+            vec!["FOLIAGE_TRANSMISSION".into()],
         ),
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         primary_glass_rr_pipeline: create_pipeline(
@@ -814,14 +814,17 @@ pub fn init_solari_lighting_pipelines(
             "primary_glass",
             load_embedded_asset!(asset_server.as_ref(), "primary_glass.wgsl"),
             Some(&bind_group_layout_resolve_dlss_rr_textures),
-            vec!["DLSS_RR_GUIDE_BUFFERS".into()],
+            vec![
+                "FOLIAGE_TRANSMISSION".into(),
+                "DLSS_RR_GUIDE_BUFFERS".into(),
+            ],
         ),
         specular_gi_pipeline: create_pipeline(
             "solarik_lighting_specular_gi_pipeline",
             "specular_gi",
             load_embedded_asset!(asset_server.as_ref(), "specular_gi.wgsl"),
             None,
-            vec![],
+            vec!["FOLIAGE_TRANSMISSION".into()],
         ),
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         specular_gi_with_psr_pipeline: create_pipeline(
@@ -829,7 +832,10 @@ pub fn init_solari_lighting_pipelines(
             "specular_gi",
             load_embedded_asset!(asset_server.as_ref(), "specular_gi.wgsl"),
             Some(&bind_group_layout_resolve_dlss_rr_textures),
-            vec!["DLSS_RR_GUIDE_BUFFERS".into()],
+            vec![
+                "FOLIAGE_TRANSMISSION".into(),
+                "DLSS_RR_GUIDE_BUFFERS".into(),
+            ],
         ),
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         resolve_dlss_rr_textures_pipeline: create_pipeline(

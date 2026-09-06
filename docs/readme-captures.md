@@ -1,6 +1,34 @@
 # README capture record
 
-## Renderer visibility fix — current images
+## Reflected foliage — current images
+
+September 6, 2026: both 4K images are refreshed with the reflected-foliage
+handoff built on Solarik `fbcabb3` and playground `90f532a`. The same
+frame 750 cafe and frame 1520 dusk poses, 1800-frame timeline, scene exposure,
+lights and fog/blur settings are retained. RR is on at native resolution;
+Neural Rendering and additional grading are off. Both published images use
+512 warmup frames. Reproduce the earlier commands below with output directories
+`fg-readme-day-512` and `fg-readme-dusk-512`.
+
+Each scene was captured after independent 128/512-frame warmups at fixed
+camera and lighting. Display-linear luminance changes (512 relative to 128):
+
+| View / region | Rectangle x, y, width, height | Change |
+| --- | --- | --- |
+| Cafe pavement | 430, 1930, 550, 190 | +1.25% |
+| Cafe upper facade | 2250, 100, 900, 450 | +2.21% |
+| Cafe wall | 1110, 1180, 500, 330 | +1.89% |
+| Dusk pavement | 100, 1720, 760, 250 | +3.98% |
+| Dusk facade | 130, 150, 670, 450 | -0.20% |
+| Dusk cafe wall | 2150, 1660, 510, 280 | -0.41% |
+
+Images were inspected at full resolution: the Vespa, shrubs, cafe geometry
+and broad lighting remain present. Residual softness and settling remain;
+the dusk pavement comparison does not establish a noise-free plateau.
+See [foliage validation](foliage.md#reflected-foliage-validation) for the
+separate analytic, reference and moving-camera evidence.
+
+## Earlier renderer visibility fix
 
 September 6, 2026: the README now shows the cafe at timeline frame 750 and
 the terrace at dusk at frame 1520, both on the 1800-frame Bistro timeline.

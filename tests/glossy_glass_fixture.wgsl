@@ -1,5 +1,5 @@
 
-struct Material { base_color: vec3f, emissive: vec3f, roughness: f32, metallic: f32, reflectance: f32 }
+struct Material { base_color: vec3f, emissive: vec3f, roughness: f32, metallic: f32, reflectance: f32, diffuse_transmission: f32 }
 struct ResolvedGPixel { world_position: vec3f, world_normal: vec3f, material: Material }
 struct ResolvedRayHitFull { world_position: vec3f, world_normal: vec3f, geometric_world_normal: vec3f, material: Material, uv: vec2f }
 struct Ray { kind: u32, instance_index: u32, t: f32 }
@@ -45,9 +45,9 @@ fn trace_glass_ray(origin: vec3f, wi: vec3f, lo: f32, hi: f32) -> Ray {
     return Ray(1u, 0u, 1.0);
 }
 fn resolve_ray_hit_full(ray: Ray) -> ResolvedRayHitFull {
-    var m = Material(vec3(0.0), select(vec3(1.0), vec3(1.0, 0.0, 0.0), direction.z > 0.0), 1.0, 0.0, 0.5);
+    var m = Material(vec3(0.0), select(vec3(1.0), vec3(1.0, 0.0, 0.0), direction.z > 0.0), 1.0, 0.0, 0.5, 0.0);
     if config[2].y > 0.0 { m.emissive = vec3(0.0); }
-    if ray.instance_index == 0u { m = Material(config[0].rgb, vec3(0.0), 1.0, 0.0, config[1].x); }
+    if ray.instance_index == 0u { m = Material(config[0].rgb, vec3(0.0), 1.0, 0.0, config[1].x, 0.0); }
     return ResolvedRayHitFull(vec3(0.0, 0.0, -f32(steps)), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, 1.0), m, vec2(0.0));
 }
 fn resolve_material_alpha(m: RawMaterial, uv: vec2f) -> f32 { return config[0].a; }
@@ -60,6 +60,8 @@ fn orthonormalize(n: vec3f) -> mat3x3f { return mat3x3f(vec3(1.0,0.0,0.0),vec3(0
 fn get_cell_size(p: vec3f, eye: vec3f, rng: ptr<function,u32>) -> f32 { return 100.0; }
 fn query_world_cache(p: vec3f, n: vec3f, eye: vec3f, t: f32, life: u32, rng: ptr<function,u32>) -> vec3f { return vec3(0.0); }
 fn sample_random_light_transmitted(p: vec3f, n: vec3f, geo: vec3f, rng: ptr<function,u32>) -> ShadowSample { return ShadowSample(Light(n,1.0,false,vec3(0.0),0.0),1.0); }
+// This opaque/glass fixture has zero leaf transmission; the foliage probe covers the handoff.
+fn shade_surface_scattering(hit: ResolvedRayHitFull, wo: vec3f, rng: ptr<function,u32>) -> vec3f { return vec3(0.0); }
 fn evaluate_brdf(wo: vec3f, wi: vec3f, n: vec3f, m: Material) -> vec3f { return vec3(0.0); }
 fn sample_ggx_vndf(wo: vec3f, r: f32, rng: ptr<function,u32>) -> vec3f { return vec3(0.0); }
 fn ggx_vndf_sample_invalid(wi: vec3f) -> bool { return true; }
@@ -71,7 +73,7 @@ fn luminance(c: vec3f) -> f32 { return dot(c, vec3(0.2126,0.7152,0.0722)); }
 fn probe() {
     if config[2].x > 0.0 { materials[0].flags = MATERIAL_FLAG_DIFFUSE_BLEND; }
     var rng = 0u;
-    let primary = ResolvedGPixel(vec3(0.0),vec3(0.0,0.0,1.0),Material(vec3(1.0),vec3(0.0),config[1].w,1.0,0.5));
+    let primary = ResolvedGPixel(vec3(0.0),vec3(0.0,0.0,1.0),Material(vec3(1.0),vec3(0.0),config[1].w,1.0,0.5,0.0));
     let result = trace_glossy_path(vec2u(0u), primary, 1.0, vec3(0.0,0.0,-1.0), 0.5, &rng);
     output[0] = vec4(result, f32(steps));
     output[1] = vec4(f32(replacements));
