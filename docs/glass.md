@@ -205,8 +205,38 @@ Evidence is in `artifacts/bevy-sponza/surface-shadow-raw` and
 This fixture exposed TAA in the rig's RR-off linear capture fallback: history
 clamping reduced the control to about 2.295 nits. The rig now omits fallback TAA
 in linear captures. Explicit RR remains an independently filtered measurement.
-Earlier RR-off captures used TAA; they establish integration, not raw convergence. Analytic-light delta reflections are also pending;
-the broader glass-shadow roadmap parent is not complete.
+Earlier RR-off captures used TAA; they establish integration, not raw convergence.
+
+## Analytic-light reflections
+
+Point and spot lights now expose their existing finite spheres to delta
+reflection paths. Directional lights expose their finite angular disks.
+The shared ray test adds emission before the nearest geometry hit; an opaque
+blocker stops it, and glass/coverage is processed by the existing path traversal.
+Virtual emitters add light but do not occlude one another or the scene.
+The near sphere face emits outward; rays starting inside do not see its back face.
+
+Ordinary NEE owns analytic direct light with weight one. Ray hits are enabled
+after a delta reflection, and for the realtime primary smooth lobe
+(roughness <= 0.0225) that ReSTIR DI explicitly excludes. Straight panes retain
+that ownership; ordinary scattering resets it. This avoids adding an unweighted
+BSDF estimate on top of NEE. Primary glass reflections reuse the glossy path.
+Camera rays still do not draw analytic lamps; use emissive lamp geometry.
+
+The production helper GPU test covers 16 geometric/ownership controls at scales
+0.1, 1 and 10: point hit/miss/blocker, backward and inside rays, spot on/off,
+range cutoff, disk on/off/blocker, zero angular extent, disabled ownership and
+additivity. The production glossy path adds four ownership controls with RR
+guide code both enabled and disabled. Run:
+`cargo test --test analytic_lights --test glossy_glass -- --ignored --nocapture`.
+
+Limitations: zero-angular-extent directional lights have no finite reflected
+shape. The virtual-light loop is linear in light count on eligible segments.
+Range/spot attenuation uses the current ray segment, matching the existing local
+sample formula; a straight pane splits that segment, so range-window agreement
+across panes is approximate. Bounded realtime bounce/chain budgets still apply.
+These tests establish the stated partition and finite shapes, not general
+unbiasedness or convergence of the renderer.
 
 ## Primary camera panes
 

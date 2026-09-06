@@ -46,12 +46,16 @@ fn trace_glass_ray(origin: vec3f, wi: vec3f, lo: f32, hi: f32) -> Ray {
 }
 fn resolve_ray_hit_full(ray: Ray) -> ResolvedRayHitFull {
     var m = Material(vec3(0.0), select(vec3(1.0), vec3(1.0, 0.0, 0.0), direction.z > 0.0), 1.0, 0.0, 0.5);
+    if config[2].y > 0.0 { m.emissive = vec3(0.0); }
     if ray.instance_index == 0u { m = Material(config[0].rgb, vec3(0.0), 1.0, 0.0, config[1].x); }
     return ResolvedRayHitFull(vec3(0.0, 0.0, -f32(steps)), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, 1.0), m, vec2(0.0));
 }
 fn resolve_material_alpha(m: RawMaterial, uv: vec2f) -> f32 { return config[0].a; }
 fn rand_f(rng: ptr<function, u32>) -> f32 { return config[1].y; }
 fn sample_sky(wi: vec3f) -> vec3f { return vec3(0.0); }
+fn analytic_light_radiance(origin: vec3f, wi: vec3f, limit: f32, owned: bool) -> vec3f {
+    return select(vec3(0.0), vec3(2.0), config[2].y > 0.0 && owned);
+}
 fn orthonormalize(n: vec3f) -> mat3x3f { return mat3x3f(vec3(1.0,0.0,0.0),vec3(0.0,1.0,0.0),n); }
 fn get_cell_size(p: vec3f, eye: vec3f, rng: ptr<function,u32>) -> f32 { return 100.0; }
 fn query_world_cache(p: vec3f, n: vec3f, eye: vec3f, t: f32, life: u32, rng: ptr<function,u32>) -> vec3f { return vec3(0.0); }

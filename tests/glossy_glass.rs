@@ -135,6 +135,30 @@ fn glossy_glass_gpu() {
             ];
             let cases = cases.into_iter().chain([
                 (
+                    "analytic smooth primary",
+                    [1.0; 4],
+                    [0.5, 0.5, 0.0, 0.01],
+                    [2.0; 3],
+                ),
+                (
+                    "analytic NEE primary",
+                    [1.0; 4],
+                    [0.5, 0.5, 0.0, 0.1],
+                    [0.0; 3],
+                ),
+                (
+                    "analytic glass reflection",
+                    [1.0; 4],
+                    [0.5, 0.0, 1.0, 0.1],
+                    [2.0; 3],
+                ),
+                (
+                    "analytic straight NEE",
+                    [1.0; 4],
+                    [0.5, 0.5, 1.0, 0.1],
+                    [0.0; 3],
+                ),
+                (
                     "diffuse accepted",
                     [1.0, 0.0, 0.0, 0.5],
                     [0.5, 0.25, 1.0, 0.001],
@@ -166,7 +190,11 @@ fn glossy_glass_gpu() {
                     } else {
                         0.0
                     },
-                    0.0,
+                    if name.starts_with("analytic") {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     0.0,
                     0.0,
                 ];
@@ -215,7 +243,7 @@ fn glossy_glass_gpu() {
                     );
                 }
                 assert!(result[3] <= 33.0, "bounded traversal: {name}");
-                let expected_replacements = if rr_guides && config[2] == 0.0 {
+                let expected_replacements = if rr_guides && config[2] == 0.0 && config[3] <= 0.002 {
                     1.0
                 } else {
                     0.0

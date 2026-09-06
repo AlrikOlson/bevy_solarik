@@ -14,9 +14,10 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 ![Bistro plaza at night, rendered with Solarik](docs/images/bistro-night.png)
 
-Native 4K captures from the current development renderer (`74fba55`, September
-6, 2026), with DLSS Ray Reconstruction. These include the foliage shading and
-glass interior fixes; they show development code beyond the `v0.1.0` tag.
+Native 4K captures from the September 6, 2026 development renderer, with DLSS
+Ray Reconstruction. These include colored glass shadows, GI transmission and
+analytic-light reflections; they show development code beyond the `v0.1.0` tag.
+Capture settings and source provenance are in [the capture record](docs/readme-captures.md).
 The camera exposure and lights use the scene preset; the rig's extra contrast
 and saturation boost is disabled. No DLSS 5 Neural Rendering is applied.
 
@@ -31,7 +32,7 @@ lights and foliage transmission, and uses a procedural sky.
 - Rays that leave the scene can pick up light from a sky cubemap.
 - Point and spot lights use Bevy's light units and falloff.
 - Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer and primary-foliage realtime pass.
-- Development builds resolve [tinted thin glass](docs/glass.md) in reference, realtime camera and glossy paths. Camera panes replace their raster draws when ready. Opaque walls behind glass block the distant background even when raster culling omits them. Diffuse and shadow rays still skip glass.
+- Development builds resolve [tinted thin glass](docs/glass.md) in reference, realtime camera and glossy paths. Camera panes replace their raster draws when ready. Opaque walls behind glass block the distant background even when raster culling omits them. Direct-light shadows and GI connections include straight pane tint and Fresnel loss.
 - The reference pathtracer keeps accumulating while the camera is still.
 - Light selection favors brighter lights and larger emitters. This reduced reference-render noise in the Bistro tests; it did not measurably improve the raw realtime output.
 
@@ -98,7 +99,7 @@ Imported glTF may need its u16 indices converted to u32 and tangents generated f
 - The deferred rendering path is required. Authored double-sided masked diffuse transmission is supported by the reference pathtracer and a bounded primary-foliage realtime pass. See [foliage setup and validation](docs/foliage.md).
 - An emissive mesh can have at most 65,535 triangles. The scene can have at most 65,535 light sources in total.
 - The first realtime GI bounce importance-samples the sky cubemap with hemisphere MIS. The world cache and specular paths retain their existing sampling. See [measurements and limits](docs/sky-sampling.md).
-- Alpha testing adds GPU work. Thin glass transport applies to pathtracer camera/BSDF rays and realtime glossy paths; primary panes composite after opaque lighting. Reference/glossy direct-light shadows include pane tint and Fresnel loss. Realtime reservoir shadow tint and rough/volumetric refraction remain unsupported.
+- Alpha testing adds GPU work. Thin glass transport applies to pathtracer camera/BSDF rays and realtime glossy paths; primary panes composite after opaque lighting. Reference and realtime direct-light shadows and GI connections include pane tint and Fresnel loss. Smooth reflections see finite point/spot spheres and directional disks. Rough/volumetric refraction remains unsupported.
 - This is still an experimental renderer. Check the reference pathtracer when judging lighting changes.
 
 ## Building

@@ -43,6 +43,7 @@ fn trace_ray(o:vec3<f32>,d:vec3<f32>,lo:f32,hi:f32,flag:u32)->Ray {
  hit_z=config[1].x+1.0; return Ray(1u,1u,hit_z-o.z);
 }
 fn sample_sky(d:vec3<f32>)->vec3<f32> { return vec3(0.0); }
+fn analytic_light_radiance(o:vec3<f32>,d:vec3<f32>,limit:f32,owned:bool)->vec3<f32> { return vec3(0.0); }
 fn evaluate_brdf(wo:vec3<f32>,wi:vec3<f32>,n:vec3<f32>,m:Material)->vec3<f32> {
  return select(vec3(0.0),vec3(1.0),all(m.base_color==vec3(1.0)));
 }

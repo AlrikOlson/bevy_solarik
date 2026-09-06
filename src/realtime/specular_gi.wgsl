@@ -9,7 +9,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_specular_brdf}
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
-#import bevy_solarik::sampling::{shade_gi_connection, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
+#import bevy_solarik::sampling::{analytic_light_radiance, shade_gi_connection, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 #import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::world_cache::{query_world_cache, get_cell_size, WORLD_CACHE_CELL_LIFETIME}
@@ -92,6 +92,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
     var path_roughness = primary_surface.material.roughness;
     var glass_interactions = 0u;
     var delta_reflection = false;
+    var analytic_owned = primary_surface.material.roughness <= SPECULAR_GI_FOR_DI_ROUGHNESS_THRESHOLD;
 
 #ifdef DLSS_RR_GUIDE_BUFFERS
     var mirror_rotations = reflection_matrix(primary_surface.world_normal);
@@ -102,6 +103,8 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
     for (var i = 0u; i < 3u;) {
         // Trace ray
         let ray = trace_glass_ray(ray_origin, wi, RAY_T_MIN, RAY_T_MAX);
+        radiance += throughput * analytic_light_radiance(ray_origin, wi,
+            select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE {
             // The ray left the scene: it sees the sky. Nothing else samples
             // the sky for this lobe (the sky is not in the light list), so
@@ -145,6 +148,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             // Straight transmission keeps the preceding NEE competition; a
             // delta reflection bends away from it and owns subsequent emission.
             delta_reflection = delta_reflection || next.reflected;
+            analytic_owned = analytic_owned || next.reflected;
             if !next.reflected { p_bounce *= 1.0 - weights.a; }
 #ifdef DLSS_RR_GUIDE_BUFFERS
             // A stochastic glass branch cannot provide stable single-surface
@@ -217,6 +221,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         path_roughness += ray_hit.material.roughness;
         previous_scatter_position = ray_hit.world_position;
         delta_reflection = surface_perfect_mirror;
+        analytic_owned = surface_perfect_mirror;
         i += 1u;
 
         // Russian roulette for early termination

@@ -311,6 +311,38 @@ fn local_light_attenuation(sample: ResolvedLightSample, wi: vec3<f32>, light_dis
     return attenuation * window * window;
 }
 
+// Virtual emitters are additive and do not occlude geometry or one another.
+// Only an estimator excluded from NEE may collect these hits. Ordinary NEE
+// keeps full weight; straight panes retain ownership until a scattering event.
+fn analytic_light_radiance(origin: vec3<f32>, wi: vec3<f32>, limit: f32, owned: bool) -> vec3<f32> {
+    if !owned || limit <= RAY_T_MIN { return vec3(0.0); }
+    var radiance = vec3(0.0);
+    for (var i = 0u; i < arrayLength(&local_lights); i += 1u) {
+        let light = local_lights[i];
+        let offset = origin - light.position;
+        let b = dot(offset, wi);
+        let c = dot(offset, offset) - light.radius * light.radius;
+        let discriminant = b * b - c;
+        if discriminant <= 0.0 { continue; }
+        // Near side only: the sphere emits outwards, including for inside rays.
+        let t = -b - sqrt(discriminant);
+        if t <= RAY_T_MIN || t >= limit { continue; }
+        let sample = ResolvedLightSample(vec4(origin + t * wi, LIGHT_SAMPLE_LOCAL),
+            normalize(origin + t * wi - light.position), light.radiance,
+            light.inverse_pdf, light.direction, vec2(light.cos_outer, light.cos_inner), light.range);
+        radiance += light.radiance * local_light_attenuation(sample, wi, t * t);
+    }
+    if limit == RAY_T_MAX {
+        for (var i = 0u; i < arrayLength(&directional_lights); i += 1u) {
+            let light = directional_lights[i];
+            if light.cos_theta_max < 1.0 && dot(wi, light.direction_to_light) >= light.cos_theta_max {
+                radiance += light.luminance;
+            }
+        }
+    }
+    return radiance;
+}
+
 // A uniformly distributed direction on the unit sphere from a seed.
 fn uniform_sphere_direction(seed: u32) -> vec3<f32> {
     var rng = seed;
