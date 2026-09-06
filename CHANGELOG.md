@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reference-pathtracer thin glass: Fresnel reflection, tinted straight-through transmission, texture-alpha coverage and two-sided outgoing offsets. [GPU and integrated scene validation, reproduction and limits](docs/glass.md). Realtime glass compositing remains separate.
+
 - Sky cubemap importance sampling with cosine-hemisphere MIS for the first realtime GI bounce; black-sky fallback and counted zero samples.
 - GPU sampling validation and [Bistro brightness and cost measurements](docs/sky-sampling.md). The measured baseline already meets the brightness target; faster convergence is not established.
 

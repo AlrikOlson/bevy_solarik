@@ -159,16 +159,26 @@ const RAY_T_MAX = 100000.0f;
 const RAY_NO_CULL = 0xFFu;
 
 fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32) -> RayIntersection {
+    return trace_ray_impl(ray_origin, ray_direction, ray_t_min, ray_t_max, ray_flag, false);
+}
+
+// Camera and pathtracer bounce rays can interact with glass. Shadow and
+// realtime GI callers retain trace_ray's transparent-to-light behavior.
+fn trace_glass_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32) -> RayIntersection {
+    return trace_ray_impl(ray_origin, ray_direction, ray_t_min, ray_t_max, RAY_FLAG_NONE, true);
+}
+
+fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> RayIntersection {
     let ray = RayDesc(ray_flag, RAY_NO_CULL, ray_t_min, ray_t_max, ray_origin, ray_direction);
     var rq: ray_query;
     rayQueryInitialize(&rq, tlas, ray);
     // Opaque geometry commits in hardware and never shows up here. Meshes
     // with an alpha-masked or blended material are built non-opaque, and each
-    // of their hits is a candidate the shader confirms or drops: masked cards
-    // by their texture alpha, blended glass never (it is transparent to light).
+    // of their hits is a candidate the shader confirms or drops. Glass is
+    // committed only by the explicit glass-aware traversal.
     while rayQueryProceed(&rq) {
         let candidate = rayQueryGetCandidateIntersection(&rq);
-        if candidate.kind == RAY_QUERY_INTERSECTION_TRIANGLE && candidate_is_solid(candidate) {
+        if candidate.kind == RAY_QUERY_INTERSECTION_TRIANGLE && candidate_is_solid(candidate, include_glass) {
             rayQueryConfirmIntersection(&rq);
         }
     }
@@ -176,22 +186,25 @@ fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ra
 }
 
 // Alpha test for a candidate hit on non-opaque geometry.
-fn candidate_is_solid(candidate: RayIntersection) -> bool {
+fn candidate_is_solid(candidate: RayIntersection, include_glass: bool) -> bool {
     let material = materials[material_ids[candidate.instance_index]];
-    if (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
-        return false;
-    }
-    if (material.flags & MATERIAL_FLAG_ALPHA_MASK) == 0u {
-        return true;
-    }
+    let glass = (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
+    if glass && !include_glass { return false; }
+    if !glass && (material.flags & MATERIAL_FLAG_ALPHA_MASK) == 0u { return true; }
+    let barycentrics = vec3(1.0 - candidate.barycentrics.x - candidate.barycentrics.y, candidate.barycentrics);
+    let vertices = load_vertices(geometry_ids[candidate.instance_index], candidate.primitive_index);
+    let uv = mat3x2(vertices[0].uv, vertices[1].uv, vertices[2].uv) * barycentrics;
+    let alpha = resolve_material_alpha(material, uv);
+    // Zero-coverage glass is a hole, and must not consume a path interaction.
+    return select(alpha >= material.alpha_cutoff, alpha > 0.0, glass);
+}
+
+fn resolve_material_alpha(material: Material, uv: vec2<f32>) -> f32 {
     var alpha = material.base_color_alpha;
     if material.base_color_texture_id != TEXTURE_MAP_NONE {
-        let barycentrics = vec3(1.0 - candidate.barycentrics.x - candidate.barycentrics.y, candidate.barycentrics);
-        let vertices = load_vertices(geometry_ids[candidate.instance_index], candidate.primitive_index);
-        let uv = mat3x2(vertices[0].uv, vertices[1].uv, vertices[2].uv) * barycentrics;
         alpha *= sample_texture_alpha(material.base_color_texture_id, uv);
     }
-    return alpha >= material.alpha_cutoff;
+    return alpha;
 }
 
 fn sample_texture(id: u32, uv: vec2<f32>) -> vec3<f32> {

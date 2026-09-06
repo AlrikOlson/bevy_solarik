@@ -7,7 +7,9 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, fresnel}
 #import bevy_solarik::sampling::{sample_random_light, random_emissive_light_pdf, ggx_vndf_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+
+#import bevy_solarik::thin_glass::{sample_thin_glass, offset_thin_glass_ray}
 
 @group(1) @binding(0) var accumulation_texture: texture_storage_2d<rgba32float, read_write>;
 @group(1) @binding(1) var view_output: texture_storage_2d<rgba16float, write>;
@@ -40,11 +42,40 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var radiance = vec3(0.0);
     var throughput = vec3(1.0);
     var p_bounce = 0.0;
+    var glass_interactions = 0u;
     loop {
-        let ray = trace_ray(ray_origin, ray_direction, ray_t_min, RAY_T_MAX, RAY_FLAG_NONE);
+        let ray = trace_glass_ray(ray_origin, ray_direction, ray_t_min, RAY_T_MAX);
         if ray.kind != RAY_QUERY_INTERSECTION_NONE {
             let ray_hit = resolve_ray_hit_full(ray);
             let wo = -ray_direction;
+            let material = materials[material_ids[ray.instance_index]];
+            if (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
+                // Bound chains of parallel panes/mirrors without consuming the
+                // opaque BRDF path. Truncation loses only the remaining energy.
+                if glass_interactions >= 32u { break; }
+                glass_interactions += 1u;
+                let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+                var emission_weight = 1.0;
+                if p_bounce != 0.0 {
+                    emission_weight = power_heuristic(p_bounce, random_emissive_light_pdf(ray_hit));
+                }
+                radiance += emission_weight * throughput * alpha * ray_hit.material.emissive;
+                // Geometric normal avoids normal maps bending transmission or
+                // reflecting a ray through the wrong side of a thin interface.
+                let next = sample_thin_glass(wo, ray_hit.geometric_world_normal,
+                    ray_hit.material.base_color, alpha, ray_hit.material.reflectance, rand_f(&rng));
+                throughput *= next.throughput;
+                if all(throughput <= vec3(0.0)) { break; }
+                ray_direction = next.wi;
+                ray_origin = offset_thin_glass_ray(ray_hit.world_position,
+                    ray_hit.geometric_world_normal, ray_direction, RAY_T_MIN);
+                ray_t_min = RAY_T_MIN;
+                // A delta reflection cannot compete with the prior NEE ray.
+                // Straight-through transmission keeps that competition alive.
+                if next.reflected { p_bounce = 0.0; }
+                continue;
+            }
+            glass_interactions = 0u;
 
             // Emissive contribution
             var mis_weight = 1.0;
