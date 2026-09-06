@@ -8,11 +8,30 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 [Releases](https://github.com/AlrikOlson/bevy_solarik/releases) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
+## Bistro in Solarik
+
+![Bistro street in daylight, rendered with Solarik](docs/images/bistro-day.png)
+
+![Bistro plaza at night, rendered with Solarik](docs/images/bistro-night.png)
+
+Native 4K captures from the current development renderer (`74fba55`, September
+6, 2026), with DLSS Ray Reconstruction. These include the foliage shading and
+glass interior fixes; they show development code beyond the `v0.1.0` tag.
+The camera exposure and lights use the scene preset; the rig's extra contrast
+and saturation boost is disabled. No DLSS 5 Neural Rendering is applied.
+
+Scene: [Amazon Lumberyard Bistro, via NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro),
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), using the
+[qian-o glTF conversion](https://github.com/qian-o/GLTF-Assets).
+The local import converts materials/textures, rescales geometry, adds lamp
+lights and foliage transmission, and uses a procedural sky.
+
 ## What changed
 
 - Rays that leave the scene can pick up light from a sky cubemap.
 - Point and spot lights use Bevy's light units and falloff.
-- Alpha masks let rays pass through gaps in leaves. The unreleased reference pathtracer reflects and transmits through blended materials as [tinted thin glass](docs/glass.md). Realtime camera and glossy paths also resolve thin glass. Camera panes composite after opaque rendering and replace their raster draws when ready. Diffuse and shadow rays still skip glass; leaf transmission is unsupported.
+- Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer and primary-foliage realtime pass.
+- Development builds resolve [tinted thin glass](docs/glass.md) in reference, realtime camera and glossy paths. Camera panes replace their raster draws when ready. Opaque walls behind glass block the distant background even when raster culling omits them. Diffuse and shadow rays still skip glass.
 - The reference pathtracer keeps accumulating while the camera is still.
 - Light selection favors brighter lights and larger emitters. This reduced reference-render noise in the Bistro tests; it did not measurably improve the raw realtime output.
 
