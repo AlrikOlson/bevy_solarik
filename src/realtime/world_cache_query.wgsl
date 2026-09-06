@@ -40,6 +40,22 @@ const WORLD_CACHE_POSITION_LOD_SCALE: f32 = 15.0;
 const WORLD_CACHE_EMPTY_CELL: u32 = 0u;
 
 #ifndef WORLD_CACHE_NON_ATOMIC_LIFE_BUFFER
+// Cache entries remain incident irradiance for one oriented hemisphere.
+// Apply the authored thin-leaf split only at consumption, never to stored
+// entries. Opposite normals select independent geometry, visibility and history.
+// The coefficient is already clamped/quantized by material resolution.
+fn query_two_sided_world_cache(world_position: vec3<f32>, world_normal: vec3<f32>, diffuse_transmission: f32, view_position: vec3<f32>, ray_t: f32, cell_lifetime: u32, rng: ptr<function, u32>) -> vec3<f32> {
+    // Preserve both the opaque result and its random-number consumption.
+    if diffuse_transmission == 0.0 {
+        return query_world_cache(world_position, world_normal, view_position, ray_t, cell_lifetime, rng);
+    }
+    var irradiance = vec3(0.0);
+    if diffuse_transmission < 1.0 {
+        irradiance = (1.0 - diffuse_transmission) * query_world_cache(world_position, world_normal, view_position, ray_t, cell_lifetime, rng);
+    }
+    return irradiance + diffuse_transmission * query_world_cache(world_position, -world_normal, view_position, ray_t, cell_lifetime, rng);
+}
+
 fn query_world_cache(world_position_in: vec3<f32>, world_normal: vec3<f32>, view_position: vec3<f32>, ray_t: f32, cell_lifetime: u32, rng: ptr<function, u32>) -> vec3<f32> {
     var world_position = world_position_in;
     var cell_size = get_cell_size(world_position, view_position, rng);

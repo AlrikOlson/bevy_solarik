@@ -28,10 +28,12 @@ thin-pane events between vertices. Primary glass also uses this estimator for
 foliage hidden behind an opaque raster-depth boundary. Thin glass and diffuse
 coverage keep their existing transport within these surface paths.
 
-Existing ReSTIR receivers and world caches remain one-sided. Leaf handoffs
-bypass those caches; zero-transmission materials keep the existing glossy
-estimator. Foliage seen exclusively through reused reservoirs or cache radiance
-still lacks transmission. This change does not reduce primary-foliage query
+World-cache GI propagation combines separately cached front and back
+irradiance at leaf endpoints (see below). Existing primary ReSTIR receivers
+and ReSTIR GI endpoint samples remain one-sided. Leaf surface-path handoffs
+still bypass those caches; zero-transmission materials keep the existing
+glossy estimator. Reused GI samples taken directly at a leaf still lack its
+transmission. This change does not reduce primary-foliage query
 cost. Bounce truncation can lose indirect light, raw output is noisy, and
 reflections add GPU work. Coplanar,
 unregistered raster-only surfaces can remain ambiguous without material IDs.
@@ -131,6 +133,77 @@ the reference lights it. Opaque secondary diffuse transport is separate backlog.
 RR also shows broad arcs in this fixture's flat mirror background, including
 an all-zero-transmission control. The patch metrics do not establish whole-image
 quality or freedom from temporal artifacts.
+
+## World-cache propagation
+
+Cache GI rays that hit authored foliage now consume
+`(1-t) * E(front) + t * E(back)` before applying the leaf's base color.
+Each hemisphere retains its own position/normal key, geometry, visibility,
+irradiance samples and history. The material coefficient never enters a cache
+key or a stored hemisphere field. Existing cache-side ray offsets place direct
+and indirect queries on that hemisphere's side of the leaf; connection
+attenuation remains outside the cached irradiance.
+
+This preserves the cache's existing Lambertian approximation. It does not add
+angular Fresnel layering, directional radiance, emission handling or a new
+sampling PDF. It only redistributes the existing diffuse energy between two
+hemispheres. Partial transmission makes two cache queries; t=0 and t=1 make
+one. Zero transmission preserves the original query and random sequence.
+Both queried entries inherit the caller's lifetime with atomic-max refresh.
+Each entry keeps the existing update budget and frame-limited history blend.
+
+`cargo test --test cache_foliage -- --ignored --test-threads=1` runs two GPU
+tests. The production `sample_gi` test covers 28 combinations of coefficients
+0/0.25/0.5/1, reversed normals, clear/tinted/black connections, sky escape,
+distance bounds, throttling and dispatch bounds. It checks endpoint exclusion,
+ray offsets and inherited lifetime. Twenty further cases execute the production
+cache hash, allocation and query code with deterministic LOD and no position
+jitter, checking independent opposite-side fields, lifetime refresh and opaque
+energy/RNG preservation. Real scene traversal and jitter are exercised by rig
+captures. The old shader fails at t=0.25: red irradiance contribution 0.4 versus
+the analytic 0.8 for the fixture's front/back fields.
+
+This is the cache-propagation portion of foliage integration. Primary ReSTIR
+material payloads, two-sided receiver targets/PDFs, GI endpoint reuse and removal
+of the dedicated primary-foliage pass remain follow-up work.
+
+### Cache-propagation capture checks
+
+September 6, 2026, RTX 4090/Vulkan. Compare the old cache at Solarik
+`37794eb` with this change, using the same authored t=0.5 leaves, RR,
+frame-0 pose, 1280x720 resolution, grade-only effects and 128 warmup frames.
+The initial primary and reflected foliage estimators are identical in both runs.
+Display-linear RGB RMSE is 0.00056 in the trunk region, 0.00323 on the wall,
+and 0.00900 in the canopy. Wall/canopy mean luminance changes are -0.23%/-0.22%.
+Independent 128/512 warmups of the new renderer still change those means by
++3.57%/+3.54%. This scene comparison cannot separate the small cache effect
+from stochastic variation or establish reference-pathtracer accuracy.
+
+The world-cache GPU span during fixed-camera warmup, after scene loading and
+before screenshot readback, measures a median 0.444 ms before (0.410–0.502)
+and 0.418 ms after (0.417–0.424), with only three samples in each run.
+The overlapping ranges do not establish a speedup or a general performance
+bound. The primary-foliage pass still dominates this view.
+
+A 24-frame, 640x360 comparison at timeline frames 0–23 retains the same scene
+geometry. Its before/after display-linear RGB RMSE is 0.00847. Median
+adjacent-frame RMSE is 0.00448 before and 0.00441 after; maximum whole-image
+mean-luminance step is 0.000126/0.000149. This is a short, slow camera-motion
+probe with changing sunlight, not an isolated flicker measurement. Dark
+under-canopy regions and foliage softness remain visible.
+
+From the rig, after a release build, reproduce the fixed view with:
+
+```bash
+SCENE=bistro SCENE_FX=grade SCENE_DIAG=1 NR_RES=1280x720 \
+NR_START=0 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=128 \
+NR_OUT=../artifacts/bevy-sponza/fc-after ./capture.sh off
+```
+
+Use `NR_WARMUP=512` for the settling comparison; use `NR_RES=640x360`,
+`NR_CAPTURE=24` and `NR_WARMUP=128` for motion. Local captures and measurement
+reports use the `fc-*` prefix in the organizer's `artifacts/bevy-sponza`.
+The [README capture record](readme-captures.md) documents the refreshed 4K pair.
 
 ## Bistro frame 0
 

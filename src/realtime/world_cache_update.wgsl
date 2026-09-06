@@ -12,7 +12,7 @@ enable wgpu_ray_query;
     WORLD_CACHE_DIRECT_LIGHT_SAMPLE_COUNT,
     WORLD_CACHE_MAX_GI_RAY_DISTANCE,
     WORLD_CACHE_CELL_UPDATES_SOFT_CAP,
-    query_world_cache,
+    query_two_sided_world_cache,
 }
 #import bevy_solarik::realtime_bindings::{
     light_tile_resolved_samples,
@@ -68,7 +68,7 @@ fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
     } else if ray.t <= WORLD_CACHE_MAX_GI_RAY_DISTANCE {
         let ray_hit = resolve_ray_hit_full(ray);
         let cell_life = atomicLoad(&world_cache_life[cell_index]);
-        let radiance = query_world_cache(ray_hit.world_position, ray_hit.geometric_world_normal, view.world_position, ray.t, cell_life, &rng);
+        let radiance = query_two_sided_world_cache(ray_hit.world_position, ray_hit.geometric_world_normal, ray_hit.material.diffuse_transmission, view.world_position, ray.t, cell_life, &rng);
         world_cache_active_cells_new_radiance[active_cell_id.x] += transmission * ray_hit.material.base_color * radiance;
     }
 }

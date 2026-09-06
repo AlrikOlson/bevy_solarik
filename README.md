@@ -16,11 +16,13 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 Native 4K captures from the September 6, 2026 development renderer, with DLSS
 Ray Reconstruction, the matching Bistro interior and the corrected mesh-visibility
-lookup in Solarik's renderer fork, refreshed after the reflected-foliage change.
+lookup in Solarik's renderer fork, refreshed after foliage cache propagation.
 They show development code beyond the `v0.1.0` tag.
 Capture settings and source provenance are in [the capture record](docs/readme-captures.md).
-Both images use 512 warmup frames. Fixed-camera checks at 128 and 512 frames
-differ by up to 4% across six measured regions; softness and settling remain.
+The day image uses 512 warmup frames and dusk uses 1,024. Fixed-camera checks
+found up to 2.5% regional change from 128 to 512 frames by day; a further dusk
+check from 512 to 1,024 frames reduced the largest measured shift to 2.8%.
+Softness and spatial variation remain.
 See the [renderer validation](docs/renderer-fork.md) and the earlier
 [capture audit](docs/pathtracer-convergence.md).
 The camera exposure and lights use the scene preset; the rig's extra contrast
@@ -46,7 +48,7 @@ above also includes this change.
 
 - Rays that leave the scene can pick up light from a sky cubemap.
 - Point and spot lights use Bevy's light units and falloff.
-- Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer, primary-foliage realtime pass and bounded glossy/glass reflections.
+- Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer, primary-foliage realtime pass and bounded glossy/glass reflections. World-cache GI propagation also combines both leaf hemispheres; [foliage notes](docs/foliage.md#world-cache-propagation) describe its approximation and the remaining ReSTIR integration.
 - Development builds resolve [tinted thin glass](docs/glass.md) in reference, realtime camera and glossy paths. Camera panes replace their raster draws when ready. Opaque walls behind glass block the distant background even when raster culling omits them. Direct-light shadows and GI connections include straight pane tint and Fresnel loss.
 - The reference pathtracer keeps accumulating while the camera is still.
 - Light selection favors brighter lights and larger emitters. This reduced reference-render noise in the Bistro tests; it did not measurably improve the raw realtime output.

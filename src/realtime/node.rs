@@ -739,7 +739,10 @@ pub fn init_solari_lighting_pipelines(
             "sample_gi",
             load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wgsl"),
             None,
-            vec!["WORLD_CACHE_QUERY_ATOMIC_MAX_LIFETIME".into()],
+            vec![
+                "WORLD_CACHE_QUERY_ATOMIC_MAX_LIFETIME".into(),
+                "FOLIAGE_TRANSMISSION".into(),
+            ],
         ),
         blend_new_world_cache_samples_pipeline: create_pipeline(
             "solarik_lighting_blend_new_world_cache_samples_pipeline",

@@ -1,6 +1,47 @@
 # README capture record
 
-## Reflected foliage — current images
+## Foliage cache propagation — current images
+
+September 6, 2026: refreshed with Solarik `37794eb` plus the cache-propagation
+change in this commit, and playground `90f532a`. Both images use native
+3840x2160 with RR, the matching Bistro interior, preset exposure and lighting,
+fog/blur, no additional grading and no Neural Rendering. The day image uses
+timeline frame 750 and 512 warmup frames; dusk uses frame 1520 and 1,024 warmup
+frames. The timeline remains 1,800 frames.
+
+Independent fixed-camera and fixed-lighting warmups give these display-linear
+mean-luminance changes:
+
+| View / region | Rectangle x, y, width, height | 128 to 512 | 512 to 1024 |
+| --- | --- | --- | --- |
+| Cafe pavement | 430, 1930, 550, 190 | -2.48% | — |
+| Cafe upper facade | 2250, 100, 900, 450 | -1.13% | — |
+| Cafe wall | 1110, 1180, 500, 330 | +1.77% | — |
+| Dusk pavement | 100, 1720, 760, 250 | +6.62% | +0.59% |
+| Dusk facade | 130, 150, 670, 450 | +1.27% | +0.63% |
+| Dusk cafe wall | 2150, 1660, 510, 280 | +7.92% | +2.80% |
+
+The initial dusk comparison prompted the longer warmup. All five images were
+inspected at full resolution; the Vespa, shrubs, balconies and cafe geometry
+remain present. Spatial variation, dark regions and foliage softness remain.
+These regional mean comparisons bound settling in these views; they do not
+establish full convergence or reference-pathtracer accuracy.
+
+From the separate rig after `cargo build --release --locked`:
+
+```bash
+SCENE=bistro NR_RES=3840x2160 NR_START=750 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=512 \
+  SCENE_FX=fog,blur NR_OUT=../artifacts/bevy-sponza/fc-readme-day-512 ./capture.sh off
+SCENE=bistro NR_RES=3840x2160 NR_START=1520 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=1024 \
+  SCENE_FX=fog,blur NR_OUT=../artifacts/bevy-sponza/fc-readme-dusk-1024 ./capture.sh off
+```
+
+Use warmups 128/512 for the earlier comparisons. Logs and JSON measurements
+remain with the local `fc-*` artifacts. See [foliage cache validation](foliage.md#world-cache-propagation)
+for numerical GPU tests, the separate camera-motion comparison and the
+remaining ReSTIR receiver work.
+
+## Earlier reflected foliage images
 
 September 6, 2026: both 4K images are refreshed with the reflected-foliage
 handoff built on Solarik `fbcabb3` and playground `90f532a`. The same
