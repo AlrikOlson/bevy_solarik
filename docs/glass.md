@@ -84,7 +84,7 @@ while straight transmission retains the previous light-sampling competition,
 including the primary ReSTIR DI ownership rule. Black transmitted throughput
 terminates immediately. Reference, glossy, ReSTIR DI and cache direct-light shadows now use the
 colored transport below. GI/cache connections now include straight glass
-transmission; bounded primary-surface paths remain separate dependent work.
+transmission. Bounded primary-surface paths use matching BSDF/NEE transport.
 
 DLSS primary-surface replacement stops when a glossy path encounters glass.
 This retains the opaque primary guides instead of replacing them with a surface
@@ -174,7 +174,38 @@ suites pass. The full realtime shader pipeline captures the pane scene in
 `artifacts/bevy-sponza/gi-shadow/tinted`. This is integration evidence, not an
 independent GI convergence measurement. These straight diffuse connections do
 not sample glass-reflected caustics or refraction through thick solids.
-Bounded primary-surface transport remains dependent work. Analytic-light delta reflections are also pending;
+Bounded primary-surface paths now trace glass and diffuse coverage stochastically
+between ordinary vertices. They retain four ordinary scattering events and a
+separate 32-pane budget. Straight transmission preserves the preceding NEE
+competition and multiplies its PDF by the survival probability; delta reflection
+owns subsequent emission. NEE uses the same RGB energy and continuation
+probability as reference/glossy paths. Glass emission remains alpha weighted.
+
+`cargo test --test surface_shadow -- --ignored` integrates the production path
+and pane sampler over 65,536 branches for each of ten cases. These cover tinted,
+zero-alpha and partial panes, four panes, 32 clear panes versus truncation at 33,
+diffuse coverage and a reflected emitter. Expected energy is computed separately
+in Rust; the pre-change path returned 1 instead of 0.1846 for the red tint.
+
+For full-renderer validation, generate with `--surface-receiver` into a separate
+asset directory. This uses alpha-one diffuse coverage so the primary compositor
+must invoke the bounded path. Capture control/tinted/opaque as above with
+`SCENE_PATHTRACE=0 SCENE_RR=0 SCENE_DAY_EV=4 SCENE_NIGHT_EV=4`,
+`NR_START=380 NR_CAPTURE=32 NR_WARMUP=256`, then use
+`--check <capture directory> --ev100 4`. The checker averages every captured
+frame in linear space. Extra exposure headroom avoids clipping noisy samples.
+
+The raw sequence measures control 2.51849 nits and tinted
+[0.58698, 1.17351, 1.76027], with an opaque black control. Transmission
+[0.23307, 0.46596, 0.69894] is within 0.00664 of the analytic expectation.
+The same alpha-one receiver in the reference renderer measures 2.53925 nits.
+Evidence is in `artifacts/bevy-sponza/surface-shadow-raw` and
+`surface-shadow-reference`.
+
+This fixture exposed TAA in the rig's RR-off linear capture fallback: history
+clamping reduced the control to about 2.295 nits. The rig now omits fallback TAA
+in linear captures. Explicit RR remains an independently filtered measurement.
+Earlier RR-off captures used TAA; they establish integration, not raw convergence. Analytic-light delta reflections are also pending;
 the broader glass-shadow roadmap parent is not complete.
 
 ## Primary camera panes
@@ -336,9 +367,9 @@ or numerical equality. The analytic fixture is the quantitative glass evidence.
 
 ## Limits
 
-- Bounded primary-surface paths retain their previous glass visibility.
-  DI/GI/cache straight connections have colored transmission, but the full
-  realtime renderer is not yet a matching dielectric photometric reference.
+- DI/GI/cache straight connections and bounded surface paths transmit colored
+  glass shadows. Diffuse GI does not sample glass-reflected caustics; bounded
+  paths, cache approximation and temporal reuse are not a converged reference.
 - Analytic point, spot and directional lights cannot be hit by delta reflected
   rays. Reflections see emissive geometry and sky; analytic-light reflections
   need a separate sampling strategy.

@@ -13,7 +13,7 @@ from pathlib import Path
 import glass_scene
 
 
-def generate(directory):
+def generate(directory, surface_receiver=False):
     directory.mkdir(parents=True, exist_ok=True)
     for name, alpha, mode in [("control", 0, "BLEND"), ("tinted", 1, "BLEND"),
                                ("opaque", 1, "OPAQUE")]:
@@ -29,6 +29,8 @@ def generate(directory):
                 "pbrMetallicRoughness": {"baseColorFactor": [.25, .5, .75, alpha],
                     "metallicFactor": 0, "roughnessFactor": 1},
                 "extensions": {"KHR_materials_transmission": {"transmissionFactor": 1}}}
+        if surface_receiver:
+            wall["alphaMode"] = "BLEND"
         document["materials"] = [wall, pane]
         document["meshes"] = []
         for material in range(2):
@@ -47,17 +49,21 @@ def generate(directory):
         path.write_text(json.dumps(document), encoding="utf-8")
 
 
-def check(directory):
+def check(directory, ev100=2.0):
     import numpy as np
     from PIL import Image
 
     measured = {}
     for name in ("control", "tinted", "opaque"):
-        srgb = np.asarray(Image.open(directory / name / "seq_0000.png").convert("RGB"),
-                          dtype=np.float64) / 255
-        linear = np.where(srgb <= .04045, srgb / 12.92, ((srgb + .055) / 1.055) ** 2.4)
-        h, w, _ = linear.shape
-        measured[name] = linear[h//2-8:h//2+8, w//2-8:w//2+8].mean(axis=(0, 1)) * 4.8
+        frames = sorted((directory / name).glob("seq_*.png"))
+        assert frames, f"No captured frames for {name}"
+        patches = []
+        for frame in frames:
+            srgb = np.asarray(Image.open(frame).convert("RGB"), dtype=np.float64) / 255
+            linear = np.where(srgb <= .04045, srgb / 12.92, ((srgb + .055) / 1.055) ** 2.4)
+            h, w, _ = linear.shape
+            patches.append(linear[h//2-8:h//2+8, w//2-8:w//2+8].mean(axis=(0, 1)) * (1.2 * 2 ** ev100))
+        measured[name] = np.mean(patches, axis=0)
     ratio = measured["tinted"] / measured["control"]
     expected = np.array([.25, .5, .75]) * 12 / 13
     result = {"radiance": {k: v.tolist() for k, v in measured.items()},
@@ -75,9 +81,12 @@ if __name__ == "__main__":
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--generate", type=Path)
     action.add_argument("--check", type=Path)
+    parser.add_argument("--surface-receiver", action="store_true",
+                        help="Exercise the bounded primary surface path with alpha-one coverage")
+    parser.add_argument("--ev100", type=float, default=2.0)
     args = parser.parse_args()
     if args.generate:
-        generate(args.generate)
+        generate(args.generate, args.surface_receiver)
     else:
-        check(args.check)
+        check(args.check, args.ev100)
 
