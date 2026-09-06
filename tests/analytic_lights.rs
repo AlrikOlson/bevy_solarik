@@ -135,7 +135,7 @@ fn analytic_lights_gpu() {
                 0.0,
                 2.0 * window + 3.0,
                 0.0,
-                0.0,
+                2.0 * (1.0f32 - 0.9f32.powi(4)).powi(2),
                 0.0,
             ];
             for (i, (sample, expected)) in samples.iter().zip(expected).enumerate() {

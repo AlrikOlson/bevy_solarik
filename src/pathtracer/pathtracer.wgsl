@@ -47,7 +47,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     loop {
         let ray = trace_glass_ray(ray_origin, ray_direction, ray_t_min, RAY_T_MAX);
         radiance += throughput * analytic_light_radiance(ray_origin, ray_direction,
-            select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned);
+            select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
         if ray.kind != RAY_QUERY_INTERSECTION_NONE {
             let ray_hit = resolve_ray_hit_full(ray);
             let wo = -ray_direction;
@@ -91,7 +91,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // A delta reflection cannot compete with the prior NEE ray.
                 // Straight-through transmission keeps that competition alive.
                 analytic_owned = analytic_owned || next.reflected;
-                if next.reflected { p_bounce = 0.0; }
+                if next.reflected { p_bounce = 0.0; previous_scatter_position = ray_hit.world_position; }
                 else { p_bounce *= 1.0 - weights.a; }
                 continue;
             }
@@ -158,4 +158,3 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(view_output, global_id.xy, vec4(vec3((old_color.a + 1.0) / 512.0) / view.exposure, 1.0));
 #endif
 }
-

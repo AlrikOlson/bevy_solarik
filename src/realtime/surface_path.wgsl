@@ -35,7 +35,7 @@ fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: p
         if next.pdf <= 0.0 { break; }
         throughput *= next.throughput;
         if all(throughput <= vec3(0.0)) { break; }
-        let previous_position = hit.world_position;
+        var previous_position = hit.world_position;
         var wi = next.wi;
         var path_pdf = next.pdf;
         var delta = mirror;
@@ -43,7 +43,7 @@ fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: p
         for (var panes = 0u; panes <= 32u; panes += 1u) {
             let ray = trace_glass_ray(origin, wi, RAY_T_MIN, RAY_T_MAX);
             radiance += throughput * analytic_light_radiance(origin, wi,
-                select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), delta);
+                select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), delta, previous_position);
             if ray.kind == RAY_QUERY_INTERSECTION_NONE {
                 return radiance + throughput * sample_sky(wi);
             }
@@ -73,6 +73,7 @@ fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: p
                 if all(throughput <= vec3(0.0)) { return radiance; }
                 if !branch.reflected { path_pdf *= 1.0 - weights.a; }
                 delta = delta || branch.reflected;
+                if branch.reflected { previous_position = candidate.world_position; }
                 wi = branch.wi;
                 origin = offset_thin_glass_ray(candidate.world_position, candidate.geometric_world_normal, wi, RAY_T_MIN);
                 continue;

@@ -314,7 +314,7 @@ fn local_light_attenuation(sample: ResolvedLightSample, wi: vec3<f32>, light_dis
 // Virtual emitters are additive and do not occlude geometry or one another.
 // Only an estimator excluded from NEE may collect these hits. Ordinary NEE
 // keeps full weight; straight panes retain ownership until a scattering event.
-fn analytic_light_radiance(origin: vec3<f32>, wi: vec3<f32>, limit: f32, owned: bool) -> vec3<f32> {
+fn analytic_light_radiance(origin: vec3<f32>, wi: vec3<f32>, limit: f32, owned: bool, scatter_position: vec3<f32>) -> vec3<f32> {
     if !owned || limit <= RAY_T_MIN { return vec3(0.0); }
     var radiance = vec3(0.0);
     for (var i = 0u; i < arrayLength(&local_lights); i += 1u) {
@@ -330,7 +330,13 @@ fn analytic_light_radiance(origin: vec3<f32>, wi: vec3<f32>, limit: f32, owned: 
         let sample = ResolvedLightSample(vec4(origin + t * wi, LIGHT_SAMPLE_LOCAL),
             normalize(origin + t * wi - light.position), light.radiance,
             light.inverse_pdf, light.direction, vec2(light.cos_outer, light.cos_inner), light.range);
-        radiance += light.radiance * local_light_attenuation(sample, wi, t * t);
+        // Straight panes move the traversal origin, not the lighting receiver.
+        let light_ray = sample.world_position.xyz - scatter_position;
+        let distance_squared = dot(light_ray, light_ray);
+        if distance_squared > 0.0 {
+            radiance += light.radiance * local_light_attenuation(sample,
+                light_ray / sqrt(distance_squared), distance_squared);
+        }
     }
     if limit == RAY_T_MAX {
         for (var i = 0u; i < arrayLength(&directional_lights); i += 1u) {

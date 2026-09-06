@@ -21,10 +21,11 @@ fn probe(@builtin(local_invocation_index) i: u32) {
         if i == 6u { light.direction.z = 1.0; }
     }
     if i == 7u { light.range = 2.0*s; }
-    if i >= 8u && i != 12u { light.radiance = vec3(0.0); }
+    if i >= 8u && i != 12u && i != 14u { light.radiance = vec3(0.0); }
+    if i == 14u { light.range = 5.0*s; }
     local_lights[0] = light;
     directional_lights[0] = DirectionalLight(vec3(0.0,0.0,1.0), 0.99,
-        select(vec3(0.0), vec3(3.0), i >= 8u), 0.0628);
+        select(vec3(0.0), vec3(3.0), i >= 8u && i != 14u), 0.0628);
     var origin = vec3(0.0);
     var wi = vec3(0.0,0.0,1.0);
     var limit = RAY_T_MAX;
@@ -33,6 +34,7 @@ fn probe(@builtin(local_invocation_index) i: u32) {
     if i == 3u { wi.z = -1.0; }
     if i == 4u { origin.z = 5.0*s; }
     if i == 13u { directional_lights[0].cos_theta_max = 1.0; }
-    if i == 14u { limit = 0.0; }
-    output[i] = vec4(analytic_light_radiance(origin, wi, limit, i != 11u && i != 15u), 1.0);
+    if i == 14u { origin.z = 3.0*s; }
+    output[i] = vec4(analytic_light_radiance(origin, wi, limit, i != 11u && i != 15u,
+        select(origin, vec3(0.0), i == 14u)), 1.0);
 }

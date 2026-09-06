@@ -43,7 +43,7 @@ fn trace_ray(o:vec3<f32>,d:vec3<f32>,lo:f32,hi:f32,flag:u32)->Ray {
  hit_z=config[1].x+1.0; return Ray(1u,1u,hit_z-o.z);
 }
 fn sample_sky(d:vec3<f32>)->vec3<f32> { return vec3(0.0); }
-fn analytic_light_radiance(o:vec3<f32>,d:vec3<f32>,limit:f32,owned:bool)->vec3<f32> { return vec3(0.0); }
+fn analytic_light_radiance(o:vec3<f32>,d:vec3<f32>,limit:f32,owned:bool,scatter:vec3<f32>)->vec3<f32> { return vec3(0.0); }
 fn evaluate_brdf(wo:vec3<f32>,wi:vec3<f32>,n:vec3<f32>,m:Material)->vec3<f32> {
  return select(vec3(0.0),vec3(1.0),all(m.base_color==vec3(1.0)));
 }
@@ -75,4 +75,3 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
  let initial=ResolvedRayHitFull(vec3(0.0),vec3(0.0,0.0,1.0),vec3(0.0,0.0,1.0),m,vec2(0.0));
  output[id.x]=vec4(shade_surface_path(initial,vec3(0.0,0.0,1.0),&rng),0.0);
 }
-

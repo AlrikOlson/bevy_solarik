@@ -104,7 +104,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         // Trace ray
         let ray = trace_glass_ray(ray_origin, wi, RAY_T_MIN, RAY_T_MAX);
         radiance += throughput * analytic_light_radiance(ray_origin, wi,
-            select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned);
+            select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE {
             // The ray left the scene: it sees the sky. Nothing else samples
             // the sky for this lobe (the sky is not in the light list), so
@@ -149,6 +149,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             // delta reflection bends away from it and owns subsequent emission.
             delta_reflection = delta_reflection || next.reflected;
             analytic_owned = analytic_owned || next.reflected;
+            if next.reflected { previous_scatter_position = ray_hit.world_position; }
             if !next.reflected { p_bounce *= 1.0 - weights.a; }
 #ifdef DLSS_RR_GUIDE_BUFFERS
             // A stochastic glass branch cannot provide stable single-surface

@@ -232,11 +232,22 @@ guide code both enabled and disabled. Run:
 
 Limitations: zero-angular-extent directional lights have no finite reflected
 shape. The virtual-light loop is linear in light count on eligible segments.
-Range/spot attenuation uses the current ray segment, matching the existing local
-sample formula; a straight pane splits that segment, so range-window agreement
-across panes is approximate. Bounded realtime bounce/chain budgets still apply.
+Range/spot attenuation uses the last scattering position, retained across
+straight panes and rejected coverage and reset at reflections. A pane therefore
+cannot move the receiver closer to the light's range cutoff. The regression
+at distance 4.5 and range 5 expects 0.236535 radiance; restarting distance at a
+pane gave 1.967731. This passes at scene scales 0.1, 1 and 10.
+Bounded realtime bounce/chain budgets still apply.
 These tests establish the stated partition and finite shapes, not general
 unbiasedness or convergence of the renderer.
+
+The glass-shadow integration gate runs all eleven GPU suites together:
+thin-pane energy, shadow RGB/probability, emissive MIS, DI and GI reuse,
+bounded surface transport, primary/glossy paths, foliage, sky sampling and
+analytic lights. Paired tinted/clear/opaque controls and emission-coverage
+controls retain their independent closed-form expectations. This closes the
+shadow-transport integration; rough refraction, glass caustics in cached GI,
+and general pathtracer convergence remain separate work.
 
 ## Primary camera panes
 
