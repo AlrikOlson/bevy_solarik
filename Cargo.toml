@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "vendor/bevy_render"]
+resolver = "3"
+
 [package]
 name = "bevy_solarik"
 version = "0.1.0"
@@ -22,6 +26,9 @@ zstd_c = ["bevy_image/zstd_c"]
 dlss = ["bevy_anti_alias/dlss"]
 force_disable_dlss = ["bevy_anti_alias/force_disable_dlss"]
 
+[patch.crates-io]
+bevy_render = { path = "vendor/bevy_render" }
+
 [dev-dependencies]
 wgpu = { version = "29", default-features = false, features = ["std", "vulkan", "wgsl"] }
 futures-lite = "2"
@@ -43,7 +50,7 @@ bevy_mesh = "0.19.1"
 bevy_pbr = { version = "0.19.1", features = ["dfg_lut"] }
 bevy_platform = { version = "0.19.1", default-features = false, features = ["std"] }
 bevy_reflect = "0.19.1"
-bevy_render = "0.19.1"
+bevy_render = { version = "0.19.1", path = "vendor/bevy_render" }
 bevy_shader = "0.19.1"
 bevy_transform = "0.19.1"
 bevy_utils = "0.19.1"

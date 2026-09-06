@@ -1,5 +1,33 @@
 # README capture record
 
+## Renderer visibility fix — current images
+
+September 6, 2026: the README now shows the cafe at timeline frame 750 and
+the terrace at dusk at frame 1520, both on the 1800-frame Bistro timeline.
+These use the renderer fork in this commit, based on Solarik `b7dd057`, and
+the playground's root Cargo patch (based on `6b91c83`). Both include the
+matching original Bistro interior. No diagnostic rendering switches are active.
+
+```bash
+SCENE=bistro NR_RES=3840x2160 NR_START=750 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=512 \
+  SCENE_FX=fog,blur NR_OUT=../artifacts/bevy-sponza/visibility-day ./capture.sh off
+SCENE=bistro NR_RES=3840x2160 NR_START=1520 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=512 \
+  SCENE_FX=fog,blur NR_OUT=../artifacts/bevy-sponza/visibility-dusk ./capture.sh off
+```
+
+Images were inspected at full resolution. Independent 128/512-frame warmups
+retain the Vespa and shrubs. The dusk pavement/facade/cafe-wall display-linear
+mean luminance differences are -1.29%, +0.40% and -0.99%; the earlier long-settling
+capture findings below describe older code. This bounded comparison does not
+establish a noise-free plateau. See [the renderer fork record](renderer-fork.md)
+for the deterministic regression and runtime evidence.
+
+DLSS Ray Reconstruction is on at native resolution; DLSS 5 Neural Rendering
+and extra grading are off. Lens, exposure, lights and effects use the scene
+preset. The historical `bistro-night.png` filename now contains the dusk image.
+
+## Earlier aperture-light audit
+
 September 6, 2026: native 3840×2160 Bistro captures using renderer
 `bb4104d` and local rig `6eb7fcf` plus the generated lantern fixture.
 The day image uses 2,048 warm-up frames; night uses 4,096. The earlier

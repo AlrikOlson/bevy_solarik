@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Solarik now includes its own `bevy_render` fork. The CPU-visible entity lookup uses the list's main-entity ordering, preserving visible meshes while their materials load. Applications using development checkouts must apply the root Cargo patch documented in the README; tagged `v0.1.0` is unchanged.
+
 - Realtime primary foliage now uses a depth-matched, four-path/four-vertex estimator with two-sided diffuse transport and stable leaf DLSS guides. Existing opaque pixels and caches retain their shading; [Bistro validation and measured cost](docs/foliage.md) document the limits.
 
 - Reference foliage transmission: authored two-sided masked materials split diffuse energy across both hemispheres, with matching sampling/MIS PDFs and outgoing visibility offsets. CPU packing, production diffuse GPU contracts and a three-card backlight capture validate the implementation.

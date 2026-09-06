@@ -12,14 +12,16 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 ![Bistro street in daylight, rendered with Solarik](docs/images/bistro-day.png)
 
-![Bistro plaza at night, rendered with Solarik](docs/images/bistro-night.png)
+![Bistro terrace at dusk, rendered with Solarik](docs/images/bistro-night.png)
 
 Native 4K captures from the September 6, 2026 development renderer, with DLSS
-Ray Reconstruction. These include colored glass shadows, GI transmission and
-analytic-light reflections; they show development code beyond the `v0.1.0` tag.
+Ray Reconstruction, the matching Bistro interior and the corrected mesh-visibility
+lookup in Solarik's renderer fork. They show development code beyond the `v0.1.0` tag.
 Capture settings and source provenance are in [the capture record](docs/readme-captures.md).
-The night image retains shadow blotching and foliage softness after 2,048
-warm-up frames; see the [capture audit](docs/pathtracer-convergence.md).
+Both images use 512 warmup frames. Fixed-camera checks at 128 and 512 frames
+agree within 1.3% in three dusk regions; some foliage softness remains.
+See the [renderer validation](docs/renderer-fork.md) and the earlier
+[capture audit](docs/pathtracer-convergence.md).
 The camera exposure and lights use the scene preset; the rig's extra contrast
 and saturation boost is disabled. No DLSS 5 Neural Rendering is applied.
 
@@ -61,6 +63,22 @@ Use the tagged version with Bevy 0.19.1. This example enables DLSS Ray Reconstru
 bevy = { version = "0.19.1", features = ["dlss"] }
 bevy_solarik = { git = "https://github.com/AlrikOlson/bevy_solarik", tag = "v0.1.0", features = ["dlss"] }
 ```
+
+Development checkouts include Solarik's fork of `bevy_render`, which fixes visible
+meshes being lost while their materials load. Applications using this checkout
+must select the same fork for Bevy's transitive dependencies in their **root**
+Cargo.toml (Cargo does not inherit dependency patches):
+
+```toml
+[dependencies]
+bevy_solarik = { path = "../bevy_solarik", features = ["dlss"] }
+
+[patch.crates-io]
+bevy_render = { path = "../bevy_solarik/vendor/bevy_render" }
+```
+
+This fork is a development change; it is not included in `v0.1.0`.
+See [renderer integration and validation](docs/renderer-fork.md).
 
 ```rust,ignore
 use bevy::prelude::*;
@@ -104,7 +122,7 @@ Imported glTF may need its u16 indices converted to u32 and tangents generated f
 ## Requirements
 
 - A GPU with Vulkan ray query support. `SolarikPlugins::required_wgpu_features()` lists the required features.
-- Bevy 0.19.1. Use this crate in place of `bevy_solari` in your app; there is no `[patch]` step.
+- Bevy 0.19.1. Use this crate in place of `bevy_solari`. Development checkouts require the root `bevy_render` patch shown above; the tagged `v0.1.0` setup does not.
 - A zstd decoder for Bevy's KTX2 lookup tables. The default `zstd_rust` feature supplies one. For the C decoder, use `default-features = false` and enable `zstd_c`.
 - For the optional `dlss` feature: `DLSS_SDK`, `VULKAN_SDK` and libclang at build time, plus `nvngx_dlssd.dll` next to the executable. Without it, the output is raw ReSTIR lighting with no denoiser.
 
