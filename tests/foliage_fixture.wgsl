@@ -32,7 +32,12 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
     let n=vec3(0.0,0.0,1.0);
     let m=ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(0.0),0.0,1.0,1.0,0.0,inputs[0].x);
     let s=evaluate_and_sample_brdf(n,n,m,&rng);
-    output[id.x*3u]=vec4(s.wi,0.0);
+    let valid = foliage_depth_matches(vec3(0.0),vec3(0.0,0.0,0.001),n,n,10.0)
+        && !foliage_depth_matches(vec3(0.0),vec3(0.0,0.0,0.02),n,n,10.0)
+        && !foliage_depth_matches(vec3(0.0),vec3(0.0),n,-n,10.0)
+        && abs(foliage_solid_angle_pdf(0.25,4.0,0.5)-2.0)<0.00001
+        && foliage_solid_angle_pdf(0.0,4.0,0.5)==0.0;
+    output[id.x*3u]=vec4(s.wi,f32(valid));
     output[id.x*3u+1u]=vec4(s.throughput,s.pdf);
     output[id.x*3u+2u]=vec4(evaluate_diffuse_brdf(n,n,n,m)+evaluate_diffuse_brdf(n,-n,n,m),evaluate_brdf_pdf(n,s.wi,n,m));
 }

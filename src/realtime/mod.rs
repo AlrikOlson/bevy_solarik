@@ -45,6 +45,8 @@ impl Plugin for SolarikLightingPlugin {
         load_shader_library!(app, "sky_sampling.wgsl");
         load_shader_library!(app, "specular_gi.wgsl");
         embedded_asset!(app, "primary_glass.wgsl");
+        embedded_asset!(app, "primary_foliage.wgsl");
+        load_shader_library!(app, "foliage_math.wgsl");
         load_shader_library!(app, "world_cache_query.wgsl");
         embedded_asset!(app, "world_cache_compact.wgsl");
         embedded_asset!(app, "world_cache_update.wgsl");

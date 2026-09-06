@@ -28,7 +28,15 @@ fn foliage_gpu() {
             "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
             "return vec2(0.0);"
         );
-        let source = format!("{production}\n{}", include_str!("foliage_fixture.wgsl"));
+        let math = include_str!("../src/realtime/foliage_math.wgsl")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source = format!(
+            "{production}\n{math}\n{}",
+            include_str!("foliage_fixture.wgsl")
+        );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production foliage BRDF"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -99,6 +107,7 @@ fn foliage_gpu() {
             let mut energy = [0.0f64; 3];
             for sample in samples.chunks_exact(3) {
                 assert!(sample.iter().flatten().all(|x| x.is_finite()));
+                assert_eq!(sample[0][3], 1.0, "depth ownership and PDF conversion");
                 back += usize::from(sample[0][2] < 0.0);
                 assert!(
                     (sample[1][3] - sample[2][3]).abs() < 1e-6,

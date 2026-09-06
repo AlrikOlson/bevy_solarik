@@ -76,10 +76,10 @@ Imported glTF may need its u16 indices converted to u32 and tangents generated f
 
 ## Known limits
 
-- The deferred rendering path is required. Authored double-sided masked diffuse transmission is supported by the reference pathtracer; realtime support is pending. See [foliage setup and validation](docs/foliage.md).
+- The deferred rendering path is required. Authored double-sided masked diffuse transmission is supported by the reference pathtracer and a bounded primary-foliage realtime pass. See [foliage setup and validation](docs/foliage.md).
 - An emissive mesh can have at most 65,535 triangles. The scene can have at most 65,535 light sources in total.
 - The first realtime GI bounce importance-samples the sky cubemap with hemisphere MIS. The world cache and specular paths retain their existing sampling. See [measurements and limits](docs/sky-sampling.md).
-- Alpha testing adds GPU work. Thin glass transport applies to pathtracer camera/BSDF rays and realtime glossy paths; shadow tint, rough/volumetric refraction and realtime glass compositing remain unsupported.
+- Alpha testing adds GPU work. Thin glass transport applies to pathtracer camera/BSDF rays and realtime glossy paths; primary panes composite after opaque lighting. Shadow tint and rough/volumetric refraction remain unsupported.
 - This is still an experimental renderer. Check the reference pathtracer when judging lighting changes.
 
 ## Building

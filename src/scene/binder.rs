@@ -94,6 +94,8 @@ pub struct RaytracingSceneBindings {
     pub bind_group_layout: BindGroupLayoutDescriptor,
     /// Render entities whose blended material and geometry are in this frame's TLAS.
     pub(crate) glass_entities: HashSet<Entity>,
+    /// Whether this frame's TLAS contains explicitly transmissive foliage.
+    pub(crate) has_foliage: bool,
     previous_frame_light_entities: Vec<Entity>,
 }
 
@@ -124,6 +126,7 @@ pub fn prepare_raytracing_scene_bindings(
 ) {
     raytracing_scene_bindings.bind_group = None;
     raytracing_scene_bindings.glass_entities.clear();
+    raytracing_scene_bindings.has_foliage = false;
 
     let mut this_frame_entity_to_light_id = EntityHashMap::<u32>::default();
     let previous_frame_light_entities: Vec<_> = raytracing_scene_bindings
@@ -256,6 +259,7 @@ pub fn prepare_raytracing_scene_bindings(
             continue;
         };
 
+        raytracing_scene_bindings.has_foliage |= alpha_testing.0 && (material.flags >> 16) != 0;
         if alpha_testing.0 && material.flags & MATERIAL_FLAG_ALPHA_BLEND != 0 {
             raytracing_scene_bindings.glass_entities.insert(entity);
         }
@@ -505,6 +509,7 @@ impl RaytracingSceneBindings {
             ),
             previous_frame_light_entities: Vec::new(),
             glass_entities: HashSet::default(),
+            has_foliage: false,
         }
     }
 }

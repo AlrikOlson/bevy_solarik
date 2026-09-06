@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Realtime primary foliage now uses a depth-matched, four-path/four-vertex estimator with two-sided diffuse transport and stable leaf DLSS guides. Existing opaque pixels and caches retain their shading; [Bistro validation and measured cost](docs/foliage.md) document the limits.
+
 - Reference foliage transmission: authored two-sided masked materials split diffuse energy across both hemispheres, with matching sampling/MIS PDFs and outgoing visibility offsets. CPU packing, production diffuse GPU contracts and a three-card backlight capture validate the implementation.
 
 - Primary realtime glass now composites tinted transmission and ray-traced reflections after opaque rendering. Ready views suppress only TLAS-present pane draws, retaining raster fallback and deterministic background DLSS guides. Eleven production WGSL cases and an analytic scene validate transport.

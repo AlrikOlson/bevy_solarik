@@ -36,11 +36,38 @@ def check(path):
         assert np.max(np.abs(measured-expected)) < .04, rows[-1]
     print(json.dumps(rows, indent=2))
 
+def check_bistro(path, baseline):
+    """Check opaque controls and confirm the canopy estimator actually changed."""
+    import numpy as np
+    from PIL import Image
+    a = np.asarray(Image.open(baseline).convert("RGB"), dtype=float) / 255
+    b = np.asarray(Image.open(path).convert("RGB"), dtype=float) / 255
+    assert a.shape == b.shape == (720, 1280, 3), "documented Bistro frame0 camera"
+    rows = []
+    for name, (x, y, w, h) in {"trunk": (420, 450, 65, 150), "wall": (900, 330, 300, 130),
+                             "canopy": (350, 0, 650, 160)}.items():
+        aa, bb = a[y:y+h, x:x+w], b[y:y+h, x:x+w]
+        error = float(np.abs(aa-bb).mean())
+        rows.append(dict(region=name, baseline=aa.mean(axis=(0, 1)).tolist(),
+                         foliage=bb.mean(axis=(0, 1)).tolist(), mean_absolute_difference=error))
+        if name != "canopy":
+            assert error < .01, rows[-1]
+        else:
+            assert error > .02, "foliage estimator did not affect the canopy"
+    print(json.dumps(rows, indent=2))
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     action = p.add_mutually_exclusive_group(required=True)
     action.add_argument("--generate", type=Path)
     action.add_argument("--check", type=Path)
+    p.add_argument("--bistro-baseline", type=Path)
     args = p.parse_args()
-    generate(args.generate) if args.generate else check(args.check)
+    if args.generate:
+        generate(args.generate)
+    elif args.bistro_baseline:
+        check_bistro(args.check, args.bistro_baseline)
+    else:
+        check(args.check)
 

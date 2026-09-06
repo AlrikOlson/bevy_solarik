@@ -57,6 +57,9 @@ pub struct SolarikLightingPipelines {
     gi_spatial_and_shade_pipeline: CachedComputePipelineId,
     specular_gi_pipeline: CachedComputePipelineId,
     primary_glass_pipeline: CachedComputePipelineId,
+    primary_foliage_pipeline: CachedComputePipelineId,
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    primary_foliage_rr_pipeline: CachedComputePipelineId,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     primary_glass_rr_pipeline: CachedComputePipelineId,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -237,7 +240,11 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         view_dlss_rr_textures,
     ) = view.into_inner();
 
+    let owns_glass = primary_views
+        .0
+        .contains(&extracted_view.retained_view_entity);
     if PRIMARY
+        && !scene_bindings.has_foliage
         && !primary_views
             .0
             .contains(&extracted_view.retained_view_entity)
@@ -327,9 +334,18 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         primary_pipeline
     };
     let primary_pipeline = pipeline_cache.get_compute_pipeline(primary_pipeline);
-    if PRIMARY && primary_pipeline.is_none() {
+    if PRIMARY && owns_glass && primary_pipeline.is_none() {
         return;
     }
+
+    let foliage_pipeline = pipelines.primary_foliage_pipeline;
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    let foliage_pipeline = if view_dlss_rr_textures.is_some() {
+        pipelines.primary_foliage_rr_pipeline
+    } else {
+        foliage_pipeline
+    };
+    let foliage_pipeline = pipeline_cache.get_compute_pipeline(foliage_pipeline);
 
     let view_target_attachment = view_target.get_unsampled_color_attachment();
 
@@ -430,7 +446,14 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         if let Some(group) = &bind_group_resolve_dlss_rr_textures {
             pass.set_bind_group(2, group, &[]);
         }
-        if let Some(pipeline) = primary_pipeline {
+        if let Some(pipeline) = foliage_pipeline.filter(|_| scene_bindings.has_foliage) {
+            let span = diagnostics.time_span(&mut pass, "solarik_lighting/primary_foliage");
+            pass.set_pipeline(pipeline);
+            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32]));
+            pass.dispatch_workgroups(dx, dy, 1);
+            span.end(&mut pass);
+        }
+        if let Some(pipeline) = primary_pipeline.filter(|_| owns_glass) {
             pass.set_pipeline(pipeline);
             pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32]));
             pass.dispatch_workgroups(dx, dy, 1);
@@ -759,6 +782,24 @@ pub fn init_solari_lighting_pipelines(
             load_embedded_asset!(asset_server.as_ref(), "restir_gi.wgsl"),
             None,
             vec![],
+        ),
+        primary_foliage_pipeline: create_pipeline(
+            "solarik_primary_foliage",
+            "primary_foliage",
+            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wgsl"),
+            None,
+            vec!["FOLIAGE_TRANSMISSION".into()],
+        ),
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        primary_foliage_rr_pipeline: create_pipeline(
+            "solarik_primary_foliage_rr",
+            "primary_foliage",
+            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wgsl"),
+            Some(&bind_group_layout_resolve_dlss_rr_textures),
+            vec![
+                "FOLIAGE_TRANSMISSION".into(),
+                "DLSS_RR_GUIDE_BUFFERS".into(),
+            ],
         ),
         primary_glass_pipeline: create_pipeline(
             "solarik_primary_glass",
