@@ -78,7 +78,7 @@ Imported glTF may need its u16 indices converted to u32 and tangents generated f
 
 - The deferred rendering path is required.
 - An emissive mesh can have at most 65,535 triangles. The scene can have at most 65,535 light sources in total.
-- The sky contributes through rays that escape the scene. Cubemap importance sampling is not implemented.
+- The first realtime GI bounce importance-samples the sky cubemap with hemisphere MIS. The world cache and specular paths retain their existing sampling. See [measurements and limits](docs/sky-sampling.md).
 - Alpha testing adds GPU work. Blended materials do not refract or tint light.
 - This is still an experimental renderer. Check the reference pathtracer when judging lighting changes.
 

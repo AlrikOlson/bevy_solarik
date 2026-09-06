@@ -887,7 +887,9 @@ dependencies = [
  "bevy_utils",
  "bytemuck",
  "derive_more",
+ "futures-lite",
  "tracing",
+ "wgpu",
 ]
 
 [[package]]
@@ -3048,6 +3050,7 @@ dependencies = [
  "cfg_aliases",
  "document-features",
  "hashbrown 0.16.1",
+ "js-sys",
  "log",
  "naga",
  "portable-atomic",
@@ -3055,6 +3058,9 @@ dependencies = [
  "raw-window-handle",
  "smallvec",
  "static_assertions",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "wgpu-core",
  "wgpu-hal",
  "wgpu-types",

@@ -43,6 +43,7 @@ pub const WORLD_CACHE_SIZE: u64 = 2u64.pow(20);
 /// Internal rendering resources used for Solarik lighting.
 #[derive(Component)]
 pub struct SolarikLightingResources {
+    pub sky_distribution: Buffer,
     pub light_tile_samples: Buffer,
     pub light_tile_resolved_samples: Buffer,
     pub di_reservoirs_a: TextureView,
@@ -103,6 +104,13 @@ pub fn prepare_solari_lighting_resources(
         if solarik_lighting_resources.map(|r| r.view_size) == Some(view_size) {
             continue;
         }
+
+        let sky_distribution = render_device.create_buffer(&BufferDescriptor {
+            label: Some("solarik_lighting_sky_distribution"),
+            size: (6 * 128 * 128 + 6 * 128) * size_of::<f32>() as u64,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
 
         let light_tile_samples = render_device.create_buffer(&BufferDescriptor {
             label: Some("solarik_lighting_light_tile_samples"),
@@ -226,6 +234,7 @@ pub fn prepare_solari_lighting_resources(
         });
 
         commands.entity(entity).insert(SolarikLightingResources {
+            sky_distribution,
             light_tile_samples,
             light_tile_resolved_samples,
             di_reservoirs_a,

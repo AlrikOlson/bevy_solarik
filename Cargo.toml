@@ -22,6 +22,10 @@ zstd_c = ["bevy_image/zstd_c"]
 dlss = ["bevy_anti_alias/dlss"]
 force_disable_dlss = ["bevy_anti_alias/force_disable_dlss"]
 
+[dev-dependencies]
+wgpu = { version = "29", default-features = false, features = ["std", "vulkan", "wgsl"] }
+futures-lite = "2"
+
 [dependencies]
 bevy_anti_alias = "0.19.1"
 bevy_app = "0.19.1"

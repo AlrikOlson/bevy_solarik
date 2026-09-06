@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Sky cubemap importance sampling with cosine-hemisphere MIS for the first realtime GI bounce; black-sky fallback and counted zero samples.
+- GPU sampling validation and [Bistro brightness and cost measurements](docs/sky-sampling.md). The measured baseline already meets the brightness target; faster convergence is not established.
+
 ## 0.1.0 — 2026-09-06
 
 First tagged release, based on `bevy_solari` 0.19.1.

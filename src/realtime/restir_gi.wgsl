@@ -3,10 +3,11 @@ enable wgpu_ray_query;
 
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
 #import bevy_pbr::prepass_bindings::PreviousViewUniforms
-#import bevy_pbr::utils::{rand_f, sample_uniform_hemisphere, uniform_hemisphere_inverse_pdf, sample_disk}
+#import bevy_pbr::utils::{rand_f, sample_disk}
 #import bevy_render::maths::PI
 #import bevy_render::view::View
 #import bevy_solarik::brdf::evaluate_diffuse_brdf
+#import bevy_solarik::sky_sampling::sample_sky_mixture
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
 #import bevy_solarik::sampling::{sample_random_light, trace_point_visibility, balance_heuristic, isnan}
 #import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, RAY_T_MAX}
@@ -94,7 +95,16 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>, rng: ptr<function, u32>) -> Reservoir {
     var reservoir = empty_reservoir();
 
-    let ray_direction = sample_uniform_hemisphere(world_normal, rng);
+    let direction_sample = sample_sky_mixture(world_normal, rng);
+    let ray_direction = direction_sample.direction;
+    // A full-sphere sky draw below the receiver has zero contribution.
+    // Do not resample it: conditioning would change the mixture PDF.
+    if dot(world_normal, ray_direction) <= 0.0 {
+        reservoir.confidence_weight = 1.0;
+        reservoir.sample_point_world_position = world_position + ray_direction * SKY_SAMPLE_DISTANCE;
+        reservoir.sample_point_world_normal = -ray_direction;
+        return reservoir;
+    }
     let ray = trace_ray(world_position + (world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, RAY_T_MAX, RAY_FLAG_NONE);
 
     if ray.kind == RAY_QUERY_INTERSECTION_NONE {
@@ -106,7 +116,7 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
         reservoir.sample_point_world_normal = -ray_direction;
         reservoir.confidence_weight = 1.0;
         reservoir.radiance = sample_sky(ray_direction);
-        reservoir.unbiased_contribution_weight = uniform_hemisphere_inverse_pdf();
+        reservoir.unbiased_contribution_weight = direction_sample.inverse_pdf;
         return reservoir;
     }
 
@@ -123,10 +133,10 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
 #ifdef NO_WORLD_CACHE
     let direct_lighting = sample_random_light(sample_point.world_position, sample_point.world_normal, rng);
     reservoir.radiance = direct_lighting.radiance * saturate(dot(direct_lighting.wi, sample_point.world_normal));
-    reservoir.unbiased_contribution_weight = direct_lighting.inverse_pdf * uniform_hemisphere_inverse_pdf();
+    reservoir.unbiased_contribution_weight = direct_lighting.inverse_pdf * direction_sample.inverse_pdf;
 #else
     reservoir.radiance = query_world_cache(sample_point.world_position, sample_point.geometric_world_normal, view.world_position, ray.t, WORLD_CACHE_CELL_LIFETIME, rng);
-    reservoir.unbiased_contribution_weight = uniform_hemisphere_inverse_pdf();
+    reservoir.unbiased_contribution_weight = direction_sample.inverse_pdf;
 #endif
 
     let sample_point_diffuse_brdf = sample_point.material.base_color / PI;

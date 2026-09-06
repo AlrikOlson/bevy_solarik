@@ -35,6 +35,8 @@ pub struct SolarikLightingPipelines {
     bind_group_layout_world_cache_active_cells_dispatch: BindGroupLayoutDescriptor,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     bind_group_layout_resolve_dlss_rr_textures: BindGroupLayoutDescriptor,
+    build_sky_rows_pipeline: CachedComputePipelineId,
+    build_sky_marginal_pipeline: CachedComputePipelineId,
     decay_world_cache_pipeline: CachedComputePipelineId,
     compact_world_cache_single_block_pipeline: CachedComputePipelineId,
     compact_world_cache_blocks_pipeline: CachedComputePipelineId,
@@ -121,6 +123,8 @@ pub fn solarik_lighting(
     };
 
     let (
+        Some(build_sky_rows_pipeline),
+        Some(build_sky_marginal_pipeline),
         Some(decay_world_cache_pipeline),
         Some(compact_world_cache_single_block_pipeline),
         Some(compact_world_cache_blocks_pipeline),
@@ -143,6 +147,8 @@ pub fn solarik_lighting(
         Some(view_uniforms_binding),
         Some(previous_view_uniforms_binding),
     ) = (
+        pipeline_cache.get_compute_pipeline(pipelines.build_sky_rows_pipeline),
+        pipeline_cache.get_compute_pipeline(pipelines.build_sky_marginal_pipeline),
         pipeline_cache.get_compute_pipeline(pipelines.decay_world_cache_pipeline),
         pipeline_cache.get_compute_pipeline(pipelines.compact_world_cache_single_block_pipeline),
         pipeline_cache.get_compute_pipeline(pipelines.compact_world_cache_blocks_pipeline),
@@ -208,6 +214,7 @@ pub fn solarik_lighting(
             s.world_cache_b.as_entire_binding(),
             s.world_cache_active_cell_indices.as_entire_binding(),
             s.world_cache_active_cells_count.as_entire_binding(),
+            s.sky_distribution.as_entire_binding(),
         )),
     );
     let bind_group_world_cache_active_cells_dispatch = render_device.create_bind_group(
@@ -276,6 +283,13 @@ pub fn solarik_lighting(
         pass.set_pipeline(resolve_dlss_rr_textures_pipeline);
         pass.dispatch_workgroups(dx, dy, 1);
     }
+
+    let d = diagnostics.time_span(&mut pass, "solarik_lighting/sky_distribution");
+    pass.set_pipeline(build_sky_rows_pipeline);
+    pass.dispatch_workgroups(6 * 128, 1, 1);
+    pass.set_pipeline(build_sky_marginal_pipeline);
+    pass.dispatch_workgroups(1, 1, 1);
+    d.end(&mut pass);
 
     let d = diagnostics.time_span(&mut pass, "solarik_lighting/presample_light_tiles");
     pass.set_pipeline(presample_light_tiles_pipeline);
@@ -426,6 +440,7 @@ pub fn init_solari_lighting_pipelines(
                 storage_buffer_sized(false, None),
                 storage_buffer_sized(false, None),
                 storage_buffer_sized(false, None),
+                storage_buffer_sized(false, None),
             ),
         ),
     );
@@ -486,6 +501,20 @@ pub fn init_solari_lighting_pipelines(
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         bind_group_layout_resolve_dlss_rr_textures: bind_group_layout_resolve_dlss_rr_textures
             .clone(),
+        build_sky_rows_pipeline: create_pipeline(
+            "solarik_lighting_build_sky_rows_pipeline",
+            "build_sky_rows",
+            load_embedded_asset!(asset_server.as_ref(), "sky_sampling.wgsl"),
+            None,
+            vec![],
+        ),
+        build_sky_marginal_pipeline: create_pipeline(
+            "solarik_lighting_build_sky_marginal_pipeline",
+            "build_sky_marginal",
+            load_embedded_asset!(asset_server.as_ref(), "sky_sampling.wgsl"),
+            None,
+            vec![],
+        ),
         decay_world_cache_pipeline: create_pipeline(
             "solarik_lighting_decay_world_cache_pipeline",
             "decay_world_cache",
