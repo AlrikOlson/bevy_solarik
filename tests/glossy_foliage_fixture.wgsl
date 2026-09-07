@@ -1,4 +1,6 @@
 // Synthetic intersections and light I/O; transport, diffuse BSDF and PDFs are production WGSL.
+// These synthetic scenes use ordinary, nondirectional emission.
+fn emitted_radiance(m: ResolvedMaterial, outgoing: vec3f) -> vec3f { return m.emissive; }
 const PI: f32 = 3.141592653589793;
 const RAY_T_MIN: f32 = 0.001;
 const RAY_T_MAX: f32 = 10000.0;

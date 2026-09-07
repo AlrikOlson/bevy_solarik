@@ -56,6 +56,13 @@ fn emitter_mis_gpu() {
         ] {
             source.push_str(&function(sampling, name));
         }
+        source.push_str(
+            &include_str!("../src/scene/collimated.wgsl")
+                .lines()
+                .filter(|line| !line.starts_with('#'))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
         source.push_str(include_str!("emitter_mis_fixture.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production emitter MIS"),
@@ -82,16 +89,18 @@ fn emitter_mis_gpu() {
             mapped_at_creation: false,
         });
         // Half-width, distance, selection PMF; scaled scenes have equal solid angle.
-        for [half_width, distance, pmf] in [
-            [1.0f32, 1.0, 1.0],
-            [1.0, 4.0, 1.0],
-            [4.0, 4.0, 1.0],
-            [0.1, 0.1, 0.25],
-            [10.0, 10.0, 0.25],
+        for [half_width, distance, pmf, cone_radius] in [
+            [1.0f32, 1.0, 1.0, 0.0],
+            [1.0, 4.0, 1.0, 0.0],
+            [4.0, 4.0, 1.0, 0.0],
+            [0.1, 0.1, 0.25, 0.0],
+            [10.0, 10.0, 0.25, 0.0],
+            // Resolve a narrow directional emitter densely, with unchanged MIS PDFs.
+            [0.0007, 1.0, 0.25, 0.0005817765],
         ] {
             let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(&[[half_width, distance, pmf, 0.0]]),
+                contents: bytemuck::cast_slice(&[[half_width, distance, pmf, cone_radius]]),
                 usage: wgpu::BufferUsages::STORAGE,
             });
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -149,9 +158,14 @@ fn emitter_mis_gpu() {
             }
             radiance /= 65536.0;
             let ratio = f64::from(half_width) / f64::from(half_width.hypot(distance));
-            let expected = 4.0 / core::f64::consts::PI * ratio * ratio.atan();
+            let expected = if cone_radius > 0.0 {
+                // Soft disk angular integral / PI; tiny-angle error is < 1 ppm.
+                0.903 * f64::from(cone_radius).powi(2)
+            } else {
+                4.0 / core::f64::consts::PI * ratio * ratio.atan()
+            };
             assert!(
-                (radiance - expected).abs() < 2e-5,
+                (radiance - expected).abs() < 2e-5 * expected.max(0.000001),
                 "a={half_width} d={distance} pmf={pmf}: {radiance} expected {expected}"
             );
             drop(data);

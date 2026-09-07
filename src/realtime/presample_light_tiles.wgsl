@@ -34,9 +34,9 @@ fn pack_resolved_light_sample(sample: ResolvedLightSample) -> ResolvedLightSampl
         pack2x16unorm(octahedral_encode(sample.world_normal)),
         vec3_to_rgb9e5_(log2(sample.radiance * view.exposure + 1.0)),
         sample.inverse_pdf * select(1.0, -1.0, sample.world_position.w == LIGHT_SAMPLE_DIRECTIONAL),
-        pack2x16unorm(octahedral_encode(select(vec3(0.0, 0.0, 1.0), sample.spot_direction, local))),
+        pack2x16unorm(octahedral_encode(select(vec3(0.0, 0.0, 1.0), sample.spot_direction, local || sample.range == -2.0))),
         pack2x16float(sample.spot_cos),
-        select(-1.0, max(sample.range, 1e-4), local),
+        select(select(-1.0, -2.0, sample.range == -2.0), max(sample.range, 1e-4), local),
     );
 }
 
@@ -50,6 +50,6 @@ fn unpack_resolved_light_sample(packed: ResolvedLightSamplePacked, exposure: f32
         abs(packed.inverse_pdf),
         octahedral_decode(unpack2x16unorm(packed.spot_direction)),
         unpack2x16float(packed.spot_cos),
-        select(0.0, packed.range, local),
+        select(0.0, packed.range, local || packed.range == -2.0),
     );
 }

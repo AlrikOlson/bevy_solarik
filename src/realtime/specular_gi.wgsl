@@ -12,7 +12,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
 #import bevy_solarik::sampling::{analytic_light_radiance, shade_gi_connection, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::world_cache::{query_world_cache, get_cell_size, WORLD_CACHE_CELL_LIFETIME}
 #import bevy_solarik::realtime_bindings::{view_output, gi_reservoirs_a, gbuffer, depth_buffer, view, constants}
 #ifdef DLSS_RR_GUIDE_BUFFERS
@@ -136,7 +136,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             let emission_weight = select(
                 emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit, previous_scatter_position),
                 1.0, delta_reflection);
-            radiance += throughput * emission_weight * alpha * ray_hit.material.emissive;
+            radiance += throughput * emission_weight * alpha * emitted_radiance(ray_hit.material, -wi);
             let weights = thin_glass_weights(-wi, ray_hit.geometric_world_normal,
                 ray_hit.material.base_color, alpha, ray_hit.material.reflectance);
             let next = sample_thin_glass(-wi, ray_hit.geometric_world_normal,
@@ -171,7 +171,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
 
         // Add emissive contribution
         let mis_weight = select(emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit, previous_scatter_position), 1.0, delta_reflection);
-        radiance += throughput * mis_weight * ray_hit.material.emissive;
+        radiance += throughput * mis_weight * emitted_radiance(ray_hit.material, -wi);
 
         // Should not perform NEE for mirror-like surfaces
         let surface_perfect_mirror = ray_hit.material.roughness <= MIRROR_ROUGHNESS_THRESHOLD && ray_hit.material.metallic > 0.9999;

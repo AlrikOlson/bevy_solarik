@@ -18,8 +18,9 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
     let r2 = dot(position, position);
     let cosine = d / sqrt(r2);
     let area = 4.0 * a * a;
+    let cone_radius = config[0].w;
     let sample = ResolvedLightSample(vec4(position,1.0), vec3(0.0,0.0,-1.0),
-        vec3(1.0), area/pmf, vec3(0.0), vec2(-1.0), 0.0);
+        vec3(1.0), area/pmf, vec3(0.0,0.0,-1.0), vec2(cone_radius), select(0.0, -2.0, cone_radius > 0.0));
     let light = calculate_resolved_light_contribution(sample, vec3(0.0), vec3(0.0,0.0,1.0));
     let hit = ResolvedRayHitFull(position, vec3(0.0,0.0,-1.0), 2u, area/2.0, pmf);
     let hit_pdf = random_emissive_light_solid_angle_pdf(hit, vec3(0.0));

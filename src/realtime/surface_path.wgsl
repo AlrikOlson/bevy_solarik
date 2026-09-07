@@ -4,14 +4,14 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::rand_f
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
 #import bevy_solarik::sampling::{analytic_light_radiance, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, sample_sky, light_sources, ResolvedRayHitFull, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, resolve_ray_hit_full, sample_sky, light_sources, ResolvedRayHitFull, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 
 // A separate estimator avoids feeding two-sided samples to one-sided caches.
 // Four ordinary scattering events; final vertex uses NEE alone. Thin panes
 // have a separate 32-event budget between ordinary vertices.
 fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: ptr<function, u32>) -> vec3<f32> {
-    return initial.material.emissive + shade_surface_scattering(initial, initial_wo, rng);
+    return emitted_radiance(initial.material, initial_wo) + shade_surface_scattering(initial, initial_wo, rng);
 }
 
 // The incoming path owns initial emission and its MIS weight. This entry
@@ -69,7 +69,7 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
                 emission_weight = power_heuristic(path_pdf,
                     random_emissive_light_solid_angle_pdf(candidate, previous_position));
             }
-            radiance += throughput * candidate.material.emissive * emission_weight * select(1.0, alpha, glass);
+            radiance += throughput * emitted_radiance(candidate.material, -wi) * emission_weight * select(1.0, alpha, glass);
             if glass {
                 let weights = thin_glass_weights(-wi, candidate.geometric_world_normal,
                     candidate.material.base_color, alpha, candidate.material.reflectance);

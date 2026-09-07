@@ -1,4 +1,6 @@
 
+// These synthetic scenes use ordinary, nondirectional emission.
+fn emitted_radiance(m: Material, outgoing: vec3f) -> vec3f { return m.emissive; }
 struct Material { base_color: vec3f, emissive: vec3f, roughness: f32, metallic: f32, reflectance: f32, diffuse_transmission: f32 }
 struct ResolvedGPixel { world_position: vec3f, world_normal: vec3f, material: Material }
 struct ResolvedRayHitFull { world_position: vec3f, world_normal: vec3f, geometric_world_normal: vec3f, material: Material, uv: vec2f }

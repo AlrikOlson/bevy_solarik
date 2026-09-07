@@ -1,5 +1,6 @@
 mod binder;
 mod blas;
+pub mod collimated;
 mod extract;
 mod light_sampling;
 mod types;
@@ -32,6 +33,9 @@ pub struct RaytracingScenePlugin;
 
 impl Plugin for RaytracingScenePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<collimated::CollimatedEmissionPlugin>() {
+            app.add_plugins(collimated::CollimatedEmissionPlugin);
+        }
         load_shader_library!(app, "brdf.wgsl");
         load_shader_library!(app, "thin_glass.wgsl");
         load_shader_library!(app, "raytracing_scene_bindings.wgsl");

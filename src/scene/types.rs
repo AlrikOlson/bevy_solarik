@@ -14,7 +14,8 @@ use derive_more::derive::From;
 /// use the following set of vertex attributes: `{POSITION, NORMAL, UV_0, TANGENT}`, use [`bevy_mesh::PrimitiveTopology::TriangleList`],
 /// and use [`bevy_mesh::Indices::U32`].
 ///
-/// The material used for this entity must be [`MeshMaterial3d<StandardMaterial>`].
+/// Uses [`MeshMaterial3d<StandardMaterial>`] by default. A custom raster material
+/// can supply [`super::collimated::RaytracingMaterial3d`] as its ray-material override.
 #[derive(
     Component, FromTemplate, Clone, Debug, Default, Deref, DerefMut, Reflect, PartialEq, Eq, From,
 )]

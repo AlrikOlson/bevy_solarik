@@ -1,3 +1,4 @@
+use super::collimated::CollimatedMaterials;
 use super::{
     RaytracingMesh3d,
     blas::BlasManager,
@@ -114,6 +115,7 @@ pub fn prepare_raytracing_scene_bindings(
     mesh_allocator: Res<MeshAllocator>,
     mut blas_manager: ResMut<BlasManager>,
     material_assets: Res<StandardMaterialAssets>,
+    collimated: Res<CollimatedMaterials>,
     texture_assets: Res<RenderAssets<GpuImage>>,
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
@@ -235,6 +237,10 @@ pub fn prepare_raytracing_scene_bindings(
             flags: alpha.flags,
             base_color_alpha: LinearRgba::from(material.base_color).alpha,
             reflectance: material.reflectance,
+            emission_cone: collimated
+                .0
+                .get(asset_id)
+                .map_or(bevy_math::Vec4::ZERO, |cone| cone.gpu()),
         });
 
         material_id_map.insert(*asset_id, material_id);
@@ -315,7 +321,13 @@ pub fn prepare_raytracing_scene_bindings(
             light_fluxes.push(
                 luminance(material.emissive)
                     * blas_manager.mesh_world_area(&mesh.id(), transform)
-                    * f64::from(PI),
+                    * f64::from(PI)
+                    * if material.emission_cone.w > 0.0 {
+                        let radius = f64::from(material.emission_cone.w);
+                        radius * radius / (1.0 + radius * radius)
+                    } else {
+                        1.0
+                    },
             );
             light_sources
                 .get_mut()
@@ -592,6 +604,7 @@ struct GpuMaterial {
     flags: u32,
     base_color_alpha: f32,
     reflectance: f32,
+    emission_cone: bevy_math::Vec4,
 }
 
 /// `Material.flags` bits, mirrored in `raytracing_scene_bindings.wgsl`.
@@ -633,7 +646,7 @@ fn material_alpha(material: &StandardMaterial) -> MaterialAlpha {
     } else {
         0
     };
-    // Preserve the 64-byte GPU ABI: the high 16 flag bits hold unorm16
+    // The high 16 flag bits hold unorm16
     // diffuse transmission. Only explicitly authored two-sided masks opt in.
     let transmission = if material.double_sided
         && matches!(material.alpha_mode, AlphaMode::Mask(_))
@@ -830,7 +843,7 @@ mod tests {
             material.alpha_mode = mode;
             assert_eq!(material_alpha(&material).flags >> 16, 0);
         }
-        assert_eq!(GpuMaterial::min_size().get(), 64);
+        assert_eq!(GpuMaterial::min_size().get(), 80);
     }
 
     #[test]

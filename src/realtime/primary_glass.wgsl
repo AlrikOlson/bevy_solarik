@@ -3,7 +3,7 @@ enable wgpu_ray_query;
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, offset_thin_glass_ray}
 #import bevy_solarik::gbuffer_utils::{reconstruct_world_position, ResolvedGPixel}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, RAY_T_MAX}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, RAY_T_MAX}
 #import bevy_solarik::specular_gi::trace_glossy_path
 #import bevy_solarik::surface_path::shade_surface_path
 #import bevy_solarik::realtime_bindings::{view_output, depth_buffer, view, constants}
@@ -76,7 +76,7 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
             continue;
         }
         let weights = thin_glass_weights(-direction, hit.geometric_world_normal, hit.material.base_color, alpha, hit.material.reflectance);
-        radiance += transmission * alpha * hit.material.emissive;
+        radiance += transmission * alpha * emitted_radiance(hit.material, -direction);
         if weights.a > 0.0 {
             let wi = reflect(direction, hit.geometric_world_normal);
             let normal = faceForward(hit.geometric_world_normal, direction, hit.geometric_world_normal);

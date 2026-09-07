@@ -1,4 +1,4 @@
-use super::RaytracingMesh3d;
+use super::{RaytracingMesh3d, collimated::RaytracingMaterial3d};
 use bevy_asset::{AssetId, Assets};
 use bevy_derive::Deref;
 use bevy_ecs::{
@@ -16,7 +16,8 @@ pub fn extract_raytracing_scene(
         Query<(
             RenderEntity,
             &RaytracingMesh3d,
-            &MeshMaterial3d<StandardMaterial>,
+            Option<&MeshMaterial3d<StandardMaterial>>,
+            Option<&RaytracingMaterial3d>,
             &GlobalTransform,
             Option<&PreviousGlobalTransform>,
         )>,
@@ -31,7 +32,15 @@ pub fn extract_raytracing_scene(
         }
     }
 
-    for (render_entity, mesh, material, transform, previous_frame_transform) in &instances {
+    for (render_entity, mesh, material, override_material, transform, previous_frame_transform) in
+        &instances
+    {
+        let Some(material) = override_material
+            .map(|m| MeshMaterial3d(m.0.clone()))
+            .or_else(|| material.cloned())
+        else {
+            continue;
+        };
         let mut commands = commands.entity(render_entity);
 
         match previous_frame_transform.cloned() {

@@ -90,6 +90,8 @@ fn isnan(x: f32) -> bool {
 
 const NULL_LIGHT_ID = 0xFFFFFFFFu;
 
+#import bevy_solarik::collimated::collimated_weight
+
 struct LightSample {
     light_id: u32,
     seed: u32,
@@ -262,9 +264,9 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
             triangle_data.triangle_world_normal,
             emission,
             f32(triangle_count) * triangle_data.triangle_area,
-            vec3(0.0, 0.0, 1.0),
-            vec2(-1.0),
-            0.0,
+            raw_material.emission_cone.xyz,
+            vec2(raw_material.emission_cone.w, 0.0),
+            select(0.0, -2.0, raw_material.emission_cone.w > 0.0),
         );
     }
 }
@@ -281,6 +283,10 @@ fn calculate_resolved_light_contribution(resolved_light_sample: ResolvedLightSam
     var radiance = resolved_light_sample.radiance * (cos_theta_light / light_distance_squared);
     if resolved_light_sample.world_position.w == LIGHT_SAMPLE_LOCAL {
         radiance *= local_light_attenuation(resolved_light_sample, wi, light_distance_squared);
+    }
+
+    if resolved_light_sample.range == -2.0 {
+        radiance *= collimated_weight(vec4(resolved_light_sample.spot_direction, resolved_light_sample.spot_cos.x), -wi);
     }
 
     // Only emissive meshes are geometry a BRDF ray can hit; the others are

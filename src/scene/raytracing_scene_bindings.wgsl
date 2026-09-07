@@ -2,6 +2,7 @@ enable wgpu_ray_query;
 
 #define_import_path bevy_solarik::scene_bindings
 
+#import bevy_solarik::collimated::collimated_weight
 #import bevy_pbr::lighting::perceptualRoughnessToRoughness
 #import bevy_pbr::pbr_functions::calculate_tbn_mikktspace
 
@@ -56,6 +57,7 @@ struct Material {
     flags: u32,
     base_color_alpha: f32,
     reflectance: f32,
+    emission_cone: vec4<f32>,
 }
 
 // Mirrored in binder.rs. Exactly one of OPAQUE / ALPHA_MASK / ALPHA_BLEND.
@@ -239,6 +241,11 @@ struct ResolvedMaterial {
     roughness: f32,
     metallic: f32,
     diffuse_transmission: f32,
+    emission_cone: vec4<f32>,
+}
+
+fn emitted_radiance(material: ResolvedMaterial, outgoing: vec3<f32>) -> vec3<f32> {
+    return material.emissive * collimated_weight(material.emission_cone, outgoing);
 }
 
 struct ResolvedRayHitFull {
@@ -264,6 +271,7 @@ fn resolve_material(material: Material, uv: vec2<f32>) -> ResolvedMaterial {
         m.base_color *= sample_texture(material.base_color_texture_id, uv);
     }
 
+    m.emission_cone = material.emission_cone;
     m.emissive = material.emissive.rgb;
     if material.emissive_texture_id != TEXTURE_MAP_NONE {
         m.emissive *= sample_texture(material.emissive_texture_id, uv);
@@ -367,7 +375,11 @@ fn resolve_triangle_data_full(instance_id: u32, triangle_id: u32, barycentrics: 
     let triangle_edge1 = world_vertices[0] - world_vertices[2];
     let triangle_area = length(cross(triangle_edge0, triangle_edge1)) / 2.0;
 
-    let resolved_material = resolve_material(material, uv);
+    var resolved_material = resolve_material(material, uv);
+    // An exit aperture emits from the face toward its optical axis only.
+    if material.emission_cone.w > 0.0 && dot(cross(triangle_edge0, triangle_edge1), material.emission_cone.xyz) <= 0.0 {
+        resolved_material.emissive = vec3(0.0);
+    }
 
     return ResolvedRayHitFull(
         world_position,

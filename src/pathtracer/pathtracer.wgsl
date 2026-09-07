@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
 #import bevy_solarik::sampling::{analytic_light_radiance, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, ggx_vndf_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 
@@ -75,7 +75,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 if p_bounce != 0.0 {
                     emission_weight = power_heuristic(p_bounce, random_emissive_light_solid_angle_pdf(ray_hit, previous_scatter_position));
                 }
-                radiance += emission_weight * throughput * alpha * ray_hit.material.emissive;
+                radiance += emission_weight * throughput * alpha * emitted_radiance(ray_hit.material, wo);
                 // Geometric normal avoids normal maps bending transmission or
                 // reflecting a ray through the wrong side of a thin interface.
                 let weights = thin_glass_weights(wo, ray_hit.geometric_world_normal,
@@ -103,7 +103,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let p_light = random_emissive_light_solid_angle_pdf(ray_hit, previous_scatter_position);
                 mis_weight = power_heuristic(p_bounce, p_light);
             }
-            radiance += mis_weight * throughput * ray_hit.material.emissive;
+            radiance += mis_weight * throughput * emitted_radiance(ray_hit.material, wo);
 
             // Sample direct lighting, but only if the surface is not mirror-like
             // TODO: randomly choose to use NEE or not with probability proportional to roughness and metallicness
