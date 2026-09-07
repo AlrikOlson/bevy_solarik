@@ -12,7 +12,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
 #import bevy_solarik::presample_light_tiles::unpack_resolved_light_sample
 #import bevy_solarik::sampling::{LightSample, ResolvedLightSample, NULL_LIGHT_ID, calculate_resolved_light_contribution, resolve_and_calculate_light_contribution, resolve_light_sample, trace_light_transmission, balance_heuristic}
-#import bevy_solarik::scene_bindings::{light_sources, previous_frame_light_id_translations, LIGHT_NOT_PRESENT_THIS_FRAME, RAY_T_MIN}
+#import bevy_solarik::scene_bindings::{light_sources, translate_previous_light, LIGHT_NOT_PRESENT_THIS_FRAME, RAY_T_MIN}
 #import bevy_solarik::specular_gi::SPECULAR_GI_FOR_DI_ROUGHNESS_THRESHOLD
 #import bevy_solarik::realtime_bindings::{view_output, light_tile_samples, light_tile_resolved_samples, di_reservoirs_a, di_reservoirs_b, gbuffer, depth_buffer, motion_vectors, previous_gbuffer, previous_depth_buffer, view, previous_view, constants, ResolvedLightSamplePacked}
 
@@ -146,12 +146,11 @@ fn load_temporal_reservoir(pixel_id: vec2<u32>, depth: f32, world_position: vec3
 
     // Check if the light selected in the previous frame no longer exists in the current frame (e.g. entity despawned)
     let previous_light_id = temporal.reservoir.sample.light_id >> 16u;
-    let triangle_id = temporal.reservoir.sample.light_id & 0xFFFFu;
-    let light_id = previous_frame_light_id_translations[previous_light_id];
+    let light_id = translate_previous_light(previous_light_id);
     if light_id == LIGHT_NOT_PRESENT_THIS_FRAME {
         return NeighborInfo(empty_reservoir(), vec3(0.0), vec3(0.0), vec3(0.0));
     }
-    temporal.reservoir.sample.light_id = (light_id << 16u) | triangle_id;
+    temporal.reservoir.sample.light_id = light_id << 16u;
 
     temporal.reservoir.confidence_weight = min(temporal.reservoir.confidence_weight, CONFIDENCE_WEIGHT_CAP);
 

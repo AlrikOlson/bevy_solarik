@@ -5,39 +5,22 @@ enable wgpu_ray_query;
 #import bevy_pbr::lighting::perceptualRoughnessToRoughness
 #import bevy_pbr::pbr_functions::calculate_tbn_mikktspace
 
+// Scalar addressing preserves every allocator stride, including UV1 and colour.
 struct InstanceGeometryIds {
-    vertex_buffer_id: u32,
-    vertex_buffer_offset: u32,
-    index_buffer_id: u32,
-    index_buffer_offset: u32,
-    triangle_count: u32,
-    light_probability: f32,
+    vertex_buffer_offset: u32, index_buffer_offset: u32,
+    vertex_stride: u32, material_id: u32,
+    normal_offset: u32, uv0_offset: u32, uv1_offset: u32, tangent_offset: u32,
+    colour_offset: u32, triangle_count: u32, light_probability: f32, _padding: u32,
 }
-
-struct VertexBuffer { vertices: array<PackedVertex> }
-
-struct IndexBuffer { indices: array<u32> }
-
-struct PackedVertex {
-    a: vec4<f32>,
-    b: vec4<f32>,
-    tangent: vec4<f32>,
-}
-
+struct InstanceTransforms { current: mat4x4f, previous: mat4x4f }
 struct Vertex {
-    position: vec3<f32>,
-    normal: vec3<f32>,
-    uv: vec2<f32>,
-    tangent: vec4<f32>,
+    position: vec3f, normal: vec3f, uv: vec2f, tangent: vec4f,
+    uv1: vec2f, colour: vec4f,
 }
-
-fn unpack_vertex(packed: PackedVertex) -> Vertex {
-    var vertex: Vertex;
-    vertex.position = packed.a.xyz;
-    vertex.normal = vec3(packed.a.w, packed.b.xy);
-    vertex.uv = packed.b.zw;
-    vertex.tangent = packed.tangent;
-    return vertex;
+struct SceneMisc {
+    intensity: f32,
+    light_count: u32,
+    previous_light_ids: array<u32>,
 }
 
 struct Material {
@@ -125,25 +108,29 @@ struct DirectionalLight {
 
 const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 
-@group(0) @binding(0) var<storage> vertex_buffers: binding_array<VertexBuffer>;
-@group(0) @binding(1) var<storage> index_buffers: binding_array<IndexBuffer>;
+@group(0) @binding(0) var<storage> geometry_page_0: array<u32>;
+@group(0) @binding(1) var<storage> geometry_page_1: array<u32>;
 @group(0) @binding(2) var textures: binding_array<texture_2d<f32>>;
 @group(0) @binding(3) var samplers: binding_array<sampler>;
 @group(0) @binding(4) var<storage> materials: array<Material>;
 @group(0) @binding(5) var tlas: acceleration_structure;
-@group(0) @binding(6) var<storage> transforms: array<mat4x4<f32>>; // TODO: Use mat3x4<f32>?
-@group(0) @binding(7) var<storage> previous_frame_transforms: array<mat4x4<f32>>; // TODO: Use mat3x4<f32>?
-@group(0) @binding(8) var<storage> geometry_ids: array<InstanceGeometryIds>;
-@group(0) @binding(9) var<storage> material_ids: array<u32>; // TODO: Store material_id in instance_custom_index instead?
-@group(0) @binding(10) var<storage> light_sources: array<LightSource>;
-@group(0) @binding(11) var<storage> directional_lights: array<DirectionalLight>;
-@group(0) @binding(12) var<storage> local_lights: array<LocalLight>;
-@group(0) @binding(13) var<storage> previous_frame_light_id_translations: array<u32>;
-@group(0) @binding(14) var brdf_dfg_lut: texture_2d<f32>;
-@group(0) @binding(15) var brdf_dfg_lut_sampler: sampler;
-@group(0) @binding(16) var sky_texture: texture_cube<f32>;
-@group(0) @binding(17) var sky_sampler: sampler;
-@group(0) @binding(18) var<storage> sky_light: SkyLight; // storage: uniforms can't share a group with binding arrays
+@group(0) @binding(6) var<storage> instance_transforms: array<InstanceTransforms>;
+@group(0) @binding(7) var<storage> geometry_ids: array<InstanceGeometryIds>;
+@group(0) @binding(8) var<storage> light_sources: array<LightSource>;
+@group(0) @binding(9) var<storage> directional_lights: array<DirectionalLight>;
+@group(0) @binding(10) var<storage> local_lights: array<LocalLight>;
+@group(0) @binding(11) var<storage> scene_misc: SceneMisc;
+@group(0) @binding(12) var brdf_dfg_lut: texture_2d<f32>;
+@group(0) @binding(13) var brdf_dfg_lut_sampler: sampler;
+@group(0) @binding(14) var sky_texture: texture_cube<f32>;
+@group(0) @binding(15) var sky_sampler: sampler;
+
+fn instance_material_id(instance: u32) -> u32 { return geometry_ids[instance].material_id; }
+fn translate_previous_light(light: u32) -> u32 {
+    if light >= arrayLength(&scene_misc.previous_light_ids) { return LIGHT_NOT_PRESENT_THIS_FRAME; }
+    return scene_misc.previous_light_ids[light];
+}
+fn scene_light_count() -> u32 { return scene_misc.light_count; }
 
 // Radiance arriving from the sky along `direction` (world space, pointing
 // away from the surface), for a ray that left the scene. Black when the
@@ -151,7 +138,7 @@ const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 // Bevy's skybox and environment map shaders do it.
 fn sample_sky(direction: vec3<f32>) -> vec3<f32> {
     let cube_direction = vec3(direction.xy, -direction.z);
-    return textureSampleLevel(sky_texture, sky_sampler, cube_direction, 0.0).rgb * sky_light.intensity;
+    return textureSampleLevel(sky_texture, sky_sampler, cube_direction, 0.0).rgb * scene_misc.intensity;
 }
 
 const RAY_T_MIN = 0.001f;
@@ -170,6 +157,34 @@ fn trace_glass_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f
 }
 
 fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> RayIntersection {
+#ifdef SOLARIK_METAL_ALPHA
+    // Naga 29's Metal intersector has no candidate-confirm operation. Trace
+    // nearest opaque hits and re-cast past rejected coverage instead.
+    // Advance beyond intersection precision; bound work for dense foliage.
+    // Vulkan retains the native candidate traversal below.
+    var next_t = max(ray_t_min, 0.0);
+    for (var layer = 0u; layer < 128u; layer += 1u) {
+        var rq: ray_query;
+        let ray = RayDesc(RAY_FLAG_FORCE_OPAQUE, RAY_NO_CULL, next_t, ray_t_max, ray_origin, ray_direction);
+        rayQueryInitialize(&rq, tlas, ray);
+        // Naga's Metal intersector completes during initialize; proceed's ready
+        // flag never clears in Naga 29. Calling it in a loop hangs the GPU.
+        rayQueryProceed(&rq);
+        let hit = rayQueryGetCommittedIntersection(&rq);
+        if hit.kind != RAY_QUERY_INTERSECTION_TRIANGLE || candidate_is_solid(hit, include_glass, ray_origin, ray_direction) {
+            return hit;
+        }
+        // A saturated stack conservatively occludes instead of hanging the GPU.
+        if layer == 127u { return hit; }
+        next_t = max(next_t, hit.t) + max(0.00001, abs(hit.t) * 0.000001);
+        if next_t >= ray_t_max {
+            var miss: RayIntersection;
+            return miss;
+        }
+    }
+    var miss: RayIntersection;
+    return miss;
+#else
     let ray = RayDesc(ray_flag, RAY_NO_CULL, ray_t_min, ray_t_max, ray_origin, ray_direction);
     var rq: ray_query;
     rayQueryInitialize(&rq, tlas, ray);
@@ -184,11 +199,12 @@ fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f3
         }
     }
     return rayQueryGetCommittedIntersection(&rq);
+#endif
 }
 
 // Alpha test for a candidate hit on non-opaque geometry.
 fn candidate_is_solid(candidate: RayIntersection, include_glass: bool, origin: vec3f, direction: vec3f) -> bool {
-    let material = materials[material_ids[candidate.instance_index]];
+    let material = materials[instance_material_id(candidate.instance_index)];
     let glass = (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
     if glass && !include_glass { return false; }
     let diffuse = (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u;
@@ -296,7 +312,7 @@ fn resolve_ray_hit_full(ray_hit: RayIntersection) -> ResolvedRayHitFull {
     // A double-sided surface hit from behind is shaded as the side the ray
     // arrived on (the rasteriser does the same for the gbuffer); a
     // single-sided back face keeps upstream's raw normal.
-    let material = materials[material_ids[ray_hit.instance_index]];
+    let material = materials[instance_material_id(ray_hit.instance_index)];
     if !ray_hit.front_face && (material.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0u {
         hit.world_normal = -hit.world_normal;
         hit.geometric_world_normal = -hit.geometric_world_normal;
@@ -304,18 +320,41 @@ fn resolve_ray_hit_full(ray_hit: RayIntersection) -> ResolvedRayHitFull {
     return hit;
 }
 
-fn load_vertices(instance_geometry_ids: InstanceGeometryIds, triangle_id: u32) -> array<Vertex, 3> {
-    let index_buffer = &index_buffers[instance_geometry_ids.index_buffer_id].indices;
-    let vertex_buffer = &vertex_buffers[instance_geometry_ids.vertex_buffer_id].vertices;
-
-    let indices_i = (triangle_id * 3u) + vec3(0u, 1u, 2u) + instance_geometry_ids.index_buffer_offset;
-    let indices = vec3((*index_buffer)[indices_i.x], (*index_buffer)[indices_i.y], (*index_buffer)[indices_i.z]) + instance_geometry_ids.vertex_buffer_offset;
-
-    return array<Vertex, 3>(
-        unpack_vertex((*vertex_buffer)[indices.x]),
-        unpack_vertex((*vertex_buffer)[indices.y]),
-        unpack_vertex((*vertex_buffer)[indices.z])
-    );
+// One canonical word address space across the two bounded Metal bindings.
+fn geometry_word(at: u32) -> u32 {
+    let split = arrayLength(&geometry_page_0);
+    if at < split { return geometry_page_0[at]; }
+    return geometry_page_1[at - split];
+}
+fn vertex_word(at: u32) -> f32 {
+    return bitcast<f32>(geometry_word(at));
+}
+fn vertex2(at: u32) -> vec2f {
+    return vec2(vertex_word(at), vertex_word(at + 1u));
+}
+fn vertex3(at: u32) -> vec3f {
+    return vec3(vertex_word(at), vertex_word(at + 1u), vertex_word(at + 2u));
+}
+fn vertex4(at: u32) -> vec4f {
+    return vec4(vertex3(at), vertex_word(at + 3u));
+}
+fn load_vertex(g: InstanceGeometryIds, i: u32) -> Vertex {
+    let at = g.vertex_buffer_offset + i * g.vertex_stride;
+    var v: Vertex;
+    v.position = vertex3(at);
+    v.normal = vertex3(at + g.normal_offset);
+    v.uv = vertex2(at + g.uv0_offset);
+    v.tangent = vertex4(at + g.tangent_offset);
+    v.uv1 = vec2(0.0);
+    v.colour = vec4(1.0);
+    if g.uv1_offset != 0xFFFFFFFFu { v.uv1 = vertex2(at + g.uv1_offset); }
+    if g.colour_offset != 0xFFFFFFFFu { v.colour = vertex4(at + g.colour_offset); }
+    return v;
+}
+fn load_vertices(g: InstanceGeometryIds, triangle_id: u32) -> array<Vertex, 3> {
+    let at = g.index_buffer_offset + triangle_id * 3u;
+    return array(load_vertex(g, geometry_word(at)), load_vertex(g, geometry_word(at + 1u)),
+        load_vertex(g, geometry_word(at + 2u)));
 }
 
 fn transform_positions(transform: mat4x4<f32>, vertices: array<Vertex, 3>) -> array<vec3<f32>, 3> {
@@ -327,11 +366,11 @@ fn transform_positions(transform: mat4x4<f32>, vertices: array<Vertex, 3>) -> ar
 }
 
 fn resolve_triangle_data_full(instance_id: u32, triangle_id: u32, barycentrics: vec3<f32>) -> ResolvedRayHitFull {
-    let material_id = material_ids[instance_id];
+    let material_id = instance_material_id(instance_id);
     let material = materials[material_id];
 
-    let transform = transforms[instance_id];
-    let previous_frame_transform = previous_frame_transforms[instance_id];
+    let transform = instance_transforms[instance_id].current;
+    let previous_frame_transform = instance_transforms[instance_id].previous;
 
     let instance_geometry_ids = geometry_ids[instance_id];
     let vertices = load_vertices(instance_geometry_ids, triangle_id);
@@ -367,7 +406,9 @@ fn resolve_triangle_data_full(instance_id: u32, triangle_id: u32, barycentrics: 
     let triangle_edge1 = world_vertices[0] - world_vertices[2];
     let triangle_area = length(cross(triangle_edge0, triangle_edge1)) / 2.0;
 
-    let resolved_material = resolve_material(material, uv);
+    var resolved_material = resolve_material(material, uv);
+    let colour = mat3x3(vertices[0].colour.rgb, vertices[1].colour.rgb, vertices[2].colour.rgb) * barycentrics;
+    resolved_material.base_color *= colour;
 
     return ResolvedRayHitFull(
         world_position,

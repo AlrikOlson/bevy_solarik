@@ -1,13 +1,15 @@
 use super::{
-    RaytracingMesh3d,
+    RaytracingMesh3d, SolarikLightOff,
     blas::BlasManager,
     extract::StandardMaterialAssets,
+    geometry::GeometryPool,
     light_sampling::{build_alias_table, local_flux, luminance},
 };
 use bevy_asset::{AssetId, Handle};
 use bevy_color::{ColorToComponents, LinearRgba};
 use bevy_ecs::{
     entity::{Entity, EntityHashMap},
+    query::Without,
     resource::Resource,
     system::{Query, Res, ResMut},
 };
@@ -39,7 +41,6 @@ use core::{
     ops::Deref,
 };
 
-const MAX_MESH_SLAB_COUNT: NonZeroU32 = NonZeroU32::new(500).unwrap();
 const MAX_TEXTURE_COUNT: NonZeroU32 = NonZeroU32::new(5_000).unwrap();
 
 const TEXTURE_MAP_NONE: u32 = u32::MAX;
@@ -97,6 +98,7 @@ pub struct RaytracingSceneBindings {
     /// Whether this frame's TLAS contains explicitly transmissive foliage.
     pub(crate) has_foliage: bool,
     previous_frame_light_entities: Vec<Entity>,
+    pool: GeometryPool,
 }
 
 pub fn prepare_raytracing_scene_bindings(
@@ -107,10 +109,10 @@ pub fn prepare_raytracing_scene_bindings(
         &GlobalTransform,
         Option<&PreviousGlobalTransform>,
     )>,
-    directional_lights_query: Query<(Entity, &ExtractedDirectionalLight)>,
+    directional_lights_query: Query<(Entity, &ExtractedDirectionalLight), Without<SolarikLightOff>>,
     // Point and spot lights: bevy_pbr extracts both into ExtractedPointLight
     // (spot_light_angles tells them apart).
-    local_lights_query: Query<(Entity, &ExtractedPointLight)>,
+    local_lights_query: Query<(Entity, &ExtractedPointLight), Without<SolarikLightOff>>,
     mesh_allocator: Res<MeshAllocator>,
     mut blas_manager: ResMut<BlasManager>,
     material_assets: Res<StandardMaterialAssets>,
@@ -124,6 +126,7 @@ pub fn prepare_raytracing_scene_bindings(
     render_queue: Res<RenderQueue>,
     mut raytracing_scene_bindings: ResMut<RaytracingSceneBindings>,
 ) {
+    let mut census = super::stats::begin_scene(instances_query.iter().len());
     raytracing_scene_bindings.bind_group = None;
     raytracing_scene_bindings.glass_entities.clear();
     raytracing_scene_bindings.has_foliage = false;
@@ -153,8 +156,14 @@ pub fn prepare_raytracing_scene_bindings(
         .collect();
     blas_manager.set_non_opaque_meshes(non_opaque_meshes);
 
-    let mut vertex_buffers = CachedBindingArray::new();
-    let mut index_buffers = CachedBindingArray::new();
+    let Some(pool) = raytracing_scene_bindings.pool.prepare(
+        instances_query.iter().map(|(_, mesh, _, _, _)| mesh.id()),
+        &mesh_allocator,
+        &blas_manager,
+        &render_device,
+    ) else {
+        return;
+    };
     let mut textures = CachedBindingArray::new();
     let mut samplers = Vec::new();
     let mut materials = StorageBufferList::<GpuMaterial>::default();
@@ -166,15 +175,17 @@ pub fn prepare_raytracing_scene_bindings(
             update_mode: AccelerationStructureUpdateMode::Build,
             max_instances: instances_query.iter().len() as u32,
         });
-    let mut transforms = StorageBufferList::<Mat4>::default();
-    let mut previous_frame_transforms = StorageBufferList::<Mat4>::default();
+    let mut transforms = StorageBufferList::<GpuInstanceTransforms>::default();
     let mut geometry_ids = StorageBufferList::<GpuInstanceGeometryIds>::default();
-    let mut material_ids = StorageBufferList::<u32>::default();
     let mut light_sources = StorageBufferList::<GpuLightSource>::default();
     let mut light_fluxes = Vec::new();
     let mut directional_lights = StorageBufferList::<GpuDirectionalLight>::default();
     let mut local_lights = StorageBufferList::<GpuLocalLight>::default();
-    let mut previous_frame_light_id_translations = StorageBufferList::<u32>::default();
+    // Sky intensity, light count, then previous light-id translations.
+    // Compact scene records leave room for the realtime cache within Metal's
+    // 31 buffer slots per shader stage.
+    let mut scene_misc = StorageBufferList::<u32>::default();
+    scene_misc.get_mut().extend([0, 0]);
 
     let mut material_id_map: HashMap<AssetId<StandardMaterial>, u32, FixedHasher> =
         HashMap::default();
@@ -195,7 +206,14 @@ pub fn prepare_raytracing_scene_bindings(
             None => Some(TEXTURE_MAP_NONE),
         }
     };
-    for (asset_id, material) in material_assets.iter() {
+    let used_materials: HashSet<_> = instances_query
+        .iter()
+        .map(|(_, _, material, _, _)| material.id())
+        .collect();
+    for (asset_id, material) in material_assets
+        .iter()
+        .filter(|(id, _)| used_materials.contains(*id))
+    {
         if material_alpha(material).flags
             & (MATERIAL_FLAG_OPAQUE
                 | MATERIAL_FLAG_ALPHA_MASK
@@ -253,15 +271,41 @@ pub fn prepare_raytracing_scene_bindings(
     let mut instance_id = 0;
     for (entity, mesh, material, transform, previous_frame_transform) in &instances_query {
         let Some(blas) = blas_manager.get(&mesh.id()) else {
+            census.missing_blas += 1;
+            tracing::debug!(
+                "Solarik pending BLAS {:?}: {:?}",
+                mesh.id(),
+                blas_manager.rejection(&mesh.id())
+            );
             continue;
         };
-        let Some(vertex_slice) = mesh_allocator.mesh_vertex_slice(&mesh.id()) else {
+        let Some(layout) = blas_manager.vertex_layout(&mesh.id()) else {
+            census.missing_geometry += 1;
+            continue;
+        };
+        let Some(&(vertex_buffer_offset, index_buffer_offset)) =
+            raytracing_scene_bindings.pool.offsets.get(&mesh.id())
+        else {
+            census.missing_geometry += 1;
             continue;
         };
         let Some(index_slice) = mesh_allocator.mesh_index_slice(&mesh.id()) else {
+            census.missing_geometry += 1;
             continue;
         };
         let Some(material_id) = material_id_map.get(&material.id()).copied() else {
+            census.missing_material += 1;
+            tracing::debug!(
+                "Solarik pending material {:?} for mesh {:?}: {:?}",
+                material.id(),
+                mesh.id(),
+                material_assets.get(&material.id()).map(|m| (
+                    m.alpha_mode,
+                    m.base_color_texture.as_ref().map(Handle::id),
+                    m.normal_map_texture.as_ref().map(Handle::id),
+                    m.emissive_texture.as_ref().map(Handle::id)
+                ))
+            );
             continue;
         };
         let Some(material) = materials.get().get(material_id as usize) else {
@@ -282,33 +326,29 @@ pub fn prepare_raytracing_scene_bindings(
             0xFF,
         ));
 
-        transforms.get_mut().push(transform);
-        previous_frame_transforms.get_mut().push(
-            previous_frame_transform
+        transforms.get_mut().push(GpuInstanceTransforms {
+            current: transform,
+            previous: previous_frame_transform
                 .map(|t| Mat4::from(t.0))
                 .unwrap_or(transform),
-        );
-
-        let (vertex_buffer_id, _) = vertex_buffers.push_if_absent(
-            vertex_slice.buffer.as_entire_buffer_binding(),
-            vertex_slice.buffer.id(),
-        );
-        let (index_buffer_id, _) = index_buffers.push_if_absent(
-            index_slice.buffer.as_entire_buffer_binding(),
-            index_slice.buffer.id(),
-        );
-
+        });
         geometry_ids.get_mut().push(GpuInstanceGeometryIds {
-            vertex_buffer_id,
-            vertex_buffer_offset: vertex_slice.range.start,
-            index_buffer_id,
-            index_buffer_offset: index_slice.range.start,
+            vertex_buffer_offset,
+            index_buffer_offset,
+            material_id,
+            vertex_stride: layout.stride,
+            normal_offset: layout.normal,
+            uv0_offset: layout.uv0,
+            uv1_offset: layout.uv1,
+            tangent_offset: layout.tangent,
+            colour_offset: layout.colour,
             triangle_count: (index_slice.range.len() / 3) as u32,
             light_probability: 0.0,
+            _padding: 0,
         });
 
-        material_ids.get_mut().push(material_id);
-
+        // The reservoir seed replays a full-width primitive draw, so large
+        // merged town meshes participate without geometry duplication.
         if material.emissive != Vec3::ZERO {
             // Texture-average emission is not available on the CPU. The
             // material factor is a power estimate; PDFs remain exact.
@@ -330,6 +370,9 @@ pub fn prepare_raytracing_scene_bindings(
                 .push(entity);
         }
 
+        census.triangles += (index_slice.range.len() / 3) as u64;
+        census.colour_instances += u64::from(layout.colour != super::geometry::NO_STREAM);
+        census.uv1_instances += u64::from(layout.uv1 != super::geometry::NO_STREAM);
         instance_id += 1;
     }
 
@@ -395,9 +438,7 @@ pub fn prepare_raytracing_scene_bindings(
             .get(&previous_frame_light_entity)
             .copied()
             .unwrap_or(LIGHT_NOT_PRESENT_THIS_FRAME);
-        previous_frame_light_id_translations
-            .get_mut()
-            .push(current_frame_index);
+        scene_misc.get_mut().push(current_frame_index);
     }
 
     if light_sources.get().len() > u16::MAX as usize {
@@ -417,19 +458,38 @@ pub fn prepare_raytracing_scene_bindings(
         }
     }
 
+    let light_count = light_sources.get().len() as u32;
+    let sky_image = sky_light
+        .image
+        .as_ref()
+        .and_then(|image| texture_assets.get(image.id()));
+    scene_misc.get_mut()[0] =
+        sky_shader_intensity(sky_light.intensity, sky_image.is_some()).to_bits();
+    scene_misc.get_mut()[1] = light_count;
+    if scene_misc.get().len() < 3 {
+        scene_misc.get_mut().push(LIGHT_NOT_PRESENT_THIS_FRAME);
+    }
+    if directional_lights.get().is_empty() {
+        directional_lights.get_mut().push(Default::default());
+    }
+    if local_lights.get().is_empty() {
+        local_lights.get_mut().push(Default::default());
+    }
+    if light_sources.get().is_empty() {
+        light_sources.get_mut().push(Default::default());
+    }
     materials.write_buffer(&render_device, &render_queue);
     transforms.write_buffer(&render_device, &render_queue);
-    previous_frame_transforms.write_buffer(&render_device, &render_queue);
     geometry_ids.write_buffer(&render_device, &render_queue);
-    material_ids.write_buffer(&render_device, &render_queue);
     light_sources.write_buffer(&render_device, &render_queue);
     directional_lights.write_buffer(&render_device, &render_queue);
     local_lights.write_buffer(&render_device, &render_queue);
-    previous_frame_light_id_translations.write_buffer(&render_device, &render_queue);
+    scene_misc.write_buffer(&render_device, &render_queue);
 
     let mut command_encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("build_tlas_command_encoder"),
     });
+    pool.encode(&mesh_allocator, &mut command_encoder);
     command_encoder.build_acceleration_structures(&[], [&tlas]);
     render_queue.submit([command_encoder.finish()]);
 
@@ -451,37 +511,30 @@ pub fn prepare_raytracing_scene_bindings(
             &fallback_texture.cube.texture_view,
             &fallback_texture.cube.sampler,
         ));
-    // A storage buffer: wgpu refuses a uniform buffer in a bind group that
-    // also holds binding arrays (the textures and mesh slabs above).
-    let mut sky_buffer = StorageBuffer::from(GpuSkyLight {
-        intensity: sky_shader_intensity(sky_light.intensity, sky_image.is_some()),
-        _padding: Vec3::ZERO,
-    });
-    sky_buffer.write_buffer(&render_device, &render_queue);
-
+    census.instances = instance_id as u64;
+    census.meshes = raytracing_scene_bindings.pool.meshes() as u64;
+    census.pool_bytes = raytracing_scene_bindings.pool.bytes();
+    census.lights = light_count as u64;
     raytracing_scene_bindings.bind_group = Some(render_device.create_bind_group(
         "raytracing_scene_bind_group",
         &pipeline_cache.get_bind_group_layout(&raytracing_scene_bindings.bind_group_layout),
         &BindGroupEntries::sequential((
-            vertex_buffers.as_slice(),
-            index_buffers.as_slice(),
+            pool.pages[0].as_entire_binding(),
+            pool.pages[1].as_entire_binding(),
             textures.as_slice(),
             samplers.as_slice(),
             materials.binding().unwrap(),
             tlas.as_binding(),
             transforms.binding().unwrap(),
-            previous_frame_transforms.binding().unwrap(),
             geometry_ids.binding().unwrap(),
-            material_ids.binding().unwrap(),
             light_sources.binding().unwrap(),
             directional_lights.binding().unwrap(),
             local_lights.binding().unwrap(),
-            previous_frame_light_id_translations.binding().unwrap(),
+            scene_misc.binding().unwrap(),
             dfg_view,
             dfg_sampler,
             sky_view,
             sky_sampler,
-            sky_buffer.binding().unwrap(),
         )),
     ));
 }
@@ -495,8 +548,8 @@ impl RaytracingSceneBindings {
                 &BindGroupLayoutEntries::sequential(
                     ShaderStages::COMPUTE,
                     (
-                        storage_buffer_read_only_sized(false, None).count(MAX_MESH_SLAB_COUNT),
-                        storage_buffer_read_only_sized(false, None).count(MAX_MESH_SLAB_COUNT),
+                        storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                         texture_2d(TextureSampleType::Float { filterable: true })
                             .count(MAX_TEXTURE_COUNT),
                         sampler(SamplerBindingType::Filtering).count(MAX_TEXTURE_COUNT),
@@ -508,17 +561,15 @@ impl RaytracingSceneBindings {
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
-                        storage_buffer_read_only_sized(false, None),
-                        storage_buffer_read_only_sized(false, None),
                         texture_2d(TextureSampleType::Float { filterable: true }),
                         sampler(SamplerBindingType::Filtering),
                         texture_cube(TextureSampleType::Float { filterable: true }),
                         sampler(SamplerBindingType::Filtering),
-                        storage_buffer_read_only::<GpuSkyLight>(false),
                     ),
                 ),
             ),
             previous_frame_light_entities: Vec::new(),
+            pool: GeometryPool::default(),
             glass_entities: HashSet::default(),
             has_foliage: false,
         }
@@ -568,12 +619,24 @@ type StorageBufferList<T> = StorageBuffer<Vec<T>>;
 
 #[derive(ShaderType)]
 struct GpuInstanceGeometryIds {
-    vertex_buffer_id: u32,
     vertex_buffer_offset: u32,
-    index_buffer_id: u32,
     index_buffer_offset: u32,
+    vertex_stride: u32,
+    material_id: u32,
+    normal_offset: u32,
+    uv0_offset: u32,
+    uv1_offset: u32,
+    tangent_offset: u32,
+    colour_offset: u32,
     triangle_count: u32,
     light_probability: f32,
+    _padding: u32,
+}
+
+#[derive(ShaderType)]
+struct GpuInstanceTransforms {
+    current: Mat4,
+    previous: Mat4,
 }
 
 #[derive(ShaderType)]
@@ -649,6 +712,21 @@ fn material_alpha(material: &StandardMaterial) -> MaterialAlpha {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn emissive_mesh_sample_preserves_large_triangle_counts() {
+    for triangles in [1, 65_535, 65_536, 130_001, 20_000_000] {
+        let light = GpuLightSource::new_emissive_mesh_light(42, triangles);
+        assert_eq!(light.id, 42);
+        assert_eq!(light.kind & 1, 0);
+        assert_eq!(
+            light.kind >> 1,
+            triangles,
+            "every triangle must remain sampleable"
+        );
+    }
+}
+
 #[derive(ShaderType, Default)]
 struct GpuLightSource {
     kind: u32,
@@ -660,10 +738,6 @@ struct GpuLightSource {
 
 impl GpuLightSource {
     fn new_emissive_mesh_light(instance_id: u32, triangle_count: u32) -> GpuLightSource {
-        if triangle_count > u16::MAX as u32 {
-            panic!("Too many triangles ({triangle_count}) in an emissive mesh, maximum is 65535.");
-        }
-
         Self {
             kind: triangle_count << 1,
             id: instance_id,
@@ -777,13 +851,6 @@ impl GpuDirectionalLight {
             inverse_pdf: solid_angle,
         }
     }
-}
-
-/// Mirrors `SkyLight` in `raytracing_scene_bindings.wgsl`.
-#[derive(ShaderType)]
-struct GpuSkyLight {
-    intensity: f32,
-    _padding: Vec3,
 }
 
 fn tlas_transform(transform: &Mat4) -> [f32; 12] {

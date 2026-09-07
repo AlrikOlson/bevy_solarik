@@ -32,15 +32,27 @@ enable wgpu_ray_query;
 @group(1) @binding(18) var<storage, read_write> world_cache_luminance_deltas: array<f32, #{WORLD_CACHE_SIZE}>;
 @group(1) @binding(19) var<storage, read_write> world_cache_active_cells_new_radiance: array<vec3<f32>, #{WORLD_CACHE_SIZE}>;
 @group(1) @binding(20) var<storage, read_write> world_cache_a: array<u32, #{WORLD_CACHE_SIZE}>;
-@group(1) @binding(21) var<storage, read_write> world_cache_b: array<u32, 1024u>;
+@group(1) @binding(21) var<storage, read_write> world_cache_b: array<u32, 1025u>;
 @group(1) @binding(22) var<storage, read_write> world_cache_active_cell_indices: array<u32, #{WORLD_CACHE_SIZE}>;
-@group(1) @binding(23) var<storage, read_write> world_cache_active_cells_count: u32;
+// world_cache_b[1024] holds the active count, saving one Metal buffer slot.
 
 #ifdef DLSS_RR_GUIDE_BUFFERS
 @group(2) @binding(0) var diffuse_albedo: texture_storage_2d<rgba8unorm, write>;
 @group(2) @binding(1) var specular_albedo: texture_storage_2d<rgba8unorm, write>;
 @group(2) @binding(2) var normal_roughness: texture_storage_2d<rgba16float, write>;
 @group(2) @binding(3) var specular_motion_vectors: texture_storage_2d<rg16float, write>;
+#endif
+
+// Host-denoiser guide set, with normal
+// and roughness apart (MetalFX's temporal denoised scaler takes them as
+// two textures), plus the specular hit distance. One core storage
+// format for all five; roughness and hit distance live in `.r`.
+#ifdef DENOISE_GUIDE_BUFFERS
+@group(2) @binding(0) var guide_diffuse_albedo: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(1) var guide_specular_albedo: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(2) var guide_normal: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(3) var guide_roughness: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(4) var guide_specular_hit_distance: texture_storage_2d<rgba16float, write>;
 #endif
 
 struct PushConstants { frame_index: u32, reset: u32 }

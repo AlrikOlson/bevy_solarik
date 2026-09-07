@@ -1,12 +1,15 @@
 mod binder;
 mod blas;
 mod extract;
+mod geometry;
 mod light_sampling;
+pub(crate) mod stats;
 mod types;
+pub use stats::{SceneStats, scene_stats};
 
 use bevy_shader::load_shader_library;
 pub use binder::{RaytracingSceneBindings, SolarikAlphaTesting, SolarikSkyLight};
-pub use types::RaytracingMesh3d;
+pub use types::{RaytracingMesh3d, SolarikLightOff, SolarikMaterial3d};
 
 use crate::SolarikPlugins;
 use bevy_app::{App, Plugin};
@@ -24,7 +27,7 @@ use bevy_render::{
 };
 use binder::prepare_raytracing_scene_bindings;
 use blas::{BlasManager, compact_raytracing_blas, prepare_raytracing_blas};
-use extract::{StandardMaterialAssets, extract_raytracing_scene};
+use extract::{StandardMaterialAssets, extract_light_off, extract_raytracing_scene};
 use tracing::warn;
 
 /// Creates acceleration structures and binding arrays of resources for raytracing.
@@ -66,7 +69,8 @@ impl Plugin for RaytracingScenePlugin {
         render_app
             .world_mut()
             .resource_mut::<MeshAllocatorSettings>()
-            .extra_buffer_usages |= BufferUsages::BLAS_INPUT | BufferUsages::STORAGE;
+            .extra_buffer_usages |=
+            BufferUsages::BLAS_INPUT | BufferUsages::STORAGE | BufferUsages::COPY_SRC;
         render_app.init_resource::<SolarikSkyLight>();
         render_app.init_resource::<SolarikAlphaTesting>();
 
@@ -74,7 +78,10 @@ impl Plugin for RaytracingScenePlugin {
             .init_gpu_resource::<BlasManager>()
             .init_gpu_resource::<StandardMaterialAssets>()
             .insert_resource(RaytracingSceneBindings::new())
-            .add_systems(ExtractSchedule, extract_raytracing_scene)
+            .add_systems(
+                ExtractSchedule,
+                (extract_raytracing_scene, extract_light_off),
+            )
             .add_systems(
                 Render,
                 (

@@ -4,7 +4,7 @@ Ray-traced lighting for Bevy 0.19.1. This is a fork of Bevy's experimental `bevy
 
 It keeps Solari's ReSTIR direct and indirect lighting and world-space radiance cache. DLSS Ray Reconstruction is available through the optional `dlss` feature.
 
-Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are untested.
+Previously tested on Windows with an RTX 4090 and Vulkan. Development Metal support has been exercised on Apple M5 Max, including bounded traversal and large-scene geometry. This change has not been revalidated on NVIDIA/Vulkan or DLSS; see [Metal and host integration](docs/metal-host.md).
 
 [Releases](https://github.com/AlrikOlson/bevy_solarik/releases) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
@@ -115,21 +115,23 @@ commands.insert_resource(SolarikSkyLight {
 });
 ```
 
-Meshes need exactly `POSITION`, `NORMAL`, `UV_0` and `TANGENT` with u32 indices to go into the ray-traced scene; anything else stays raster-only. The camera's `Msaa` has to be off. `SolarikLighting::reset` drops the temporal history for one frame on a camera cut. `SolarikPlugins::required_wgpu_features()` is what the GPU has to support; if it does not, the plugins log a warning and do nothing.
+Meshes need `POSITION`, `NORMAL`, `UV_0` and `TANGENT` with u32 indices to go into the ray-traced scene. Additional streams, including vertex colours and UV1, are preserved; ray materials use vertex RGB and UV0. Meshes with unsupported layouts are reported in the scene census. The camera's `Msaa` has to be off. `SolarikLighting::reset` drops the temporal history for one frame on a camera cut. `SolarikPlugins::required_wgpu_features()` is what the GPU has to support; if it does not, the plugins log a warning and do nothing.
 
 Imported glTF may need its u16 indices converted to u32 and tangents generated first. The larger scene tests use a separate local rig that is not included in this repository. Solarik and [bevy_dlss5](https://github.com/AlrikOlson/bevy_dlss5), the DLSS 5 Neural Rendering plugin, can share one NGX instance; the two plugins are separate repositories.
 
+Host renderers can opt into denoiser guides with `SolarikLighting { denoise_guides: true, ..Default::default() }`, use `SolarikMaterial3d` for an extended material's ray base, and mark analytical lights with `SolarikLightOff` when an emissive mesh supplies the light. The optional `meshlet` feature enables Bevy's meshlet support; scheduling uses public render stages. These interfaces and their limits are documented in [Metal and host integration](docs/metal-host.md).
+
 ## Requirements
 
-- A GPU with Vulkan ray query support. `SolarikPlugins::required_wgpu_features()` lists the required features.
+- A GPU with Vulkan or Metal ray query support. `SolarikPlugins::required_wgpu_features()` lists the required features.
 - Bevy 0.19.1. Use this crate in place of `bevy_solari`. Development checkouts require the root `bevy_render` patch shown above; the tagged `v0.1.0` setup does not.
 - A zstd decoder for Bevy's KTX2 lookup tables. The default `zstd_rust` feature supplies one. For the C decoder, use `default-features = false` and enable `zstd_c`.
-- For the optional `dlss` feature: `DLSS_SDK`, `VULKAN_SDK` and libclang at build time, plus `nvngx_dlssd.dll` next to the executable. Without it, the output is raw ReSTIR lighting with no denoiser.
+- For the optional `dlss` feature: `DLSS_SDK`, `VULKAN_SDK` and libclang at build time, plus `nvngx_dlssd.dll` next to the executable. Without it, the output is raw ReSTIR lighting unless the host supplies a denoiser using the optional guide textures described below.
 
 ## Known limits
 
 - The deferred rendering path is required. Authored double-sided masked diffuse transmission is supported by the reference pathtracer and bounded realtime primary/reflected foliage paths. GI secondary endpoints preserve the sampled leaf side during reuse; primary ReSTIR receiver payloads still lack foliage transmission. See [foliage setup and validation](docs/foliage.md).
-- An emissive mesh can have at most 65,535 triangles. The scene can have at most 65,535 light sources in total.
+- Emissive triangle indices are sampled at full width; the old 65,535-triangle ceiling is removed. The scene still supports at most 65,535 light sources. Canonical geometry occupies at most two storage pages, each bounded by the adapter's binding and allocation limits.
 - The first realtime GI bounce importance-samples the sky cubemap with hemisphere MIS. The world cache and specular paths retain their existing sampling. See [measurements and limits](docs/sky-sampling.md).
 - Alpha testing adds GPU work. Thin glass transport applies to pathtracer camera/BSDF rays and realtime glossy paths; primary panes composite after opaque lighting. Reference and realtime direct-light shadows and GI connections include pane tint and Fresnel loss. Smooth reflections see finite point/spot spheres and directional disks. Rough/volumetric refraction remains unsupported.
 - This is still an experimental renderer. Check the reference pathtracer when judging lighting changes.

@@ -14,7 +14,6 @@ use bevy_ecs::{
 };
 use bevy_image::ToExtents;
 use bevy_math::UVec2;
-#[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
 use bevy_render::texture::CachedTexture;
 use bevy_render::{
     camera::ExtractedCamera,
@@ -59,10 +58,34 @@ pub struct SolarikLightingResources {
     pub world_cache_a: Buffer,
     pub world_cache_b: Buffer,
     pub world_cache_active_cell_indices: Buffer,
-    pub world_cache_active_cells_count: Buffer,
     pub world_cache_active_cells_dispatch: Buffer,
     pub view_size: UVec2,
 }
+
+/// The denoiser guide set a host
+/// denoiser reads beside the lit frame — written by the
+/// `resolve_denoise_guides` pass (albedos, normal, roughness) and by
+/// `specular_gi.wgsl` (the specular hit distance) when
+/// [`SolarikLighting::denoise_guides`] is set. Every texture is
+/// `Rgba16Float`: one core storage format for the five (roughness and
+/// hit distance in `.r`), so the resolve pass needs no adapter-specific
+/// single-channel storage format and the host sees one pixel format.
+#[derive(Component)]
+pub struct SolarikDenoiseGuideTextures {
+    pub diffuse_albedo: CachedTexture,
+    pub specular_albedo: CachedTexture,
+    /// World-space normal in `.xyz`.
+    pub normal: CachedTexture,
+    /// Perceptual roughness in `.r`.
+    pub roughness: CachedTexture,
+    /// Distance from the primary surface to the specular path's first
+    /// hit in `.r` (metres; `RAY_T_MAX` on a sky miss, 0 where nothing
+    /// was traced).
+    pub specular_hit_distance: CachedTexture,
+}
+
+/// The format every guide texture carries.
+pub const DENOISE_GUIDE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
 pub fn prepare_solari_lighting_resources(
     #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))] query: Query<
@@ -71,6 +94,7 @@ pub fn prepare_solari_lighting_resources(
             &ExtractedCamera,
             Option<&SolarikLightingResources>,
             Option<&MainPassResolutionOverride>,
+            &SolarikLighting,
         ),
         With<SolarikLighting>,
     >,
@@ -80,6 +104,7 @@ pub fn prepare_solari_lighting_resources(
             &ExtractedCamera,
             Option<&SolarikLightingResources>,
             Option<&MainPassResolutionOverride>,
+            &SolarikLighting,
             Has<Dlss<DlssRayReconstructionFeature>>,
         ),
         With<SolarikLighting>,
@@ -89,10 +114,17 @@ pub fn prepare_solari_lighting_resources(
 ) {
     for query_item in &query {
         #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
-        let (entity, camera, solarik_lighting_resources, resolution_override) = query_item;
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        let (entity, camera, solarik_lighting_resources, resolution_override, has_dlss_rr) =
+        let (entity, camera, solarik_lighting_resources, resolution_override, solarik_lighting) =
             query_item;
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        let (
+            entity,
+            camera,
+            solarik_lighting_resources,
+            resolution_override,
+            solarik_lighting,
+            has_dlss_rr,
+        ) = query_item;
 
         let Some(mut view_size) = camera.physical_viewport_size else {
             continue;
@@ -207,8 +239,9 @@ pub fn prepare_solari_lighting_resources(
         });
         let world_cache_b = render_device.create_buffer(&BufferDescriptor {
             label: Some("solarik_lighting_world_cache_b"),
-            size: 1024 * size_of::<u32>() as u64,
-            usage: BufferUsages::STORAGE,
+            // Prefix scan slots 0..1024; final slot is the active count.
+            size: 1025 * size_of::<u32>() as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
@@ -219,16 +252,10 @@ pub fn prepare_solari_lighting_resources(
             mapped_at_creation: false,
         });
 
-        let world_cache_active_cells_count = render_device.create_buffer(&BufferDescriptor {
-            label: Some("solarik_lighting_world_cache_active_cells_count"),
-            size: size_of::<u32>() as u64,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
         let world_cache_active_cells_dispatch = render_device.create_buffer(&BufferDescriptor {
             label: Some("solarik_lighting_world_cache_active_cells_dispatch"),
-            size: size_of::<[u32; 3]>() as u64,
+            // A storage vec3 occupies 16 bytes in Metal; indirect dispatch reads the first 12.
+            size: size_of::<[u32; 4]>() as u64,
             usage: BufferUsages::INDIRECT | BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -250,10 +277,36 @@ pub fn prepare_solari_lighting_resources(
             world_cache_a,
             world_cache_b,
             world_cache_active_cell_indices,
-            world_cache_active_cells_count,
             world_cache_active_cells_dispatch,
             view_size,
         });
+
+        if solarik_lighting.denoise_guides {
+            let guide = |label: &'static str| {
+                let texture = render_device.create_texture(&TextureDescriptor {
+                    label: Some(label),
+                    size: view_size.to_extents(),
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: DENOISE_GUIDE_FORMAT,
+                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+                    view_formats: &[],
+                });
+                let default_view = texture.create_view(&TextureViewDescriptor::default());
+                CachedTexture {
+                    texture,
+                    default_view,
+                }
+            };
+            commands.entity(entity).insert(SolarikDenoiseGuideTextures {
+                diffuse_albedo: guide("solarik_denoise_guide_diffuse_albedo"),
+                specular_albedo: guide("solarik_denoise_guide_specular_albedo"),
+                normal: guide("solarik_denoise_guide_normal"),
+                roughness: guide("solarik_denoise_guide_roughness"),
+                specular_hit_distance: guide("solarik_denoise_guide_specular_hit_distance"),
+            });
+        }
 
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         if has_dlss_rr {

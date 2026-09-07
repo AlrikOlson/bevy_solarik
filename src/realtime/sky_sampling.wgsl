@@ -12,7 +12,7 @@ struct SkyDistribution {
     columns: array<f32, 98304>,
     rows: array<f32, 768>,
 }
-@group(1) @binding(24) var<storage, read_write> sky_distribution: SkyDistribution;
+@group(1) @binding(23) var<storage, read_write> sky_distribution: SkyDistribution;
 var<workgroup> sky_scan: array<f32, 128>;
 
 struct SkyAddress {

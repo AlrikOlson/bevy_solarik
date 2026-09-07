@@ -1,6 +1,9 @@
 use super::{
     SolarikLighting,
-    prepare::{LIGHT_TILE_BLOCKS, SolarikLightingResources, WORLD_CACHE_SIZE},
+    prepare::{
+        DENOISE_GUIDE_FORMAT, LIGHT_TILE_BLOCKS, SolarikDenoiseGuideTextures,
+        SolarikLightingResources, WORLD_CACHE_SIZE,
+    },
 };
 use crate::scene::RaytracingSceneBindings;
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -24,7 +27,7 @@ use bevy_render::{
             storage_buffer_sized, texture_2d, texture_depth_2d, texture_storage_2d, uniform_buffer,
         },
     },
-    renderer::{RenderContext, RenderDevice, ViewQuery},
+    renderer::{RenderAdapterInfo, RenderContext, RenderDevice, ViewQuery},
     view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
 };
 use bevy_render::{
@@ -39,6 +42,9 @@ use bevy_utils::default;
 pub struct SolarikLightingPipelines {
     bind_group_layout: BindGroupLayoutDescriptor,
     bind_group_layout_world_cache_active_cells_dispatch: BindGroupLayoutDescriptor,
+    bind_group_layout_denoise_guides: BindGroupLayoutDescriptor,
+    resolve_denoise_guides_pipeline: CachedComputePipelineId,
+    specular_gi_with_guides_pipeline: CachedComputePipelineId,
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
     bind_group_layout_resolve_dlss_rr_textures: BindGroupLayoutDescriptor,
     build_sky_rows_pipeline: CachedComputePipelineId,
@@ -77,6 +83,7 @@ type SolarikLightingViewQuery = (
     &'static ViewPrepassTextures,
     &'static ViewUniformOffset,
     &'static PreviousViewUniformOffset,
+    Option<&'static SolarikDenoiseGuideTextures>,
 );
 
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -88,6 +95,7 @@ type SolarikLightingViewQuery = (
     &'static ViewPrepassTextures,
     &'static ViewUniformOffset,
     &'static PreviousViewUniformOffset,
+    Option<&'static SolarikDenoiseGuideTextures>,
     Option<&'static ViewDlssRayReconstructionTextures>,
 );
 
@@ -177,9 +185,9 @@ pub fn prepare_primary_glass(
         .collect();
     for view in &views {
         #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
-        let (_, extracted, _, _, textures, _, _) = view;
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         let (_, extracted, _, _, textures, _, _, _) = view;
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        let (_, extracted, _, _, textures, _, _, _, _) = view;
         if textures.deferred_view().is_none()
             || textures.depth_view().is_none()
             || textures.motion_vectors_view().is_none()
@@ -226,6 +234,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         view_prepass_textures,
         view_uniform_offset,
         previous_view_uniform_offset,
+        denoise_guides,
     ) = view.into_inner();
 
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -237,6 +246,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         view_prepass_textures,
         view_uniform_offset,
         previous_view_uniform_offset,
+        denoise_guides,
         view_dlss_rr_textures,
     ) = view.into_inner();
 
@@ -263,6 +273,17 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         pipelines.specular_gi_with_psr_pipeline
     } else {
         pipelines.specular_gi_pipeline
+    };
+
+    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+    let dlss_guides_active = view_dlss_rr_textures.is_some();
+    #[cfg(not(all(feature = "dlss", not(feature = "force_disable_dlss"))))]
+    let dlss_guides_active = false;
+    let denoise_guides = denoise_guides.filter(|_| !dlss_guides_active);
+    let specular_gi_pipeline = if denoise_guides.is_some() {
+        pipelines.specular_gi_with_guides_pipeline
+    } else {
+        specular_gi_pipeline
     };
 
     let (
@@ -347,6 +368,16 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     };
     let foliage_pipeline = pipeline_cache.get_compute_pipeline(foliage_pipeline);
 
+    let resolve_denoise_guides_pipeline = match denoise_guides {
+        Some(_) => {
+            match pipeline_cache.get_compute_pipeline(pipelines.resolve_denoise_guides_pipeline) {
+                Some(pipeline) => Some(pipeline),
+                None => return,
+            }
+        }
+        None => None,
+    };
+
     let view_target_attachment = view_target.get_unsampled_color_attachment();
 
     let s = solarik_lighting_resources;
@@ -377,7 +408,6 @@ pub fn solarik_lighting<const PRIMARY: bool>(
             s.world_cache_a.as_entire_binding(),
             s.world_cache_b.as_entire_binding(),
             s.world_cache_active_cell_indices.as_entire_binding(),
-            s.world_cache_active_cells_count.as_entire_binding(),
             s.sky_distribution.as_entire_binding(),
         )),
     );
@@ -399,6 +429,20 @@ pub fn solarik_lighting<const PRIMARY: bool>(
                 &d.specular_albedo.default_view,
                 &d.normal_roughness.default_view,
                 &d.specular_motion_vectors.default_view,
+            )),
+        )
+    });
+
+    let bind_group_denoise_guides = denoise_guides.map(|g| {
+        render_device.create_bind_group(
+            "solarik_lighting_bind_group_denoise_guides",
+            &pipeline_cache.get_bind_group_layout(&pipelines.bind_group_layout_denoise_guides),
+            &BindGroupEntries::sequential((
+                &g.diffuse_albedo.default_view,
+                &g.specular_albedo.default_view,
+                &g.normal.default_view,
+                &g.roughness.default_view,
+                &g.specular_hit_distance.default_view,
             )),
         )
     });
@@ -441,6 +485,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         ],
     );
 
+    crate::scene::stats::record_dispatch(PRIMARY, false);
     if PRIMARY {
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         if let Some(group) = &bind_group_resolve_dlss_rr_textures {
@@ -468,6 +513,14 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         pass.dispatch_workgroups(dx, dy, 1);
     }
 
+    if let (Some(group), Some(pipeline)) =
+        (&bind_group_denoise_guides, resolve_denoise_guides_pipeline)
+    {
+        pass.set_bind_group(2, group, &[]);
+        pass.set_pipeline(pipeline);
+        pass.dispatch_workgroups(dx, dy, 1);
+        pass.set_bind_group(2, None, &[]);
+    }
     let d = diagnostics.time_span(&mut pass, "solarik_lighting/sky_distribution");
     pass.set_pipeline(build_sky_rows_pipeline);
     pass.dispatch_workgroups(6 * 128, 1, 1);
@@ -571,6 +624,9 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     if let Some(bind_group_resolve_dlss_rr_textures) = &bind_group_resolve_dlss_rr_textures {
         pass.set_bind_group(2, bind_group_resolve_dlss_rr_textures, &[]);
     }
+    if let Some(group) = &bind_group_denoise_guides {
+        pass.set_bind_group(2, group, &[]);
+    }
     pass.set_pipeline(specular_gi_pipeline);
     pass.set_immediates(
         0,
@@ -583,7 +639,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
 
     diagnostics.record_u32(
         ctx.command_encoder(),
-        &s.world_cache_active_cells_count.slice(..),
+        &s.world_cache_b.slice(4096..4100),
         "solarik_lighting/world_cache_active_cells_count",
     );
 }
@@ -594,6 +650,7 @@ pub fn init_solari_lighting_pipelines(
     pipeline_cache: Res<PipelineCache>,
     scene_bindings: Res<RaytracingSceneBindings>,
     asset_server: Res<AssetServer>,
+    adapter: Res<RenderAdapterInfo>,
 ) {
     let bind_group_layout = BindGroupLayoutDescriptor::new(
         "solarik_lighting_bind_group_layout",
@@ -614,7 +671,6 @@ pub fn init_solari_lighting_pipelines(
                 texture_depth_2d(),
                 uniform_buffer::<ViewUniform>(true),
                 uniform_buffer::<PreviousViewData>(true),
-                storage_buffer_sized(false, None),
                 storage_buffer_sized(false, None),
                 storage_buffer_sized(false, None),
                 storage_buffer_sized(false, None),
@@ -648,6 +704,20 @@ pub fn init_solari_lighting_pipelines(
         ),
     );
 
+    let bind_group_layout_denoise_guides = BindGroupLayoutDescriptor::new(
+        "solarik_lighting_bind_group_layout_denoise_guides",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::COMPUTE,
+            (
+                texture_storage_2d(DENOISE_GUIDE_FORMAT, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(DENOISE_GUIDE_FORMAT, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(DENOISE_GUIDE_FORMAT, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(DENOISE_GUIDE_FORMAT, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(DENOISE_GUIDE_FORMAT, StorageTextureAccess::WriteOnly),
+            ),
+        ),
+    );
+
     let create_pipeline = |label: &'static str,
                            entry_point: &'static str,
                            shader: Handle<Shader>,
@@ -666,6 +736,9 @@ pub fn init_solari_lighting_pipelines(
             WORLD_CACHE_SIZE as u32,
         )];
         shader_defs.extend_from_slice(&extra_shader_defs);
+        if adapter.backend.to_str() == "metal" {
+            shader_defs.push("SOLARIK_METAL_ALPHA".into());
+        }
 
         pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some(label.into()),
@@ -685,6 +758,24 @@ pub fn init_solari_lighting_pipelines(
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         bind_group_layout_resolve_dlss_rr_textures: bind_group_layout_resolve_dlss_rr_textures
             .clone(),
+        bind_group_layout_denoise_guides: bind_group_layout_denoise_guides.clone(),
+        resolve_denoise_guides_pipeline: create_pipeline(
+            "solarik_lighting_resolve_denoise_guides_pipeline",
+            "resolve_denoise_guides",
+            load_embedded_asset!(asset_server.as_ref(), "resolve_denoise_guides.wgsl"),
+            Some(&bind_group_layout_denoise_guides),
+            vec!["DENOISE_GUIDE_BUFFERS".into()],
+        ),
+        specular_gi_with_guides_pipeline: create_pipeline(
+            "solarik_lighting_specular_gi_with_guides_pipeline",
+            "specular_gi",
+            load_embedded_asset!(asset_server.as_ref(), "specular_gi.wgsl"),
+            Some(&bind_group_layout_denoise_guides),
+            vec![
+                "DENOISE_GUIDE_BUFFERS".into(),
+                "FOLIAGE_TRANSMISSION".into(),
+            ],
+        ),
         build_sky_rows_pipeline: create_pipeline(
             "solarik_lighting_build_sky_rows_pipeline",
             "build_sky_rows",

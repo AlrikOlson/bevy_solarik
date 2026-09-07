@@ -10,7 +10,7 @@ use bevy_render::{
         ImageSubresourceRange, PipelineCache, ShaderStages, StorageTextureAccess, TextureFormat,
         binding_types::{texture_storage_2d, uniform_buffer},
     },
-    renderer::{RenderContext, RenderDevice, ViewQuery},
+    renderer::{RenderAdapterInfo, RenderContext, RenderDevice, ViewQuery},
     view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
 };
 use bevy_utils::default;
@@ -28,6 +28,7 @@ pub fn init_pathtracer_pipelines(
     pipeline_cache: Res<PipelineCache>,
     scene_bindings: Res<RaytracingSceneBindings>,
     asset_server: Res<AssetServer>,
+    adapter: Res<RenderAdapterInfo>,
 ) {
     let bind_group_layout = BindGroupLayoutDescriptor::new(
         "pathtracer_bind_group_layout",
@@ -41,6 +42,13 @@ pub fn init_pathtracer_pipelines(
         ),
     );
 
+    let mut shader_defs = vec!["FOLIAGE_TRANSMISSION".into()];
+    if adapter.backend.to_str() == "metal" {
+        shader_defs.push("SOLARIK_METAL_ALPHA".into());
+    }
+    if std::env::var("SOLARIK_PATHTRACER_DEBUG_SAMPLE_COUNT").is_ok() {
+        shader_defs.push("PATHTRACER_DEBUG_SAMPLE_COUNT".into());
+    }
     let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("pathtracer_pipeline".into()),
         layout: vec![
@@ -48,14 +56,7 @@ pub fn init_pathtracer_pipelines(
             bind_group_layout.clone(),
         ],
         shader: load_embedded_asset!(asset_server.as_ref(), "pathtracer.wgsl"),
-        shader_defs: if std::env::var("SOLARIK_PATHTRACER_DEBUG_SAMPLE_COUNT").is_ok() {
-            vec![
-                "FOLIAGE_TRANSMISSION".into(),
-                "PATHTRACER_DEBUG_SAMPLE_COUNT".into(),
-            ]
-        } else {
-            vec!["FOLIAGE_TRANSMISSION".into()]
-        },
+        shader_defs,
         ..default()
     });
 
@@ -138,4 +139,5 @@ pub fn pathtracer(
     pass.set_bind_group(0, scene_bind_group, &[]);
     pass.set_bind_group(1, &bind_group, &[view_uniform_offset.offset]);
     pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
+    crate::scene::stats::record_dispatch(false, true);
 }

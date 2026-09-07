@@ -9,7 +9,6 @@ enable wgpu_ray_query;
     world_cache_a,
     world_cache_b,
     world_cache_active_cell_indices,
-    world_cache_active_cells_count,
 }
 
 @group(2) @binding(0) var<storage, read_write> world_cache_active_cells_dispatch: vec3<u32>;
@@ -80,7 +79,7 @@ fn compact_world_cache_write_active_cells(
 
     if thread_index == 1023u && workgroup_id.x == 1023u {
         let active_cell_count = compacted_index + u32(cell_active);
-        world_cache_active_cells_count = active_cell_count;
+        world_cache_b[1024] = active_cell_count;
         world_cache_active_cells_dispatch = vec3((active_cell_count + 63u) / 64u, 1u, 1u);
     }
 }
