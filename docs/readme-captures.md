@@ -1,6 +1,68 @@
 # README capture record
 
-## Current images with the corrected Bistro interior
+## Current images from the weapon inspection build
+
+September 7, 2026 (local): refreshed from the integrated release build containing
+the weapon import and inspection scene. Source bases: playground `fc946ff`,
+Solarik `c531ee0` and DLSS5 `ee359d5`, plus the weapon inspection changes.
+The Bistro scene and renderer source are unchanged by this iteration.
+Executable SHA-256:
+`44d81039a0bb8c47cd5cc61dddf11f794ebfdaa46e1c4a0a9bfd75b2e62bb0c1`.
+Windows/Vulkan, RTX 4090, NVIDIA Studio driver 616.56; build with
+`cargo build --release --locked` in the playground.
+
+These images retain the corrected exterior/interior import described below.
+GPU atmosphere uses High quality, density scales 1, Mie g 0.8, 2,000 m aerial
+distance and IBL scale 1. Native-resolution DLSS Ray Reconstruction is active.
+The preset supplies exposure (12.5/5.0 EV100 day/night) and lamps.
+`SCENE_FX=blur` and `SCENE_DIAG=0`; every warmup holds camera and lighting fixed.
+Historical `night` filenames contain dusk views.
+
+| README image | Resolution | Pose | Warmup frames |
+| --- | --- | --- | ---: |
+| bistro-day.png | 3840×2160 | Timeline 750 / 1800 | 512 |
+| bistro-night.png (dusk) | 3840×2160 | Timeline 1520 / 1800 | 1024 |
+| bistro-temporal-response.png | 1280×720 | Static -14° sun control | 4096 |
+
+NR is off in all three images. The temporal illustration is an independent
+static night control, not a new response-time measurement. Its camera is
+`4,1.6,12`, look target `-3,3,-3`, FOV 50°, timeline 0 / 1800,
+and `SCENE_SUN=-14,-14,90,90`. The earlier measurements remain in
+[temporal response](temporal-response.md).
+
+Independent warmups measure mean sRGB-decoded display-linear luminance with
+weights (0.2126, 0.7152, 0.0722). Absolute changes use the same 0–1 scale.
+
+| View / region | Rectangle x, y, width, height | Warmup frames | Change | Absolute change |
+| --- | --- | --- | ---: | ---: |
+| Day pavement | 430, 1930, 550, 190 | 128 to 512 | +1.21% | +0.000161 |
+| Day facade | 2250, 100, 900, 450 | 128 to 512 | +3.89% | +0.001207 |
+| Day wall | 1110, 1180, 500, 330 | 128 to 512 | +2.78% | +0.000221 |
+| Dusk pavement | 100, 1720, 760, 250 | 512 to 1024 | +0.56% | +0.000057 |
+| Dusk facade | 130, 150, 670, 450 | 512 to 1024 | -0.55% | -0.000523 |
+| Dusk wall | 2150, 1660, 510, 280 | 512 to 1024 | +0.33% | +0.000010 |
+| Night pavement | 40, 560, 230, 120 | 2048 to 4096 | -0.54% | -0.000278 |
+| Night facade | 40, 40, 200, 140 | 2048 to 4096 | -0.66% | -0.001785 |
+| Night cafe wall | 900, 500, 220, 100 | 2048 to 4096 | -3.17% | -0.000166 |
+
+All final images were inspected. All 14 serial Bistro runs produced fresh PNGs,
+exited normally and had no shader or validation errors. NR ON logs confirm active
+evaluation and explicit feature release. The organizer's local
+`artifacts/bevy-sponza/weapon_import_capture.py` records exact launch environments
+and image hashes; `weapon_import_audit.py` records source/binary identity,
+regional settling and all 12 README image paths with matching duplicate hashes.
+Its receipts are `wii-build.json`, `wii-settling.json`,
+`wii-readme-inventory.json` and `wii-final-audit.json`. The latter records one
+nonsemantic difference after capture: final whitespace review removed a trailing
+blank line from the weapon preset, verified by restoring that single newline
+and matching its captured SHA-256. All executable sources and scene values match.
+
+These bounded samples do not establish full convergence. Dark interiors,
+foliage softness and stochastic spatial variation remain. The night control's
+cafe wall changes -3.17% (-0.000166) from 2,048 to 4,096 warmup frames; the
+existing night-image-quality follow-up remains open.
+
+## Historical images with the corrected Bistro interior
 
 September 6, 2026 (local): refreshed from the final integrated release build
 after repairing the Bistro interior import. Source bases: Solarik `df9a05a`,

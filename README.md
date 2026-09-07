@@ -14,7 +14,7 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 ![Bistro terrace at dusk, rendered with Solarik](docs/images/bistro-night.png)
 
-Native 4K captures from the September 6, 2026 development renderer with the
+Native 4K captures from the September 7, 2026 integrated development build with the
 [GPU atmosphere](docs/atmosphere.md), DLSS Ray Reconstruction and the
 Bistro interior reimported at its correct scale. They show development code
 beyond the `v0.1.0` tag.
@@ -34,7 +34,7 @@ lights and foliage transmission, and uses a procedural sky.
 
 ![Bistro after sunset with bounded GI history](docs/images/bistro-temporal-response.png)
 
-Refreshed development night control at 1280×720 with Ray Reconstruction, the
+September 7 development night control at 1280×720 with Ray Reconstruction, the
 GPU atmosphere, correctly scaled Bistro interior and 4,096 fixed-pose warmup frames.
 GI limits old endpoint lifetime and accounts for world-cache update cadence. The
 [response test](docs/temporal-response.md) preserves the earlier transition
