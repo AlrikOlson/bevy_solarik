@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+pub mod atmosphere;
 pub mod pathtracer;
 pub mod realtime;
 pub mod scene;

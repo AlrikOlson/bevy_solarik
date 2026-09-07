@@ -14,19 +14,14 @@ Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are u
 
 ![Bistro terrace at dusk, rendered with Solarik](docs/images/bistro-night.png)
 
-Native 4K captures from the September 6, 2026 development renderer, with DLSS
-Ray Reconstruction, the matching Bistro interior and the corrected mesh-visibility
-lookup in Solarik's renderer fork, refreshed after foliage GI endpoint support.
-They show development code beyond the `v0.1.0` tag.
-Capture settings and source provenance are in [the capture record](docs/readme-captures.md).
-The day image uses 512 warmup frames and dusk uses 1,024. Fixed-camera checks
-found up to 2.6% regional change from 128 to 512 frames by day and 2.8% from
-512 to 1,024 frames at dusk.
-Softness and spatial variation remain.
-See the [renderer validation](docs/renderer-fork.md) and the earlier
-[capture audit](docs/pathtracer-convergence.md).
-The camera exposure and lights use the scene preset; the rig's extra contrast
-and saturation boost is disabled. No DLSS 5 Neural Rendering is applied.
+Native 4K captures from the September 6, 2026 development renderer with the
+[GPU atmosphere](docs/atmosphere.md), DLSS Ray Reconstruction and the matching
+Bistro interior. They show development code beyond the `v0.1.0` tag.
+Day uses 512 fixed-pose warmup frames and dusk uses 1,024. The
+[capture record](docs/readme-captures.md) includes measured settling, settings
+and source provenance. Dark regions, softness and spatial variation remain.
+The scene supplies exposure and lights; extra grading and local artistic fog
+are disabled. No DLSS 5 Neural Rendering is applied.
 
 Scene: [Amazon Lumberyard Bistro, via NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro),
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), using the
@@ -39,15 +34,15 @@ lights and foliage transmission, and uses a procedural sky.
 ![Bistro after sunset with bounded GI history](docs/images/bistro-temporal-response.png)
 
 Refreshed development night control at 1280×720 with Ray Reconstruction, the
-matching Bistro interior and 2,048 fixed-pose warmup frames. GI limits old
-endpoint lifetime and accounts for world-cache update cadence. The
+GPU atmosphere, matching Bistro interior and 2,048 fixed-pose warmup frames.
+GI limits old endpoint lifetime and accounts for world-cache update cadence. The
 [response test](docs/temporal-response.md) preserves the earlier transition
 measurements; this image shows the current renderer at a fixed night state.
 The [capture record](docs/readme-captures.md) documents the remaining settling.
 
 ## What changed
 
-- Rays that leave the scene can pick up light from a sky cubemap.
+- The optional [GPU atmosphere](docs/atmosphere.md) supplies Rayleigh/Mie scattering, ozone, multiple scattering, physical sun/moon attenuation, stars and aerial perspective. Its disk-free cubemap lights rays that leave the scene.
 - Point and spot lights use Bevy's light units and falloff.
 - Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer, primary-foliage realtime pass and bounded glossy/glass reflections. World-cache propagation and ReSTIR GI secondary endpoints also combine both leaf hemispheres; [foliage notes](docs/foliage.md#restir-gi-endpoints) describe side-safe reuse and the remaining primary receiver integration.
 - Development builds resolve [tinted thin glass](docs/glass.md) in reference, realtime camera and glossy paths. Camera panes replace their raster draws when ready. Opaque walls behind glass block the distant background even when raster culling omits them. Direct-light shadows and GI connections include straight pane tint and Fresnel loss.
@@ -110,7 +105,7 @@ fn setup(mut commands: Commands) {
 }
 ```
 
-To add a sky, insert `SolarikSkyLight` with a loaded cubemap handle. Its values should use the same radiance units as the scene:
+Development checkouts can generate a procedural sky with the optional [AtmospherePlugin](docs/atmosphere.md#application-setup). To use a supplied sky, insert `SolarikSkyLight` with a loaded cubemap handle. Its values should use the same radiance units as the scene:
 
 ```rust,ignore
 commands.insert_resource(SolarikSkyLight {

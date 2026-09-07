@@ -55,6 +55,7 @@ impl Plugin for PathtracingPlugin {
                 Core3d,
                 pathtracer
                     .after(Core3dSystems::MainPass)
+                    .before(crate::atmosphere::AtmosphereComposite)
                     .before(tonemapping),
             );
     }

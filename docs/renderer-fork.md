@@ -10,6 +10,18 @@ Applications must apply the root Cargo patch shown in the README. A dependency's
 local renderer too, so the application and Bevy's transitive dependencies must
 resolve to that same crate. Use `cargo tree -i bevy_render` to inspect resolution.
 
+## GPU preparation diagnostics
+
+Atmosphere and generated environment maps encode work during the outer
+`Render` schedule. Starting the diagnostics frame in `RenderGraph::Begin`
+erased those earlier spans and reused their timestamp indices. The recorder
+now starts before `RenderSystems::ExtractCommands`; resolution and submission
+remain after graph rendering. This retains preparation and environment-filter
+GPU timings. The playground enables inside-pass timestamps for diagnostic runs,
+which Bevy's pass spans also require. The atmosphere capture audit checks that
+moving-generation and environment-filter spans are present before accepting
+performance totals.
+
 ## Missing geometry during asynchronous loading
 
 The CPU-visible entity list is sorted by **main-world entity**. Its old lookup

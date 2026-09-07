@@ -1,6 +1,83 @@
 # README capture record
 
-## GI foliage endpoints — current images
+## Current GPU atmosphere images
+
+September 6, 2026 (local): captured from the integrated release build containing
+the GPU clear-sky atmosphere, stable fixed-camera interpolation and shared
+HUD/diagnostic registration, normal capture shutdown and explicit NR resource
+cleanup before runtime unload. Source bases are Solarik `cc1f9e6`, playground
+`460be24` and DLSS5 `4f37244`, plus this iteration's changes.
+Executable SHA-256:
+`b5004c45dea2b72df878318d95b88f13b9144838c55f3d53693725259ef21235`.
+Windows/Vulkan on RTX 4090, NVIDIA Studio driver 616.56; GPU timestamp
+instrumentation disabled for these images. Build with
+`cargo build --release --locked` in the playground. After capture, the staged
+whitespace check removed exactly one trailing newline from `model.wgsl`;
+all other source bytes match the build manifest. The preserved captured shader
+and final artifact audit verify that sole formatting difference.
+
+The original Bistro exterior and matching cafe interior are loaded. Both
+render modes use Solarik and native-resolution DLSS Ray Reconstruction.
+The atmosphere uses the High preset quality, density scales 1, Mie g 0.8,
+2,000 m aerial distance and IBL scale 1. Camera exposure follows the authored
+12.5/5.0 EV100 day/night curve. Local artistic fog and extra grading are off;
+`SCENE_FX=blur` retains the usual camera effects. Camera and lighting stay
+fixed during warmup. Historical `night` filenames below contain dusk views.
+
+| README asset | Resolution | Pose | Fixed warmup frames |
+| --- | --- | --- | ---: |
+| bistro-day.png | 3840×2160 | Timeline 750 / 1800 | 512 |
+| bistro-night.png (dusk) | 3840×2160 | Timeline 1520 / 1800 | 1024 |
+| bistro-temporal-response.png | 1280×720 | Independent −14° sun control | 2048 |
+
+All three images have Neural Rendering off. The temporal-response illustration
+is a fresh static night control, not a new measurement of sunset response.
+
+Independent warmups hold camera and lighting fixed. The metric is regional
+mean sRGB-decoded display-linear luminance with weights (0.2126, 0.7152, 0.0722).
+Absolute changes use the same 0–1 display-linear scale.
+
+| View / region | Rectangle x, y, width, height | Warmup comparison | Luminance change | Absolute change |
+| --- | --- | --- | ---: | ---: |
+| Day pavement | 430, 1930, 550, 190 | 128 to 512 | +1.36% | +0.000181 |
+| Day facade | 2250, 100, 900, 450 | 128 to 512 | +0.07% | +0.000022 |
+| Day wall | 1110, 1180, 500, 330 | 128 to 512 | +5.40% | +0.000425 |
+| Dusk pavement | 100, 1720, 760, 250 | 512 to 1024 | +1.31% | +0.000132 |
+| Dusk facade | 130, 150, 670, 450 | 512 to 1024 | +2.16% | +0.001998 |
+| Dusk wall | 2150, 1660, 510, 280 | 512 to 1024 | +3.76% | +0.000111 |
+| Night pavement | 40, 560, 230, 120 | 512 to 1024 | +1.59% | +0.000831 |
+| Night facade | 40, 40, 200, 140 | 512 to 1024 | -0.64% | -0.001730 |
+| Night cafe wall | 900, 500, 220, 100 | 512 to 1024 | -8.35% | -0.000450 |
+| Night pavement | 40, 560, 230, 120 | 1024 to 2048 | -2.42% | -0.001282 |
+| Night facade | 40, 40, 200, 140 | 1024 to 2048 | +1.57% | +0.004248 |
+| Night cafe wall | 900, 500, 220, 100 | 1024 to 2048 | +4.43% | +0.000219 |
+
+The day wall still changes +5.40% (+0.000425). The night wall changes −8.35%
+from 512 to 1,024 frames, then +4.43% (+0.000219) from 1,024 to 2,048.
+These independent warmups do not establish full convergence. All final images
+were inspected: street geometry, the Vespa, balconies, lamps, glass and shrubs
+remain present; dark shade, foliage softness and spatial variation remain.
+
+The complete set of 16 serial captures exited normally, produced fresh PNGs
+and had no shader/validation errors or Windows NVIDIA driver events. Both NR
+ON logs confirm active evaluation and explicit feature release before shutdown.
+
+From the playground repository in Git Bash:
+
+```bash
+SCENE=bistro NR_RES=3840x2160 NR_START=750 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=512 SCENE_FX=blur SCENE_DIAG=0 NR_OUT=../artifacts/bevy-sponza/sky-readme-day-512 python tools/launch.py capture off
+SCENE=bistro NR_RES=3840x2160 NR_START=1520 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=1024 SCENE_FX=blur SCENE_DIAG=0 NR_OUT=../artifacts/bevy-sponza/sky-readme-dusk-1024 python tools/launch.py capture off
+SCENE=bistro NR_RES=1280x720 NR_START=0 NR_TIMELINE=1800 NR_CAPTURE=1 NR_WARMUP=2048 SCENE_FX=blur SCENE_DIAG=0 SCENE_SUN=-14,-14,90,90 SCENE_CAM_FROM=4,1.6,12 SCENE_LOOK_FROM=-3,3,-3 SCENE_FOV=50 NR_OUT=../artifacts/bevy-sponza/sky-temporal-2048 python tools/launch.py capture off
+```
+
+The local `artifacts/bevy-sponza/sky-build.json` identifies every source file
+and the executable. `sky-settling.json` records regional measurements;
+`sky-readme-inventory.json` verifies all 12 referenced image files across the
+three repositories, including details blocks and identical duplicates.
+See [atmosphere validation](atmosphere.md) for numerical GPU tests, shared
+radiance units, reference rendering and repeated 4K timing.
+
+## Earlier GI foliage endpoint images
 
 September 6, 2026: all three README images are refreshed with Solarik
 `e76ec36` plus the GI endpoint change in this commit, and playground `90f532a`.
@@ -159,7 +236,7 @@ Reproduce using the separate local `bevy-sponza` rig after a release build:
 ```bash
 SCENE=bistro NR_RES=3840x2160 NR_START=100 NR_CAPTURE=1 NR_WARMUP=2048 \
   NR_OUT=../artifacts/bevy-sponza/aperture-readme-day ./capture.sh off
-SCENE=bistro SCENE_DIAG=1 NR_RES=3840x2160 NR_START=400 NR_CAPTURE=1 NR_WARMUP=4096 \
+SCENE=bistro SCENE_DIAG=0 NR_RES=3840x2160 NR_START=400 NR_CAPTURE=1 NR_WARMUP=4096 \
   NR_OUT=../artifacts/bevy-sponza/aperture-readme-night ./capture.sh off
 ```
 
@@ -182,7 +259,7 @@ camera pose from the earlier audit. Against the 2,048-frame image, the
 0.124400 and 0.128171. Inspection shows the same broad lighting and remaining
 shadow blotching and soft foliage. Longer warm-up has not eliminated these
 artifacts, and this pair does not establish a settled GI plateau. Diagnostic
-logging (`SCENE_DIAG=1`) records timings without changing presentation.
+logging (`SCENE_DIAG=0`) records timings without changing presentation.
 
 The README retains the Bistro asset attribution and license. The first
 frame-0 trial was rejected for presentation because a tree hides the street.

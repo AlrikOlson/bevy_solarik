@@ -21,7 +21,7 @@ use wgpu::{BufferSlice, CommandEncoder};
 use bevy_app::{App, Plugin, PreUpdate};
 
 use crate::{
-    GpuResourceAppExt, RenderApp,
+    GpuResourceAppExt, Render, RenderApp, RenderSystems,
     renderer::{PendingCommandBuffers, RenderGraph, RenderGraphSystems},
 };
 
@@ -81,10 +81,15 @@ impl Plugin for RenderDiagnosticsPlugin {
 
         render_app.init_gpu_resource::<DiagnosticsRecorder>();
 
+        // Preparation can encode GPU work (generated environments and atmosphere
+        // LUTs). Begin before it, so RenderGraph does not erase its timestamps.
+        render_app.add_systems(
+            Render,
+            begin_diagnostics_frame.before(RenderSystems::ExtractCommands),
+        );
         render_app.add_systems(
             RenderGraph,
             (
-                begin_diagnostics_frame.in_set(RenderGraphSystems::Begin),
                 resolve_encoder
                     .after(RenderGraphSystems::Render)
                     .before(RenderGraphSystems::Submit),

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Optional GPU clear-sky atmosphere: Rayleigh/Mie scattering, ozone, multiple scattering, attenuated sun/moon lighting, photometric stars and aerial perspective. The visible sky, raster environment and ray-traced transport share physical radiance units. [Controls, numerical validation and limits](docs/atmosphere.md).
+
 - Solarik now includes its own `bevy_render` fork. The CPU-visible entity lookup uses the list's main-entity ordering, preserving visible meshes while their materials load. Applications using development checkouts must apply the root Cargo patch documented in the README; tagged `v0.1.0` is unchanged.
 
 - Realtime primary foliage now uses a depth-matched, four-path/four-vertex estimator with two-sided diffuse transport and stable leaf DLSS guides. Existing opaque pixels and caches retain their shading; [Bistro validation and measured cost](docs/foliage.md) document the limits.

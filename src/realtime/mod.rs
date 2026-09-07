@@ -98,6 +98,7 @@ impl Plugin for SolarikLightingPlugin {
                     // overwrite masked pixels. Depth-zero pixels retain sky.
                     .chain()
                     .after(main_opaque_pass_3d)
+                    .after(crate::atmosphere::AtmosphereBackground)
                     .before(main_transparent_pass_3d)
                     .in_set(Core3dSystems::MainPass),
             );
