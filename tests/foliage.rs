@@ -2,17 +2,21 @@
 use wgpu::util::DeviceExt;
 
 #[test]
-#[ignore = "requires a Vulkan GPU; run separately from builds and scene captures"]
+#[ignore = "requires a GPU (SOLARIK_TEST_BACKEND=metal for Metal); run separately from builds and captures"]
 fn foliage_gpu() {
     futures_lite::future::block_on(async {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: if std::env::var("SOLARIK_TEST_BACKEND").as_deref() == Ok("metal") {
+                wgpu::Backends::METAL
+            } else {
+                wgpu::Backends::VULKAN
+            },
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = instance
             .request_adapter(&Default::default())
             .await
-            .expect("Vulkan adapter");
+            .expect("GPU adapter");
         let (device, queue) = adapter
             .request_device(&Default::default())
             .await

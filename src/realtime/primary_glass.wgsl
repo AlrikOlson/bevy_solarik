@@ -3,7 +3,7 @@ enable wgpu_ray_query;
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, offset_thin_glass_ray}
 #import bevy_solarik::gbuffer_utils::{reconstruct_world_position, ResolvedGPixel}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, RAY_T_MAX}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, instance_material_id, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, RAY_T_MAX}
 #import bevy_solarik::specular_gi::trace_glossy_path
 #import bevy_solarik::surface_path::shade_surface_path
 #import bevy_solarik::realtime_bindings::{view_output, depth_buffer, view, constants}
@@ -45,7 +45,7 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
         if remaining <= RAY_T_MIN { return vec4(radiance + transmission * background, has_glass); }
         let ray = trace_glass_ray(origin, direction, RAY_T_MIN, remaining);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE { return vec4(radiance + transmission * background, has_glass); }
-        let material = materials[material_ids[ray.instance_index]];
+        let material = materials[instance_material_id(ray.instance_index)];
         if (material.flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) == 0u {
             // Raster depth bounds this query. An earlier opaque hit was omitted
             // by raster (e.g. a building's back-facing wall), so sky/background

@@ -13,7 +13,6 @@ enable wgpu_ray_query;
     world_cache_a,
     world_cache_b,
     world_cache_active_cell_indices,
-    world_cache_active_cells_count,
     WorldCacheGeometryData,
 }
 

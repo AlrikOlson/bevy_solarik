@@ -4,7 +4,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::rand_f
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
 #import bevy_solarik::sampling::{analytic_light_radiance, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, sample_sky, light_sources, ResolvedRayHitFull, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, sample_sky, light_sources, scene_light_count, ResolvedRayHitFull, materials, instance_material_id, resolve_material_alpha, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 
 // A separate estimator avoids feeding two-sided samples to one-sided caches.
@@ -24,7 +24,7 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
     for (var bounce = 0u; bounce < 4u; bounce += 1u) {
         let last = bounce == 3u;
         let mirror = hit.material.roughness <= MIRROR_ROUGHNESS_THRESHOLD && hit.material.metallic > 0.9999;
-        if !mirror && arrayLength(&light_sources) > 0u {
+        if !mirror && scene_light_count() > 0u {
             let shadow = sample_random_light_transmitted(hit.world_position,
                 hit.world_normal, hit.geometric_world_normal, rng);
             let light = shadow.light;
@@ -54,7 +54,7 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
                 return radiance + throughput * sample_sky(wi);
             }
             let candidate = resolve_ray_hit_full(ray);
-            let raw = materials[material_ids[ray.instance_index]];
+            let raw = materials[instance_material_id(ray.instance_index)];
             let glass = (raw.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
             let coverage = (raw.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u;
             if (glass || coverage) && panes == 32u { return radiance; }

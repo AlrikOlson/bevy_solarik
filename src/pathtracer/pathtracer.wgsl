@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
 #import bevy_solarik::sampling::{analytic_light_radiance, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, ggx_vndf_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, materials, instance_material_id, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 
@@ -51,7 +51,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if ray.kind != RAY_QUERY_INTERSECTION_NONE {
             let ray_hit = resolve_ray_hit_full(ray);
             let wo = -ray_direction;
-            let material = materials[material_ids[ray.instance_index]];
+            let material = materials[instance_material_id(ray.instance_index)];
             if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
                 let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
                 if rand_f(&rng) >= alpha {

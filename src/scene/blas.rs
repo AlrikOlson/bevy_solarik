@@ -1,12 +1,15 @@
+use super::geometry::VertexLayout;
 use super::light_sampling::{triangle_edges, world_area};
 use alloc::collections::VecDeque;
 use bevy_asset::AssetId;
 use bevy_ecs::{
+    change_detection::Mut,
     resource::Resource,
     system::{Res, ResMut},
+    world::World,
 };
 use bevy_math::{Mat4, Vec3};
-use bevy_mesh::{Indices, Mesh};
+use bevy_mesh::Mesh;
 use bevy_platform::collections::{HashMap, HashSet};
 use bevy_render::{
     mesh::{
@@ -25,6 +28,10 @@ const MAX_COMPACTION_VERTICES_PER_FRAME: u32 = 400_000;
 #[derive(Resource, Default)]
 pub struct BlasManager {
     blas: HashMap<AssetId<Mesh>, Blas>,
+    layouts: HashMap<AssetId<Mesh>, VertexLayout>,
+    rejected: HashMap<AssetId<Mesh>, String>,
+    revisions: HashMap<AssetId<Mesh>, u64>,
+    next_revision: u64,
     triangle_edges: HashMap<AssetId<Mesh>, Vec<[Vec3; 2]>>,
     compaction_queue: VecDeque<(AssetId<Mesh>, u32, bool)>,
     opacity: OpacityBook,
@@ -34,10 +41,28 @@ pub struct BlasManager {
 }
 
 impl BlasManager {
+    fn queue_compaction(&mut self, mesh: AssetId<Mesh>, vertices: u32) {
+        // Tickets address a mesh slot. Replacing its BLAS invalidates every
+        // earlier ticket, including one already awaiting async compaction.
+        self.compaction_queue
+            .retain(|(queued, _, _)| *queued != mesh);
+        self.compaction_queue.push_back((mesh, vertices, false));
+    }
+
+    pub(super) fn vertex_layout(&self, mesh: &AssetId<Mesh>) -> Option<VertexLayout> {
+        self.layouts.get(mesh).copied()
+    }
+    pub(super) fn mesh_revision(&self, mesh: &AssetId<Mesh>) -> u64 {
+        self.revisions.get(mesh).copied().unwrap_or(0)
+    }
     pub fn mesh_world_area(&self, mesh: &AssetId<Mesh>, transform: Mat4) -> f64 {
         self.triangle_edges
             .get(mesh)
             .map_or(0.0, |edges| world_area(edges, transform))
+    }
+
+    pub(super) fn rejection(&self, mesh: &AssetId<Mesh>) -> Option<&str> {
+        self.rejected.get(mesh).map(String::as_str)
     }
 
     pub fn get(&self, mesh: &AssetId<Mesh>) -> Option<&Blas> {
@@ -110,15 +135,35 @@ pub fn prepare_raytracing_blas(
         .chain(extracted_meshes.modified.iter())
     {
         blas_manager.blas.remove(asset_id);
+        blas_manager.layouts.remove(asset_id);
+        blas_manager.rejected.remove(asset_id);
+        blas_manager.revisions.remove(asset_id);
         blas_manager.triangle_edges.remove(asset_id);
         blas_manager.opacity.forget(asset_id);
     }
 
     for (asset_id, mesh) in &extracted_meshes.extracted {
-        if is_mesh_raytracing_compatible(mesh) {
+        if let Some(layout) = VertexLayout::of(mesh) {
+            blas_manager.layouts.insert(*asset_id, layout);
+            blas_manager.next_revision += 1;
+            let revision = blas_manager.next_revision;
+            blas_manager.revisions.insert(*asset_id, revision);
             blas_manager
                 .triangle_edges
                 .insert(*asset_id, triangle_edges(mesh));
+        } else {
+            let attributes: Vec<_> = mesh.attributes().map(|(a, _)| a.name).collect();
+            blas_manager.rejected.insert(
+                *asset_id,
+                format!(
+                    "enabled={} topology={:?} vertices={} indices={:?} attributes={attributes:?}",
+                    mesh.enable_raytracing,
+                    mesh.primitive_topology(),
+                    mesh.count_vertices(),
+                    mesh.indices()
+                        .map(|i| (matches!(i, bevy_mesh::Indices::U32(_)), i.len()))
+                ),
+            );
         }
     }
 
@@ -161,9 +206,7 @@ pub fn prepare_raytracing_blas(
 
             blas_manager.blas.insert(asset_id, blas);
             blas_manager.opacity.record_built(asset_id, non_opaque);
-            blas_manager
-                .compaction_queue
-                .push_back((asset_id, blas_size.vertex_count, false));
+            blas_manager.queue_compaction(asset_id, blas_size.vertex_count);
 
             (asset_id, vertex_slice, index_slice, blas_size)
         })
@@ -177,7 +220,7 @@ pub fn prepare_raytracing_blas(
                 size: blas_size,
                 vertex_buffer: vertex_slice.buffer,
                 first_vertex: vertex_slice.range.start,
-                vertex_stride: 48,
+                vertex_stride: u64::from(blas_manager.layouts[asset_id].stride) * 4,
                 index_buffer: Some(index_slice.buffer),
                 first_index: Some(index_slice.range.start),
                 transform_buffer: None,
@@ -197,10 +240,15 @@ pub fn prepare_raytracing_blas(
     render_queue.submit([command_encoder.finish()]);
 }
 
-pub fn compact_raytracing_blas(
-    mut blas_manager: ResMut<BlasManager>,
-    render_queue: Res<RenderQueue>,
-) {
+/// Compaction must not interleave with meshlet `Queue::submit` on Metal:
+/// wgpu's snatch/command-index lock order otherwise deadlocks at startup.
+pub fn compact_raytracing_blas(world: &mut World) {
+    world.resource_scope(|world, mut manager: Mut<BlasManager>| {
+        compact_queue(&mut manager, world.resource::<RenderQueue>());
+    });
+}
+
+fn compact_queue(blas_manager: &mut BlasManager, render_queue: &RenderQueue) {
     let queue_size = blas_manager.compaction_queue.len();
     let mut meshes_processed = 0;
     let mut vertices_compacted = 0;
@@ -274,24 +322,57 @@ fn allocate_blas(
 }
 
 fn is_mesh_raytracing_compatible(mesh: &Mesh) -> bool {
-    let triangle_list = mesh.primitive_topology() == PrimitiveTopology::TriangleList;
-    let vertex_attributes = mesh.attributes().map(|(attribute, _)| attribute.id).eq([
-        Mesh::ATTRIBUTE_POSITION.id,
-        Mesh::ATTRIBUTE_NORMAL.id,
-        Mesh::ATTRIBUTE_UV_0.id,
-        Mesh::ATTRIBUTE_TANGENT.id,
-    ]);
-    let indexed_32 = matches!(mesh.indices(), Some(Indices::U32(..)));
-    mesh.enable_raytracing && triangle_list && vertex_attributes && indexed_32
+    VertexLayout::of(mesh).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy_asset::uuid::Uuid;
+    use bevy_mesh::Indices;
 
     fn mesh(n: u128) -> AssetId<Mesh> {
         AssetId::from(Uuid::from_u128(n))
+    }
+
+    #[test]
+    fn replacement_cancels_pending_compaction_of_the_old_blas() {
+        let mut manager = BlasManager::default();
+        manager.compaction_queue.push_back((mesh(1), 100, true));
+        manager.compaction_queue.push_back((mesh(2), 200, false));
+        // The same mesh receives a new BLAS after an opacity or geometry change.
+        manager.queue_compaction(mesh(1), 300);
+        assert_eq!(
+            manager.compaction_queue.len(),
+            2,
+            "one ticket per live BLAS"
+        );
+        assert_eq!(manager.compaction_queue[0], (mesh(2), 200, false));
+        assert_eq!(manager.compaction_queue[1], (mesh(1), 300, false));
+    }
+
+    #[test]
+    fn canonical_colour_uv1_and_skin_streams_remain_raytraceable() {
+        let mut source = Mesh::new(PrimitiveTopology::TriangleList, Default::default());
+        source.enable_raytracing = true;
+        source.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0, 0.0, 0.0]; 3]);
+        source.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; 3]);
+        source.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; 3]);
+        source.insert_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.25, 0.75]; 3]);
+        source.insert_attribute(Mesh::ATTRIBUTE_TANGENT, vec![[1.0, 0.0, 0.0, 1.0]; 3]);
+        source.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.2, 0.4, 0.6, 1.0]; 3]);
+        source.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, vec![[1.0, 0.0, 0.0, 0.0]; 3]);
+        source.insert_indices(Indices::U32(vec![0, 1, 2]));
+        let before = source.create_packed_vertex_buffer_data();
+        assert!(
+            is_mesh_raytracing_compatible(&source),
+            "extra canonical streams must not reject a mesh"
+        );
+        assert_eq!(
+            source.create_packed_vertex_buffer_data(),
+            before,
+            "inspection cannot strip or rewrite source data"
+        );
     }
 
     #[test]

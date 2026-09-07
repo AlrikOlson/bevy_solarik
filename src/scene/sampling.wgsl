@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
 #import bevy_solarik::thin_glass::thin_glass_weights
-#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, scene_light_count, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, instance_material_id, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
     return balance_heuristic(f * f, g * g);
@@ -171,22 +171,33 @@ fn random_emissive_light_pdf(hit: ResolvedRayHitFull) -> f32 {
     return hit.light_probability / area;
 }
 
+// Full-width primitive id and an independent barycentric seed. ReSTIR keeps
+// the original seed unchanged across spatial/temporal sample reuse.
+fn emissive_primitive_sample(seed: u32, triangle_count: u32) -> vec2<u32> {
+    var rng = seed;
+    let primitive = rand_range_u(triangle_count, &rng);
+    return vec2(primitive, rand_u(&rng));
+}
+
 fn generate_random_light_sample(rng: ptr<function, u32>) -> GenerateRandomLightSampleResult {
-    let light_count = arrayLength(&light_sources);
+    let light_count = scene_light_count();
+    if light_count == 0u {
+        var empty: GenerateRandomLightSampleResult;
+        empty.light_sample = LightSample(NULL_LIGHT_ID, 0u);
+        empty.resolved_light_sample.world_position = vec4(0.0, 1.0, 0.0, LIGHT_SAMPLE_DIRECTIONAL);
+        empty.resolved_light_sample.world_normal = vec3(0.0, -1.0, 0.0);
+        return empty;
+    }
     let bin_id = rand_range_u(light_count, rng);
     let bin = light_sources[bin_id];
     let light_id = select(bin.alias_index, bin_id, rand_f(rng) < bin.alias_threshold);
 
     let light_source = light_sources[light_id];
 
-    var triangle_id = 0u;
-    if light_source_is_emissive_mesh(light_source) {
-        let triangle_count = light_source.kind >> 1u;
-        triangle_id = rand_range_u(triangle_count, rng);
-    }
-
+    // Replay both the primitive and barycentric draws from this seed. The
+    // primitive no longer truncates to 16 bits in the reservoir light id.
     let seed = rand_u(rng);
-    let light_sample = LightSample((light_id << 16u) | triangle_id, seed);
+    let light_sample = LightSample(light_id << 16u, seed);
 
     var resolved_light_sample = resolve_light_sample(light_sample, light_source);
     resolved_light_sample.inverse_pdf /= light_source.selection_probability;
@@ -248,11 +259,12 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
         );
     } else {
         let triangle_count = light_source.kind >> 1u;
-        let triangle_id = light_sample.light_id & 0xFFFFu;
-        let barycentrics = triangle_barycentrics(light_sample.seed);
+        let primitive = emissive_primitive_sample(light_sample.seed, triangle_count);
+        let triangle_id = primitive.x;
+        let barycentrics = triangle_barycentrics(primitive.y);
         let triangle_data = resolve_triangle_data_full(light_source.id, triangle_id, barycentrics);
 
-        let raw_material = materials[material_ids[light_source.id]];
+        let raw_material = materials[instance_material_id(light_source.id)];
         var emission = triangle_data.material.emissive.rgb;
         if (raw_material.flags & (MATERIAL_FLAG_DIFFUSE_BLEND | MATERIAL_FLAG_ALPHA_BLEND)) != 0u {
             emission *= clamp(resolve_material_alpha(raw_material, triangle_data.uv), 0.0, 1.0);
@@ -422,7 +434,7 @@ fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t
         let ray = trace_glass_ray(origin, direction, ray_t_min, ray_t_max);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE { return transmission; }
         if panes == 32u { return vec4(0.0); }
-        let raw_material = materials[material_ids[ray.instance_index]];
+        let raw_material = materials[instance_material_id(ray.instance_index)];
         let hit = resolve_ray_hit_full(ray);
         let alpha = clamp(resolve_material_alpha(raw_material, hit.uv), 0.0, 1.0);
         if (raw_material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {

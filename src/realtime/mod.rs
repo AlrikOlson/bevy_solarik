@@ -22,11 +22,12 @@ use bevy_render::{
 };
 use bevy_shader::load_shader_library;
 use extract::extract_solari_lighting;
+pub use node::solarik_lighting;
 use node::{
-    PrimaryGlassViews, init_solari_lighting_pipelines, prepare_primary_glass,
-    restore_primary_glass, solarik_lighting,
+    PrimaryGlassViews, init_solari_lighting_pipelines, prepare_primary_glass, restore_primary_glass,
 };
 use prepare::prepare_solari_lighting_resources;
+pub use prepare::{DENOISE_GUIDE_FORMAT, SolarikDenoiseGuideTextures};
 use tracing::warn;
 
 /// Raytraced direct and indirect lighting.
@@ -53,6 +54,7 @@ impl Plugin for SolarikLightingPlugin {
         embedded_asset!(app, "world_cache_update.wgsl");
 
         load_shader_library!(app, "resolve_dlss_rr_textures.wgsl");
+        embedded_asset!(app, "resolve_denoise_guides.wgsl");
 
         app.insert_resource(DefaultOpaqueRendererMethod::deferred());
     }
@@ -69,6 +71,20 @@ impl Plugin for SolarikLightingPlugin {
             );
             return;
         }
+
+        // Bevy's meshlet opaque pass is private and runs before main_opaque_pass_3d.
+        // The public stage boundary orders lighting before both opaque passes.
+        let base = solarik_lighting::<false>
+            .after(Core3dSystems::Prepass)
+            .before(Core3dSystems::MainPass);
+        // Primary panes need the opaque sky result; the denoiser follows them.
+        let primary = solarik_lighting::<true>
+            .after(solarik_lighting::<false>)
+            .after(main_opaque_pass_3d)
+            .after(crate::atmosphere::AtmosphereBackground)
+            .before(bevy_pbr::main_transmissive_pass_3d)
+            .before(main_transparent_pass_3d)
+            .in_set(Core3dSystems::MainPass);
 
         render_app
             .init_resource::<PrimaryGlassViews>()
@@ -90,18 +106,7 @@ impl Plugin for SolarikLightingPlugin {
                 Render,
                 prepare_solari_lighting_resources.in_set(RenderSystems::PrepareResources),
             )
-            .add_systems(
-                Core3d,
-                (solarik_lighting::<false>, solarik_lighting::<true>)
-                    // Bevy 0.19 queues deferred alpha masks in the forward main
-                    // pass too. Resolve after it so raster lighting cannot
-                    // overwrite masked pixels. Depth-zero pixels retain sky.
-                    .chain()
-                    .after(main_opaque_pass_3d)
-                    .after(crate::atmosphere::AtmosphereBackground)
-                    .before(main_transparent_pass_3d)
-                    .in_set(Core3dSystems::MainPass),
-            );
+            .add_systems(Core3d, (base, primary));
     }
 }
 
@@ -128,12 +133,15 @@ pub struct SolarikLighting {
     /// After setting this to true, it will automatically be toggled
     /// back to false at the end of the frame.
     pub reset: bool,
+    /// Produce the explicit albedo, normal, roughness and hit-distance textures for a host denoiser.
+    pub denoise_guides: bool,
 }
 
 impl Default for SolarikLighting {
     fn default() -> Self {
         Self {
             reset: true, // No temporal history on the first frame
+            denoise_guides: false,
         }
     }
 }

@@ -19,7 +19,9 @@ pub mod scene;
 pub mod prelude {
     pub use super::SolarikPlugins;
     pub use crate::realtime::SolarikLighting;
-    pub use crate::scene::{RaytracingMesh3d, SolarikAlphaTesting, SolarikSkyLight};
+    pub use crate::scene::{
+        RaytracingMesh3d, SolarikAlphaTesting, SolarikLightOff, SolarikMaterial3d, SolarikSkyLight,
+    };
 }
 
 use crate::realtime::SolarikLightingPlugin;
@@ -51,7 +53,6 @@ impl SolarikPlugins {
     /// [`WgpuFeatures`] required for these plugins to function.
     pub fn required_wgpu_features() -> WgpuFeatures {
         WgpuFeatures::EXPERIMENTAL_RAY_QUERY
-            | WgpuFeatures::BUFFER_BINDING_ARRAY
             | WgpuFeatures::TEXTURE_BINDING_ARRAY
             | WgpuFeatures::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
             | WgpuFeatures::PARTIALLY_BOUND_BINDING_ARRAY
