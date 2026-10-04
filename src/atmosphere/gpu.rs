@@ -20,12 +20,12 @@ use bevy_render::{
     render_resource::{
         AddressMode, BindGroup, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
         CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, Extent3d,
-        FilterMode, PipelineCache, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages,
-        StorageTextureAccess, TextureDescriptor, TextureDimension, TextureFormat,
-        TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
-        UniformBuffer,
+        FilterMode, MipmapFilterMode, PipelineCache, Sampler, SamplerBindingType,
+        SamplerDescriptor, ShaderStages, StorageTextureAccess, TextureDescriptor, TextureDimension,
+        TextureFormat, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor,
+        TextureViewDimension, UniformBuffer,
         binding_types::{
-            sampler, texture_2d, texture_3d, texture_depth_2d, texture_storage_2d,
+            sampler, texture_2d, texture_3d, texture_cube, texture_depth_2d, texture_storage_2d,
             texture_storage_2d_array, texture_storage_3d, uniform_buffer,
         },
     },
@@ -144,6 +144,8 @@ struct AtmosphereGpu {
     sky: TextureView,
     aerial_scattering: TextureView,
     aerial_transmittance: TextureView,
+    /// Bound when the planet supplies no weather map, or before it is ready.
+    weather_fallback: TextureView,
     stages: Vec<Stage>,
     last: Option<AtmosphereState>,
     last_planet: Option<PlanetaryAtmosphere>,
@@ -246,6 +248,10 @@ fn initialize_atmosphere(
                             StorageTextureAccess::ReadWrite,
                         ),
                     ),
+                    (
+                        10,
+                        texture_cube(TextureSampleType::Float { filterable: true }),
+                    ),
                 ),
             )
             .to_vec(),
@@ -291,6 +297,22 @@ fn initialize_atmosphere(
             })
             .create_view(&TextureViewDescriptor::default())
     };
+    let weather_fallback = device
+        .create_texture(&TextureDescriptor {
+            label: Some("atmosphere_weather_fallback"),
+            size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 6,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&cube_view());
     commands.insert_resource(AtmosphereGpu {
         uniform: UniformBuffer::from(AtmosphereState::default().uniform()),
         filtering: device.create_sampler(&SamplerDescriptor {
@@ -298,6 +320,8 @@ fn initialize_atmosphere(
             address_mode_u: AddressMode::Repeat,
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
+            // Weather maps may carry mips; the lookup fields have one level.
+            mipmap_filter: MipmapFilterMode::Linear,
             ..Default::default()
         }),
         trans: texture(
@@ -335,11 +359,19 @@ fn initialize_atmosphere(
             32,
             TextureFormat::Rgba16Float,
         ),
+        weather_fallback,
         stages,
         last: None,
         last_planet: None,
         last_cube: None,
     });
+}
+
+fn cube_view() -> TextureViewDescriptor<'static> {
+    TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..Default::default()
+    }
 }
 
 fn make_group(
@@ -407,6 +439,12 @@ fn generate_atmosphere(
         tracing::error!("invalid planetary atmosphere: {error}");
         return;
     }
+    // A supplied weather map must reach the GPU before the layer switches to it.
+    if let Some(weather) = planet.as_deref().and_then(|p| p.weather.as_ref())
+        && images.get(weather).is_none()
+    {
+        return;
+    }
     if gpu
         .stages
         .iter()
@@ -431,6 +469,12 @@ fn generate_atmosphere(
         );
         gpu.uniform.get_mut().occluder =
             (planet.occluder * 0.001).extend(planet.occluder_radius * 0.001);
+        gpu.uniform.get_mut().cloud = bevy_math::Vec4::new(
+            planet.cloud_base * 0.001,
+            planet.cloud_top * 0.001,
+            f32::from(planet.weather.is_some()),
+            planet.cloud_detail,
+        );
     }
     gpu.uniform.write_buffer(&device, &queue);
     let cube = image.texture.create_view(&TextureViewDescriptor {
@@ -487,6 +531,8 @@ fn compose_atmosphere<const BACKGROUND: bool>(
         &ViewUniformOffset,
     )>,
     gpu: Option<Res<AtmosphereGpu>>,
+    planet: Option<Res<PlanetaryAtmosphere>>,
+    images: Res<RenderAssets<GpuImage>>,
     cache: Res<PipelineCache>,
     device: Res<RenderDevice>,
     uniforms: Res<ViewUniforms>,
@@ -506,6 +552,11 @@ fn compose_atmosphere<const BACKGROUND: bool>(
     ) else {
         return;
     };
+    let weather = planet
+        .as_deref()
+        .and_then(|p| p.weather.as_ref())
+        .and_then(|handle| images.get(handle))
+        .map(|image| image.texture.create_view(&cube_view()));
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
     let indices: &[usize] = if BACKGROUND { &[6] } else { &[4, 5] };
@@ -555,6 +606,14 @@ fn compose_atmosphere<const BACKGROUND: bool>(
                     resource: bevy_render::render_resource::BindingResource::TextureView(texture),
                 }),
         );
+        if index != 4 {
+            entries.push(BindGroupEntry {
+                binding: 10,
+                resource: bevy_render::render_resource::BindingResource::TextureView(
+                    weather.as_ref().unwrap_or(&gpu.weather_fallback),
+                ),
+            });
+        }
         let group = device.create_bind_group(
             "atmosphere_view_group",
             &cache.get_bind_group_layout(&gpu.stages[index].layout),

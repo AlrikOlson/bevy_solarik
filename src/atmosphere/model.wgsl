@@ -18,6 +18,7 @@ struct AtmosphereParams {
     planet: vec4<f32>, // observer body-local km; radius km (zero = local-ground mode)
     shell: vec4<f32>, // outer radius km; cloud coverage, extinction/km, seed
     occluder: vec4<f32>, // body-local centre km, radius km
+    cloud: vec4<f32>, // shell base km, shell top km, weather map enable, detail strength
 }
 
 fn ground_radius(p: AtmosphereParams) -> f32 { return select(GROUND_RADIUS, p.planet.w, p.planet.w > 0.0); }
@@ -67,9 +68,16 @@ fn weather_noise(q: vec3<f32>) -> f32 {
     let d=mix(weather_hash(cell+vec3(0,1,1)),weather_hash(cell+vec3(1,1,1)),f.x);
     return mix(mix(a,b,f.y),mix(c,d,f.y),f.z);
 }
-// Horizontal cloud cover in 0..1 for a body-fixed unit direction.
-fn cloud_cover(p: AtmosphereParams, unit: vec3<f32>, footprint: f32) -> f32 {
-    if p.shell.y <= 0.0 { return 0.0; }
+// Local state of the cloud layer above one body-fixed direction.
+struct CloudWeather {
+    cover: f32, // horizontal cover in 0..1
+    top: f32, // cloud-top altitude, km
+    density: f32, // extinction scale in 0..1
+}
+
+// Built-in cover when no weather map is supplied: warped value noise with no
+// physical basis, kept so the layer works standalone.
+fn cloud_noise_cover(p: AtmosphereParams, unit: vec3<f32>, footprint: f32) -> f32 {
     let q = unit*12.0 + vec3(p.shell.w*0.013);
     let warp = vec3(weather_noise(q+vec3(7.0,2.0,9.0)),weather_noise(q+vec3(3.0,8.0,1.0)),weather_noise(q+vec3(1.0,4.0,5.0)));
     let w=q+warp*3.0;
@@ -78,25 +86,90 @@ fn cloud_cover(p: AtmosphereParams, unit: vec3<f32>, footprint: f32) -> f32 {
     return smoothstep(0.85-0.8*p.shell.y, 1.0-0.8*p.shell.y, large+detail);
 }
 
-// Vertical density profile of the shell in 0..1 at altitude h km.
-fn cloud_envelope(h: f32) -> f32 {
-    return smoothstep(CLOUD_BASE,CLOUD_BASE+1.0,h)*(1.0-smoothstep(CLOUD_TOP-2.0,CLOUD_TOP,h));
+// Cloud water has a k^(-5/3) spectrum (Cahalan & Snider 1989), so each octave
+// below the map's texel carries 2^(-1/3) of the previous octave's amplitude.
+const CLOUD_DETAIL_GAIN: f32 = 0.793701;
+const CLOUD_DETAIL_OCTAVES: u32 = 3u;
+// Standard deviation of one octave of weather_noise mapped to [-1, 1],
+// measured numerically.
+const CLOUD_DETAIL_STD: f32 = 0.3698;
+
+// Zero-mean detail continuing a weather map below its texel size, down to the
+// sampling footprint. Returns 0 when the footprint cannot resolve it.
+fn cloud_detail(position: vec3<f32>, texel: f32, footprint: f32) -> f32 {
+    var wavelength = texel;
+    var amplitude = 1.0;
+    var sum = 0.0;
+    var power = 0.0;
+    for (var octave = 0u; octave < CLOUD_DETAIL_OCTAVES; octave++) {
+        if wavelength < 2.0*footprint { break; }
+        sum += amplitude*(weather_noise(position/wavelength+vec3(f32(octave)*31.0))*2.0-1.0);
+        power += amplitude*amplitude;
+        amplitude *= CLOUD_DETAIL_GAIN;
+        wavelength *= 0.5;
+    }
+    return sum/CLOUD_DETAIL_STD;
 }
 
-// Integral of smoothstep(0, 1, t) from 0 to x, continued linearly past 1.
-fn smoothstep_integral(x: f32) -> f32 {
-    let c = clamp(x, 0.0, 1.0);
-    return c*c*c-0.5*c*c*c*c+max(x-1.0, 0.0);
+// Weather above a body-fixed position. A weather map (p.cloud.z > 0) is a
+// cube sampled with the position's direction: R is cover, G the cloud-top
+// height as a fraction of the shell and B an extinction scale. The map owns
+// cover; the coverage control then only enables the layer. p.cloud.w is the
+// cover change one standard deviation of sub-texel detail causes at a cloud
+// edge; zero disables detail.
+fn cloud_weather(p: AtmosphereParams, position: vec3<f32>, footprint: f32,
+    weather: texture_cube<f32>, filtering: sampler) -> CloudWeather {
+    if p.shell.y <= 0.0 { return CloudWeather(0.0, p.cloud.y, 0.0); }
+    let unit = normalize(position);
+    if p.cloud.z > 0.5 {
+        // A footprint wider than a texel reads the mip that averages it;
+        // a map without mips clamps to its only level.
+        let texel_size = 2.0*ground_radius(p)/f32(textureDimensions(weather).x);
+        let texel = textureSampleLevel(weather, filtering, unit, log2(max(footprint/texel_size, 1.0)));
+        var cover = texel.r;
+        if p.cloud.w > 0.0 && cover > 0.02 && cover < 0.98 && footprint < 0.5*texel_size {
+            // Detail moves the edge where cover is partial and leaves clear
+            // and overcast interiors alone.
+            cover = clamp(cover+p.cloud.w*4.0*cover*(1.0-cover)*cloud_detail(position, texel_size, footprint), 0.0, 1.0);
+        }
+        return CloudWeather(cover, mix(p.cloud.x, p.cloud.y, texel.g), texel.b);
+    }
+    return CloudWeather(cloud_noise_cover(p, unit, footprint), p.cloud.y, 1.0);
 }
 
-// Integral of cloud_envelope from altitude h to the shell top, km. The rising
-// and falling edges of the profile do not overlap.
-fn cloud_column_above(h: f32) -> f32 {
-    let shoulder = CLOUD_TOP-2.0;
-    let total = smoothstep_integral(shoulder-CLOUD_BASE)+1.0;
-    let rise = smoothstep_integral(min(h, shoulder)-CLOUD_BASE);
-    let u = clamp((h-shoulder)*0.5, 0.0, 1.0);
-    return max(total-rise-2.0*(u-u*u*u+0.5*u*u*u*u), 0.0);
+// Liquid water rises adiabatically above the cloud base, so extinction grows
+// as height^(2/3) at fixed droplet number (Brenguier et al. 2000, J. Atmos.
+// Sci. 57, 803), then falls to zero across an entrainment zone under the top.
+const CLOUD_ENTRAINMENT: f32 = 0.15;
+
+// Density profile in 0..1 at fraction f of the local cloud thickness.
+fn cloud_profile(f: f32) -> f32 {
+    if f <= 0.0 || f >= 1.0 { return 0.0; }
+    let body = 1.0-CLOUD_ENTRAINMENT;
+    if f < body { return pow(f/body, 2.0/3.0); }
+    return 1.0-smoothstep(body, 1.0, f);
+}
+
+// Integral of cloud_profile from f to 1, in units of the local thickness.
+fn cloud_profile_above(f: f32) -> f32 {
+    let body = 1.0-CLOUD_ENTRAINMENT;
+    let u = clamp((f-body)/CLOUD_ENTRAINMENT, 0.0, 1.0);
+    let cap = CLOUD_ENTRAINMENT*(0.5-u+u*u*u-0.5*u*u*u*u);
+    return cap+0.6*body*(1.0-pow(clamp(f/body, 0.0, 1.0), 5.0/3.0));
+}
+
+const CLOUD_SUN_SAMPLES: u32 = 6u;
+
+// Peak extinction of the delta-scaled medium for this weather, km^-1.
+fn cloud_peak_extinction(p: AtmosphereParams, w: CloudWeather) -> f32 {
+    return p.shell.z*CLOUD_DRAINE_WEIGHT*w.cover*w.density;
+}
+
+// Extinction of the delta-scaled medium at altitude h km, km^-1.
+fn cloud_extinction(p: AtmosphereParams, w: CloudWeather, h: f32) -> f32 {
+    let thickness = w.top-p.cloud.x;
+    if thickness <= 0.0 { return 0.0; }
+    return cloud_peak_extinction(p, w)*cloud_profile((h-p.cloud.x)/thickness);
 }
 
 // Cloud droplet scattering: Jendersie & d'Eon (2023), "An Approximate Mie
@@ -149,29 +222,34 @@ fn cloud_diffuse(above: f32, total: f32, mu_sun: f32, mu_light: f32, albedo: f32
     return max(i0+g1*mu_light*i1, 0.0);
 }
 
-// Scaled cloud optical depth from `position` toward the source, on five
-// geometrically growing segments out to the shell top. Also returns the part
-// of that depth exceeding what a column with the local cover would give on the
-// same samples: the shadow cast by neighbouring cloud.
-fn cloud_sun_depth(p: AtmosphereParams, position: vec3<f32>, direction: vec3<f32>, local_cover: f32) -> vec2<f32> {
-    let exit = sphere_interval(position, direction, ground_radius(p)+CLOUD_TOP).y;
+// Scaled cloud optical depths from `position` toward the source, on
+// geometrically growing segments out to the shell top. x: depth through an
+// overcast column with the local cloud type. y: depth of neighbouring cloud
+// in excess of what the local weather gives on the same samples, the shadow
+// neighbours cast.
+fn cloud_sun_depth(p: AtmosphereParams, position: vec3<f32>, direction: vec3<f32>, local: CloudWeather,
+    weather: texture_cube<f32>, filtering: sampler) -> vec2<f32> {
+    let exit = sphere_interval(position, direction, ground_radius(p)+p.cloud.y).y;
     if exit <= 0.0 { return vec2(0.0); }
     let reach = min(exit, 200.0);
+    let segments = f32((1u<<CLOUD_SUN_SAMPLES)-1u);
+    let overcast = CloudWeather(1.0, local.top, local.density);
+    var own = 0.0;
     var depth = 0.0;
-    var uniform_depth = 0.0;
+    var local_depth = 0.0;
     var near = 0.0;
-    for (var j = 0u; j < 5u; j++) {
-        let dt = reach*f32(1u<<j)/31.0;
+    for (var j = 0u; j < CLOUD_SUN_SAMPLES; j++) {
+        let dt = reach*f32(1u<<j)/segments;
         let sample_position = position+direction*(near+0.5*dt);
-        let envelope = cloud_envelope(length(sample_position)-ground_radius(p));
-        if envelope > 0.0 {
-            depth += envelope*cloud_cover(p, normalize(sample_position), dt)*dt;
-            uniform_depth += envelope*local_cover*dt;
+        let h = length(sample_position)-ground_radius(p);
+        if h > p.cloud.x && h < p.cloud.y {
+            depth += cloud_extinction(p, cloud_weather(p, sample_position, dt, weather, filtering), h)*dt;
+            local_depth += cloud_extinction(p, local, h)*dt;
+            own += cloud_extinction(p, overcast, h)*dt;
         }
         near += dt;
     }
-    let scaled = p.shell.z*CLOUD_DRAINE_WEIGHT;
-    return vec2(depth, max(depth-uniform_depth, 0.0))*scaled;
+    return vec2(own, max(depth-local_depth, 0.0));
 }
 
 struct MediumSample {
@@ -332,9 +410,6 @@ fn integrate_air(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t
     return result;
 }
 
-// Cloud shell altitudes above the ground radius, km.
-const CLOUD_BASE: f32 = 2.0;
-const CLOUD_TOP: f32 = 8.0;
 // Cloud march step in km at the 128-sample budget; the step scales inversely
 // with the budget, which also caps the count on long grazing paths.
 const CLOUD_STEP: f32 = 0.25;
@@ -343,63 +418,86 @@ const CLOUD_MIN_SAMPLES: u32 = 8u;
 // Air and cloud over one crossing of the cloud shell, on uniform midpoints.
 // The shell is a few km thick inside a ~100 km atmosphere, so it cannot share
 // the clear-air quadrature without aliasing into altitude contours.
+//
+// Partial cover is treated as independent columns: a fraction of the footprint
+// holds cloud at full density and the rest is clear. Spreading the same water
+// evenly would underestimate its albedo (Cahalan et al. 1994, J. Atmos. Sci.
+// 51, 2434). Both columns are integrated and blended by the cover.
 fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t0: f32, t1: f32, budget: u32,
-    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler) -> AtmosphereTransport {
-    var result = AtmosphereTransport(vec3(0.0), vec3(1.0));
+    pixel_angle: f32, trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler,
+    weather: texture_cube<f32>) -> AtmosphereTransport {
+    var clear = AtmosphereTransport(vec3(0.0), vec3(1.0));
+    var cloudy = AtmosphereTransport(vec3(0.0), vec3(1.0));
     let span = t1-t0;
-    if span <= 0.0 { return result; }
+    if span <= 0.0 { return clear; }
     let limit = max(budget, CLOUD_MIN_SAMPLES);
     let count = clamp(u32(ceil(span*f32(limit)/(CLOUD_STEP*128.0))), CLOUD_MIN_SAMPLES, limit);
     let dt = span/f32(count);
+    var covered = 0.0;
+    var weight = 0.0;
+    var opaque = false;
     for (var i = 0u; i < count; i++) {
-        let position = origin+direction*(t0+(f32(i)+0.5)*dt);
+        let t = t0+(f32(i)+0.5)*dt;
+        let position = origin+direction*t;
         let radius = length(position);
         let normal = position/radius;
         let h = radius-ground_radius(p);
-        var m = sample_medium(p, h);
-        var source = local_inscattering(p, position, direction, m, trans, multi, filtering);
-        let envelope = cloud_envelope(h);
-        var cover = 0.0;
-        if envelope > 0.0 { cover = cloud_cover(p, normal, dt); }
-        // Extinction of the delta-scaled medium, km^-1.
-        let column = cover*p.shell.z*CLOUD_DRAINE_WEIGHT;
-        let cloud = envelope*column;
+        let m = sample_medium(p, h);
+        let source = local_inscattering(p, position, direction, m, trans, multi, filtering);
+        clear.radiance += clear.transmittance * source * segment_integral(m.extinction, dt);
+        clear.transmittance *= exp(-m.extinction*dt);
+        if opaque { continue; }
+        var cloudy_source = source;
+        var extinction = m.extinction;
+        let local = cloud_weather(p, position, max(dt, t*pixel_angle), weather, filtering);
+        var cloud = 0.0;
+        if local.cover > 0.0 { cloud = cloud_extinction(p, CloudWeather(1.0, local.top, local.density), h); }
         if cloud > 0.0 {
+            covered += local.cover*cloud*dt;
+            weight += cloud*dt;
             let irradiance = sample_transmittance(p, trans, filtering, position, p.sun.xyz)
                 * source_visibility(p, position, p.sun.xyz)*p.sun.w;
             if max(irradiance.x, max(irradiance.y, irradiance.z)) > 0.0 {
-                let sun_depth = cloud_sun_depth(p, position, p.sun.xyz, cover);
-                let single = phase_draine(dot(direction, p.sun.xyz))*exp(-sun_depth.x);
+                let sun_depth = cloud_sun_depth(p, position, p.sun.xyz, local, weather, filtering);
+                let single = phase_draine(dot(direction, p.sun.xyz))*exp(-sun_depth.x-sun_depth.y);
+                let thickness = local.top-p.cloud.x;
+                let column = p.shell.z*CLOUD_DRAINE_WEIGHT*local.density*thickness;
                 // Neighbouring cloud that shadows the direct beam also starves
                 // the diffuse field; applying its excess depth is a heuristic.
-                let diffuse = cloud_diffuse(cloud_column_above(h)*column, cloud_column_above(CLOUD_BASE)*column,
-                    dot(normal, p.sun.xyz), dot(direction, normal), dot(p.ground.rgb, vec3(1.0/3.0)))
-                    * exp(-sun_depth.y);
-                source += cloud*irradiance*(single+diffuse);
+                let diffuse = cloud_diffuse(cloud_profile_above((h-p.cloud.x)/thickness)*column,
+                    cloud_profile_above(0.0)*column, dot(normal, p.sun.xyz), dot(direction, normal),
+                    dot(p.ground.rgb, vec3(1.0/3.0)))*exp(-sun_depth.y);
+                cloudy_source += cloud*irradiance*(single+diffuse);
             }
-            m.extinction += vec3(cloud);
+            extinction += vec3(cloud);
         }
-        result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
-        result.transmittance *= exp(-m.extinction*dt);
-        if max(result.transmittance.x, max(result.transmittance.y, result.transmittance.z)) < 0.0001 { break; }
+        cloudy.radiance += cloudy.transmittance * cloudy_source * segment_integral(extinction, dt);
+        cloudy.transmittance *= exp(-extinction*dt);
+        opaque = max(cloudy.transmittance.x, max(cloudy.transmittance.y, cloudy.transmittance.z)) < 0.0001;
     }
-    return result;
+    if weight <= 0.0 { return clear; }
+    let fraction = covered/weight;
+    return AtmosphereTransport(mix(clear.radiance, cloudy.radiance, fraction),
+        mix(clear.transmittance, cloudy.transmittance, fraction));
 }
 
 // Planetary view transport with clouds: clear air and cloud-shell crossings
 // are integrated separately and composited in ray order. A ray crosses the
 // shell at most twice, before and after passing below the cloud base.
+// `pixel_angle` is the angular size of the sampling footprint in radians; it
+// limits sub-texel cloud detail and may be zero.
 fn integrate_view(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32,
-    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler) -> AtmosphereTransport {
+    pixel_angle: f32, trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler,
+    weather: texture_cube<f32>) -> AtmosphereTransport {
     let outer = sphere_interval(origin, direction, top_radius(p));
     if outer.y <= 0.0 { return AtmosphereTransport(vec3(0.0),vec3(1.0)); }
     let start = max(outer.x, 0.0);
     let end = max(start, min(distance, atmosphere_boundary(p, origin, direction).x));
-    if p.shell.y <= 0.0 || p.shell.z <= 0.0 {
+    if p.shell.y <= 0.0 || p.shell.z <= 0.0 || p.cloud.y <= p.cloud.x {
         return integrate_air(p, origin, direction, start, end, samples, true, trans, multi, filtering);
     }
-    let top = sphere_interval(origin, direction, ground_radius(p)+CLOUD_TOP);
-    let base = sphere_interval(origin, direction, ground_radius(p)+CLOUD_BASE);
+    let top = sphere_interval(origin, direction, ground_radius(p)+p.cloud.y);
+    let base = sphere_interval(origin, direction, ground_radius(p)+p.cloud.x);
     var first = top;
     var second = vec2(start);
     if base.y > base.x {
@@ -415,11 +513,11 @@ fn integrate_view(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, 
     let scale = f32(samples)/max(end-start, 1e-6);
     var result = integrate_air(p, origin, direction, start, first.x,
         clamp(u32(ceil((first.x-start)*scale)), 8u, samples), start <= 0.0, trans, multi, filtering);
-    result = combine_transport(result, integrate_cloud(p, origin, direction, first.x, first.y, samples, trans, multi, filtering));
+    result = combine_transport(result, integrate_cloud(p, origin, direction, first.x, first.y, samples, pixel_angle, trans, multi, filtering, weather));
     result = combine_transport(result, integrate_air(p, origin, direction, first.y, middle,
         clamp(u32(ceil((middle-first.y)*scale)), 8u, samples), first.y <= 0.0, trans, multi, filtering));
     if has_second {
-        result = combine_transport(result, integrate_cloud(p, origin, direction, second.x, second.y, samples, trans, multi, filtering));
+        result = combine_transport(result, integrate_cloud(p, origin, direction, second.x, second.y, samples, pixel_angle, trans, multi, filtering, weather));
         result = combine_transport(result, integrate_air(p, origin, direction, second.y, end,
             clamp(u32(ceil((end-second.y)*scale)), 8u, samples), false, trans, multi, filtering));
     }

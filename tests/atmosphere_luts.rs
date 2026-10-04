@@ -28,7 +28,7 @@ fn lut_source(definition: &str) -> String {
     format!("{model}\n{body}")
 }
 
-fn parameters(state: &AtmosphereState) -> [[f32; 4]; 8] {
+fn parameters(state: &AtmosphereState) -> [[f32; 4]; 9] {
     [
         [
             state.medium.rayleigh,
@@ -52,6 +52,7 @@ fn parameters(state: &AtmosphereState) -> [[f32; 4]; 8] {
             state.stars,
             64.0,
         ],
+        [0.0; 4],
         [0.0; 4],
         [0.0; 4],
         [0.0; 4],
@@ -162,7 +163,7 @@ impl Luts {
         self.generate_parameters(&parameters(state));
     }
 
-    fn generate_parameters(&self, parameters: &[[f32; 4]; 8]) {
+    fn generate_parameters(&self, parameters: &[[f32; 4]; 9]) {
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -556,9 +557,12 @@ fn orbit_reference(
     (radiance, exp3(-optical))
 }
 
+/// Planetary view transport including the cloud layer, as composited.
+const VIEW_PROBE: &str = "integrate_view(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,0.0,trans,multiple,filtering,weather)";
+
 impl Luts {
     /// Clear-air transport, as used by lookup fields.
-    fn probe(&self, params: &[[f32; 4]; 8], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    fn probe(&self, params: &[[f32; 4]; 9], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
         self.probe_with(
             "integrate_atmosphere(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering,false)",
             params,
@@ -567,30 +571,28 @@ impl Luts {
     }
 
     /// Planetary view transport including the cloud shell, as composited.
-    fn probe_view(&self, params: &[[f32; 4]; 8], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
-        self.probe_with(
-            "integrate_view(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering)",
-            params,
-            directions,
-        )
+    fn probe_view(&self, params: &[[f32; 4]; 9], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+        self.probe_with(VIEW_PROBE, params, directions)
     }
 
     fn probe_with(
         &self,
         call: &str,
-        params: &[[f32; 4]; 8],
+        params: &[[f32; 4]; 9],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
-        self.probe_program("", call, params, directions)
+        self.probe_program("", call, [0; 4], params, directions)
     }
 
     /// Runs `call` once per input vector `d`, with optional WGSL `helpers`
-    /// compiled after the production model.
+    /// compiled after the production model. A call that names `weather` gets a
+    /// cube weather map filled with `weather_texel`.
     fn probe_program(
         &self,
         helpers: &str,
         call: &str,
-        params: &[[f32; 4]; 8],
+        weather_texel: [u8; 4],
+        params: &[[f32; 4]; 9],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
         let model = include_str!("../src/atmosphere/model.wgsl")
@@ -606,6 +608,7 @@ impl Luts {
 @group(0) @binding(3) var multiple: texture_2d<f32>;
 @group(0) @binding(4) var<storage,read> directions: array<vec4<f32>>;
 @group(0) @binding(5) var<storage,read_write> result: array<vec4<f32>>;
+@group(0) @binding(6) var weather: texture_cube<f32>;
 {helpers}
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
@@ -657,35 +660,68 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        let weather_view = self
+            .device
+            .create_texture_with_data(
+                &self.queue,
+                &wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 6,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &weather_texel.repeat(6),
+            )
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::Cube),
+                ..Default::default()
+            });
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&self.filtering),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&self.views[0]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&self.views[1]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: input.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: output.as_entire_binding(),
+            },
+        ];
+        // The derived layout only contains bindings the program uses.
+        if call.contains("weather") {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&weather_view),
+            });
+        }
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.filtering),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.views[0]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.views[1]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: input.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: output.as_entire_binding(),
-                },
-            ],
+            entries: &entries,
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -719,6 +755,8 @@ fn orbital_shell_matches_independent_reference_and_depth_limits() {
         let mut params = parameters(&state);
         params[5] = [0.0, 0.0, 24000.0, 6360.0];
         params[6] = [6460.0, 0.0, 0.0, 137.0];
+        // Cloud shell 2-8 km, built-in noise cover.
+        params[8] = [2.0, 8.0, 0.0, 0.0];
         gpu.generate_parameters(&params);
         let mut directions = Vec::new();
         for azimuth in [
@@ -851,6 +889,46 @@ fn orbital_shell_matches_independent_reference_and_depth_limits() {
             cloudy.iter().zip(&actual).any(|(a, b)| a != b),
             "clouds must alter transport"
         );
+        // Weather-map layer: an empty map is clear air, a full map converges.
+        params[4][3] = 64.0;
+        params[8][2] = 1.0;
+        let empty = gpu.probe_program("", VIEW_PROBE, [0; 4], &params, &directions);
+        params[6][1] = 0.0;
+        let clear = gpu.probe_view(&params, &directions);
+        params[6][1] = 0.55;
+        let full = gpu.probe_program("", VIEW_PROBE, [255; 4], &params, &directions);
+        params[4][3] = 256.0;
+        let full_dense = gpu.probe_program("", VIEW_PROBE, [255; 4], &params, &directions);
+        let mut empty_error = 0.0_f64;
+        let mut map_error = 0.0_f64;
+        for i in 0..full.len() {
+            for channel in 0..3 {
+                let scale = |value: f32| {
+                    if i % 2 == 0 {
+                        f64::from(value).max(1.0)
+                    } else {
+                        1.0
+                    }
+                };
+                empty_error = empty_error.max(
+                    f64::from(empty[i][channel] - clear[i][channel]).abs()
+                        / scale(clear[i][channel]),
+                );
+                map_error = map_error.max(
+                    f64::from(full[i][channel] - full_dense[i][channel]).abs()
+                        / scale(full_dense[i][channel]),
+                );
+            }
+        }
+        println!(
+            "weather map: empty versus clear maximum difference={empty_error}; full 128/512 maximum difference={map_error}"
+        );
+        assert!(
+            empty_error < 0.01,
+            "an empty weather map must match clear air"
+        );
+        assert!(map_error < 0.05, "weather-map cloud march must converge");
+        assert!(full.iter().zip(&empty).any(|(a, b)| a != b));
     });
 }
 
@@ -1003,7 +1081,7 @@ fn cloud_slab_reflection_matches_monte_carlo() {
             .into_iter()
             .flat_map(|depth| [1.0_f32, 0.5].map(|mu_sun| [depth, mu_sun, 1.0, 0.0]))
             .collect();
-        let actual = gpu.probe_program(SLAB_PROBE, "slab_probe(d)", &params, &cases);
+        let actual = gpu.probe_program(SLAB_PROBE, "slab_probe(d)", [0; 4], &params, &cases);
         let (_, _, _, mean) = droplet_fit();
         for (i, case) in cases.iter().enumerate() {
             let (depth, mu_sun) = (f64::from(case[0]), f64::from(case[1]));

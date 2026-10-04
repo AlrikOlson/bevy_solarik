@@ -9,6 +9,10 @@ fn planet() -> PlanetaryAtmosphere {
         observer: Vec3::Z * 24_000_000.0,
         cloud_coverage: 0.55,
         cloud_extinction: 0.0005,
+        cloud_base: 2_000.0,
+        cloud_top: 8_000.0,
+        weather: None,
+        cloud_detail: 0.0,
         seed: 137,
         occluder: Vec3::ZERO,
         occluder_radius: 0.0,
@@ -47,4 +51,16 @@ fn planetary_geometry_rejects_invalid_domains() {
     p.cloud_extinction = 0.0;
     p.occluder_radius = f32::NAN;
     assert!(p.validate().is_err());
+    // The cloud shell lies inside the atmosphere and spans at least 500 m.
+    for (base, top) in [
+        (-1.0, 8_000.0),
+        (2_000.0, 2_400.0),
+        (2_000.0, 100_001.0),
+        (f32::NAN, 8_000.0),
+    ] {
+        let mut p = planet();
+        p.cloud_base = base;
+        p.cloud_top = top;
+        assert!(p.validate().is_err());
+    }
 }

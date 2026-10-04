@@ -37,6 +37,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 @group(0) @binding(7) var aerial_transmittance: texture_3d<f32>;
 @group(0) @binding(8) var depth: texture_depth_2d;
 @group(0) @binding(9) var output: texture_storage_2d<rgba16float, read_write>;
+@group(0) @binding(10) var weather: texture_cube<f32>;
 
 fn disk_radiance(direction: vec3<f32>, source: vec4<f32>, radius: f32, pixel_angle: f32) -> vec3<f32> {
     let angle = atan2(length(cross(direction, source.xyz)), dot(direction, source.xyz));
@@ -67,8 +68,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let h = view.view_from_clip * vec4(uv*vec2(2.0,-2.0)+vec2(-1.0,1.0),pixel_depth,1.0);
             distance = length(h.xyz/h.w)*0.001;
         }
+        let pixel_angle = length(view_direction(uv+vec2(1.0/f32(size.x), 0.0))-direction);
         let result = integrate_view(p, observer_position(p), direction, distance,
-            u32(p.observer.w)*2u, trans, multiple, filtering);
+            u32(p.observer.w)*2u, pixel_angle, trans, multiple, filtering, weather);
         let previous = textureLoad(output,id.xy).rgb;
         let color = previous*result.transmittance+result.radiance*view.exposure;
         textureStore(output,id.xy,vec4(clamp(color,vec3(0.0),vec3(65000.0)),1.0));

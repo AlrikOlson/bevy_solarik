@@ -18,11 +18,32 @@ changes rebuild them; observer/light changes reuse them. All atmospheric
 textures, including the environment cube, occupy 9,191,424 bytes. Planet mode
 does not automatically bind its observer-dependent cube as global lighting.
 
-Optional deterministic cloud density uses body-fixed, warped 3D value noise,
-a finite 2–8 km layer, and integration-footprint filtering. No cloud textures
-or baked sky assets are loaded. Coverage, extinction and u16 seed are explicit.
-Extinction is validated over 0–0.2 m⁻¹, which covers liquid water cloud
-(roughly 0.01–0.1 m⁻¹).
+The optional cloud layer occupies a configurable shell (`cloud_base` to
+`cloud_top`). Its weather comes from one of two sources. Without a weather
+map, cover is body-fixed warped value noise with no physical basis, kept so
+the layer works standalone. With `PlanetaryAtmosphere::weather`, the
+application supplies a cube map sampled with the body-fixed direction: R is
+cover, G the local cloud-top height as a fraction of the shell, B an
+extinction scale. The map owns cover; `cloud_coverage` then only enables the
+layer. If the map has mips, a footprint wider than a texel reads the level
+that averages it. Extinction is validated over 0–0.2 m⁻¹, which covers liquid
+water cloud (roughly 0.01–0.1 m⁻¹).
+
+Vertical structure follows the adiabatic liquid-water profile: extinction
+grows as height^(2/3) above the base at fixed droplet number (Brenguier et
+al. 2000) and falls to zero across the top 15% of the local thickness. The
+vertical column of this profile is analytic.
+
+Partial cover is treated as independent columns: a fraction of the footprint
+holds cloud at full density and the rest is clear, and the two integrations
+are blended by the extinction-weighted cover along the ray. Spreading the
+same water evenly would underestimate albedo (Cahalan et al. 1994). This
+makes averaging cover in mips exact for a single layer.
+
+Below a weather map's texel size, `cloud_detail` continues the map's
+turbulence for three octaves with the k^(-5/3) spectrum of cloud water
+(Cahalan & Snider 1989), down to the pixel footprint. It moves cloud edges
+only where cover is partial and is evaluated on view samples, not sun samples.
 
 The planetary view integrates the cloud shell separately from clear air.
 A ray crosses the shell at most twice (before and after passing below the
@@ -44,7 +65,7 @@ extinction is multiplied by the Draine weight 0.498 and the Draine lobe
 (g = 0.5938, α = 27.11, mean cosine 0.763) is the phase function of the scaled
 medium. A test recomputes these constants from the published equations.
 (2) Single scattering uses that phase and a scaled optical depth marched
-toward the sun on five geometrically growing segments. (3) Higher orders use
+toward the sun on six geometrically growing segments. (3) Higher orders use
 the closed-form conservative Eddington solution for a plane-parallel slab
 over a Lambertian boundary (Shettle & Weinman 1970) after a second delta
 scaling (Joseph, Wiscombe & Weinman 1976), evaluated at the sample's vertical
@@ -91,9 +112,13 @@ transmittance.
 At 1920×1080 on the same hardware the shell march raised planetary composite
 GPU time from 0.68 to 1.42 ms p50 for a full-disk orbital view and from 1.43
 to 3.07 ms for a limb view; the sun march and diffuse field raise those to
-4.29 and 5.27 ms. Clear views are unchanged. Cover is evaluated from
-procedural noise at every view and sun sample; a baked weather field would
-remove most of this cost.
+4.29 and 5.27 ms with the built-in noise cover, which is evaluated at every
+view and sun sample. Clear views are unchanged. With a 1024-wide weather map
+in a 0.8–16.5 km shell, independent-column blending and sub-texel detail, an
+application measured 3.2 ms orbital and 8.5 ms limb: the clear column is
+integrated through the whole shell even behind opaque cloud. In the GPU test
+an empty weather map reproduces clear air within 0.14% and a full map
+converges to 0.04% between the 128 and 512 budgets.
 
 Native 800×600 orbital/limb/day/night/pole/cloud-free/eclipse/vacuum views on
 RTX 4090/Vulkan driver 616.56 show a bounded limb and stable return view.

@@ -204,6 +204,7 @@ impl AtmosphereState {
             planet: Vec4::ZERO,
             shell: Vec4::ZERO,
             occluder: Vec4::ZERO,
+            cloud: Vec4::ZERO,
         }
     }
 }
@@ -218,4 +219,5 @@ pub(crate) struct AtmosphereParams {
     planet: Vec4,
     shell: Vec4,
     occluder: Vec4,
+    cloud: Vec4,
 }
