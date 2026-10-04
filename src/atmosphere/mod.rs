@@ -5,10 +5,12 @@
 //! Bruneton (2017). See `docs/atmosphere.md` for scope and error budgets.
 
 mod gpu;
+mod planet;
 pub use gpu::{
     AtmosphereBackground, AtmosphereCamera, AtmosphereComposite, AtmosphereEnvironment,
     AtmospherePlugin,
 };
+pub use planet::PlanetaryAtmosphere;
 
 use bevy_ecs::resource::Resource;
 use bevy_math::{DVec3, Vec3, Vec4};
@@ -199,6 +201,9 @@ impl AtmosphereState {
                     AtmosphereQuality::High => 64.0,
                 },
             ),
+            planet: Vec4::ZERO,
+            shell: Vec4::ZERO,
+            occluder: Vec4::ZERO,
         }
     }
 }
@@ -210,4 +215,7 @@ pub(crate) struct AtmosphereParams {
     sun: Vec4,
     moon: Vec4,
     observer: Vec4,
+    planet: Vec4,
+    shell: Vec4,
+    occluder: Vec4,
 }

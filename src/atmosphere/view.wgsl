@@ -43,7 +43,7 @@ fn disk_radiance(direction: vec3<f32>, source: vec4<f32>, radius: f32, pixel_ang
     let w = max(pixel_angle*0.5, 1e-6);
     let coverage = 1.0-smoothstep(radius-w, radius+w, angle);
     if coverage <= 0.0 || source.w <= 0.0 { return vec3(0.0); }
-    let attenuation = sample_transmittance(trans, filtering, observer_position(p), direction);
+    let attenuation = sample_transmittance(p, trans, filtering, observer_position(p), direction);
     // Projected solid angle gives E = integral L cos(theta) dOmega exactly.
     return attenuation * coverage * source.w / (ATM_PI*sin(radius)*sin(radius));
 }
@@ -61,6 +61,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 #else
     if pixel_depth == 0.0 { return; }
 #endif
+    if p.planet.w > 0.0 {
+        var distance = 1e6;
+        if pixel_depth > 0.0 {
+            let h = view.view_from_clip * vec4(uv*vec2(2.0,-2.0)+vec2(-1.0,1.0),pixel_depth,1.0);
+            distance = length(h.xyz/h.w)*0.001;
+        }
+        let result = integrate_atmosphere(p, observer_position(p), direction, distance,
+            u32(p.observer.w)*2u, trans, multiple, filtering, false);
+        let previous = textureLoad(output,id.xy).rgb;
+        let color = previous*result.transmittance+result.radiance*view.exposure;
+        textureStore(output,id.xy,vec4(clamp(color,vec3(0.0),vec3(65000.0)),1.0));
+        return;
+    }
     var color: vec3<f32>;
     if pixel_depth == 0.0 {
         color = textureSampleLevel(sky, filtering, sky_uv(p, direction, textureDimensions(sky)), 0.0).rgb;
@@ -68,7 +81,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let dy = view_direction(uv+vec2(0.0, 1.0/f32(size.y)));
         let pixel_angle = max(length(dx-direction), length(dy-direction));
         color += star_radiance(direction, pixel_angle) * p.observer.z
-            * sample_transmittance(trans, filtering, observer_position(p), direction);
+            * sample_transmittance(p, trans, filtering, observer_position(p), direction);
         color += disk_radiance(direction, p.sun, 0.004675, pixel_angle);
         color += disk_radiance(direction, p.moon, 0.00452, pixel_angle);
         color *= view.exposure;

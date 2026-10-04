@@ -1,4 +1,4 @@
-use super::{AtmosphereParams, AtmosphereState};
+use super::{AtmosphereParams, AtmosphereState, PlanetaryAtmosphere};
 use bevy_app::{App, Plugin};
 use bevy_asset::{
     AssetServer, Assets, Handle, RenderAssetUsages, embedded_asset, load_embedded_asset,
@@ -92,6 +92,7 @@ impl Plugin for AtmospherePlugin {
         embedded_asset!(app, "view.wgsl");
         app.init_resource::<AtmosphereState>().add_plugins((
             ExtractResourcePlugin::<AtmosphereState>::default(),
+            ExtractResourcePlugin::<PlanetaryAtmosphere>::default(),
             ExtractResourcePlugin::<AtmosphereEnvironment>::default(),
             ExtractComponentPlugin::<AtmosphereCamera>::default(),
         ));
@@ -145,6 +146,7 @@ struct AtmosphereGpu {
     aerial_transmittance: TextureView,
     stages: Vec<Stage>,
     last: Option<AtmosphereState>,
+    last_planet: Option<PlanetaryAtmosphere>,
     last_cube: Option<TextureView>,
 }
 
@@ -335,6 +337,7 @@ fn initialize_atmosphere(
         ),
         stages,
         last: None,
+        last_planet: None,
         last_cube: None,
     });
 }
@@ -369,6 +372,7 @@ fn make_group(
 
 fn generate_atmosphere(
     state: Res<AtmosphereState>,
+    planet: Option<Res<PlanetaryAtmosphere>>,
     environment: Option<Res<AtmosphereEnvironment>>,
     images: Res<RenderAssets<GpuImage>>,
     gpu: Option<ResMut<AtmosphereGpu>>,
@@ -387,11 +391,20 @@ fn generate_atmosphere(
         .last_cube
         .as_ref()
         .is_none_or(|view| view.id() != image.texture_view.id());
-    if gpu.last.as_ref() == Some(state.as_ref()) && !image_changed {
+    if gpu.last.as_ref() == Some(state.as_ref())
+        && gpu.last_planet.as_ref() == planet.as_deref()
+        && !image_changed
+    {
         return;
     }
     if let Err(error) = state.validate() {
         tracing::error!("invalid atmosphere state: {error}");
+        return;
+    }
+    if let Some(planet) = planet.as_deref()
+        && let Err(error) = planet.validate()
+    {
+        tracing::error!("invalid planetary atmosphere: {error}");
         return;
     }
     if gpu
@@ -404,8 +417,21 @@ fn generate_atmosphere(
     let medium_changed = gpu
         .last
         .as_ref()
-        .is_none_or(|last| last.medium != state.medium);
+        .is_none_or(|last| last.medium != state.medium)
+        || gpu.last_planet.as_ref().map(|p| (p.radius, p.height))
+            != planet.as_deref().map(|p| (p.radius, p.height));
     *gpu.uniform.get_mut() = state.uniform();
+    if let Some(planet) = planet.as_deref() {
+        gpu.uniform.get_mut().planet = (planet.observer * 0.001).extend(planet.radius * 0.001);
+        gpu.uniform.get_mut().shell = bevy_math::Vec4::new(
+            (planet.radius + planet.height) * 0.001,
+            planet.cloud_coverage,
+            planet.cloud_extinction * 1000.0,
+            f32::from(planet.seed),
+        );
+        gpu.uniform.get_mut().occluder =
+            (planet.occluder * 0.001).extend(planet.occluder_radius * 0.001);
+    }
     gpu.uniform.write_buffer(&device, &queue);
     let cube = image.texture.create_view(&TextureViewDescriptor {
         dimension: Some(TextureViewDimension::D2Array),
@@ -449,6 +475,7 @@ fn generate_atmosphere(
         span.end(&mut pass);
     }
     gpu.last = Some(state.clone());
+    gpu.last_planet = planet.as_deref().cloned();
     gpu.last_cube = Some(image.texture_view.clone());
 }
 

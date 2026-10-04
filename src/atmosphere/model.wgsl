@@ -15,6 +15,69 @@ struct AtmosphereParams {
     sun: vec4<f32>, // unit direction, TOA lux
     moon: vec4<f32>, // unit direction, TOA lux
     observer: vec4<f32>, // height metres, aerial distance metres, stars, samples
+    planet: vec4<f32>, // observer body-local km; radius km (zero = local-ground mode)
+    shell: vec4<f32>, // outer radius km; cloud coverage, extinction/km, seed
+    occluder: vec4<f32>, // body-local centre km, radius km
+}
+
+fn ground_radius(p: AtmosphereParams) -> f32 { return select(GROUND_RADIUS, p.planet.w, p.planet.w > 0.0); }
+fn top_radius(p: AtmosphereParams) -> f32 { return select(TOP_RADIUS, p.shell.x, p.planet.w > 0.0); }
+
+// Negative exit identifies a miss. Stable enough for the validated <=1e6 km observer.
+fn sphere_interval(origin: vec3<f32>, direction: vec3<f32>, radius: f32) -> vec2<f32> {
+    let b = dot(origin, direction);
+    let perpendicular = origin-direction*b;
+    let discriminant = radius*radius-dot(perpendicular, perpendicular);
+    if discriminant < 0.0 { return vec2(-1.0); }
+    let root = sqrt(discriminant);
+    return vec2(-b-root, -b+root);
+}
+
+fn source_visibility(p: AtmosphereParams, position: vec3<f32>, direction: vec3<f32>) -> f32 {
+    if p.occluder.w <= 0.0 { return 1.0; }
+    let offset=p.occluder.xyz-position;
+    let distance=length(offset);
+    if distance<=p.occluder.w {return 0.0;}
+    let axis=offset/distance;
+    let d=atan2(length(cross(axis,direction)),dot(axis,direction));
+    // Matches this atmosphere's fixed nominal solar angular radius.
+    let a=0.004675; let b=asin(clamp(p.occluder.w/distance,0.0,1.0));
+    if d>=a+b {return 1.0;}
+    if d<=abs(a-b) {return max(0.0,1.0-b*b/(a*a));}
+    let x=clamp((d*d+a*a-b*b)/(2.0*d*a),-1.0,1.0);
+    let y=clamp((d*d+b*b-a*a)/(2.0*d*b),-1.0,1.0);
+    let overlap=a*a*acos(x)+b*b*acos(y)-0.5*sqrt(max(0.0,(-d+a+b)*(d+a-b)*(d-a+b)*(d+a+b)));
+    return clamp(1.0-overlap/(ATM_PI*a*a),0.0,1.0);
+}
+
+// Smooth body-fixed 3D weather: no longitude chart, poles or per-frame random seed.
+// The footprint removes detail that the integration segment cannot resolve.
+fn weather_hash(cell: vec3<i32>) -> f32 {
+    let u = bitcast<vec3<u32>>(cell);
+    var h = u.x*1597334677u ^ u.y*3812015801u ^ u.z*2798796415u;
+    h = (h^(h>>16u))*2246822519u;
+    return f32(h^(h>>13u))/4294967295.0;
+}
+fn weather_noise(q: vec3<f32>) -> f32 {
+    let cell=vec3<i32>(floor(q));
+    let t=fract(q); let f=t*t*(3.0-2.0*t);
+    let a=mix(weather_hash(cell),weather_hash(cell+vec3(1,0,0)),f.x);
+    let b=mix(weather_hash(cell+vec3(0,1,0)),weather_hash(cell+vec3(1,1,0)),f.x);
+    let c=mix(weather_hash(cell+vec3(0,0,1)),weather_hash(cell+vec3(1,0,1)),f.x);
+    let d=mix(weather_hash(cell+vec3(0,1,1)),weather_hash(cell+vec3(1,1,1)),f.x);
+    return mix(mix(a,b,f.y),mix(c,d,f.y),f.z);
+}
+fn cloud_density(p: AtmosphereParams, position: vec3<f32>, footprint: f32) -> f32 {
+    if p.shell.y <= 0.0 { return 0.0; }
+    let h = length(position)-ground_radius(p);
+    let envelope = smoothstep(2.0,3.0,h)*(1.0-smoothstep(6.0,8.0,h));
+    if envelope <= 0.0 { return 0.0; }
+    let q = normalize(position)*12.0 + vec3(p.shell.w*0.013);
+    let warp = vec3(weather_noise(q+vec3(7.0,2.0,9.0)),weather_noise(q+vec3(3.0,8.0,1.0)),weather_noise(q+vec3(1.0,4.0,5.0)));
+    let w=q+warp*3.0;
+    let large=weather_noise(w)*0.65+weather_noise(w*2.13)*0.25;
+    let detail=(weather_noise(w*6.7)-0.5)*0.1/(1.0+footprint*0.03);
+    return envelope*smoothstep(0.85-0.8*p.shell.y, 1.0-0.8*p.shell.y, large+detail);
 }
 
 struct MediumSample {
@@ -25,10 +88,12 @@ struct MediumSample {
 }
 
 fn observer_position(p: AtmosphereParams) -> vec3<f32> {
-    return vec3(0.0, GROUND_RADIUS + p.observer.x * 0.001, 0.0);
+    if p.planet.w > 0.0 { return p.planet.xyz; }
+    return vec3(0.0, ground_radius(p) + p.observer.x * 0.001, 0.0);
 }
 
 fn sample_medium(p: AtmosphereParams, altitude: f32) -> MediumSample {
+    if altitude > top_radius(p)-ground_radius(p) { return MediumSample(vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0)); }
     let h = max(altitude, 0.0);
     let r = vec3(0.005802, 0.013558, 0.0331) * p.medium.x * exp(-h / 8.0);
     let m = vec3(0.003996 * p.medium.y * exp(-h / 1.2));
@@ -46,21 +111,21 @@ fn segment_integral(extinction: vec3<f32>, distance: f32) -> vec3<f32> {
     return select(quotient, series, x < vec3(0.001));
 }
 
-fn ray_hits_ground(origin: vec3<f32>, direction: vec3<f32>) -> bool {
+fn ray_hits_ground(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>) -> bool {
     let r = length(origin);
     let b = dot(origin, direction);
-    return b < 0.0 && b*b >= (r-GROUND_RADIUS)*(r+GROUND_RADIUS);
+    return b < 0.0 && b*b >= (r-ground_radius(p))*(r+ground_radius(p));
 }
 
 // xy = distance to the first boundary, whether it is opaque ground.
-fn atmosphere_boundary(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
+fn atmosphere_boundary(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     let r = length(origin);
     let b = dot(origin, direction);
-    if ray_hits_ground(origin, direction) {
-        let c = max(0.0, (r-GROUND_RADIUS)*(r+GROUND_RADIUS));
+    if ray_hits_ground(p, origin, direction) {
+        let c = max(0.0, (r-ground_radius(p))*(r+ground_radius(p)));
         return vec2(c / max(-b + sqrt(max(b*b-c, 0.0)), 1e-8), 1.0);
     }
-    return vec2(max(0.0, -b + sqrt(max(b*b+(TOP_RADIUS-r)*(TOP_RADIUS+r), 0.0))), 0.0);
+    return vec2(max(0.0, -b + sqrt(max(b*b+(top_radius(p)-r)*(top_radius(p)+r), 0.0))), 0.0);
 }
 
 fn optical_transmittance(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32) -> vec3<f32> {
@@ -68,13 +133,13 @@ fn optical_transmittance(p: AtmosphereParams, origin: vec3<f32>, direction: vec3
     var optical = vec3(0.0);
     for (var i = 0u; i < samples; i++) {
         let position = origin + direction * ((f32(i)+0.5)*dt);
-        optical += sample_medium(p, length(position)-GROUND_RADIUS).extinction * dt;
+        optical += sample_medium(p, length(position)-ground_radius(p)).extinction * dt;
     }
     return exp(-optical);
 }
 
 fn transmittance_to_space(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, samples: u32) -> vec3<f32> {
-    let boundary = atmosphere_boundary(origin, direction);
+    let boundary = atmosphere_boundary(p, origin, direction);
     if boundary.y > 0.0 { return vec3(0.0); }
     return optical_transmittance(p, origin, direction, boundary.x, samples);
 }
@@ -91,35 +156,35 @@ fn phase_mie(mu: f32, g: f32) -> f32 {
 
 // Bruneton's distance/rho mapping: detail at the tangent instead of spending
 // half the transmittance texture on rays occluded by the planet.
-fn transmittance_uv(radius: f32, mu: f32, dimensions: vec2<u32>) -> vec2<f32> {
-    let r = clamp(radius, GROUND_RADIUS, TOP_RADIUS);
-    let h = sqrt((TOP_RADIUS-GROUND_RADIUS)*(TOP_RADIUS+GROUND_RADIUS));
-    let rho = sqrt(max(0.0, (r-GROUND_RADIUS)*(r+GROUND_RADIUS)));
-    let distance = max(0.0, -r*mu + sqrt(max(0.0, r*r*(mu*mu-1.0)+TOP_RADIUS*TOP_RADIUS)));
-    let x = clamp(vec2((distance-(TOP_RADIUS-r))/max(rho+h-(TOP_RADIUS-r), 1e-6), rho/h), vec2(0.0), vec2(1.0));
+fn transmittance_uv(p: AtmosphereParams, radius: f32, mu: f32, dimensions: vec2<u32>) -> vec2<f32> {
+    let r = clamp(radius, ground_radius(p), top_radius(p));
+    let h = sqrt((top_radius(p)-ground_radius(p))*(top_radius(p)+ground_radius(p)));
+    let rho = sqrt(max(0.0, (r-ground_radius(p))*(r+ground_radius(p))));
+    let distance = max(0.0, -r*mu + sqrt(max(0.0, r*r*(mu*mu-1.0)+top_radius(p)*top_radius(p))));
+    let x = clamp(vec2((distance-(top_radius(p)-r))/max(rho+h-(top_radius(p)-r), 1e-6), rho/h), vec2(0.0), vec2(1.0));
     let size = vec2<f32>(dimensions);
     return (vec2(0.5) + x*(size-1.0))/size;
 }
 
-fn transmittance_position(uv: vec2<f32>) -> vec2<f32> {
-    let h = sqrt((TOP_RADIUS-GROUND_RADIUS)*(TOP_RADIUS+GROUND_RADIUS));
+fn transmittance_position(p: AtmosphereParams, uv: vec2<f32>) -> vec2<f32> {
+    let h = sqrt((top_radius(p)-ground_radius(p))*(top_radius(p)+ground_radius(p)));
     let rho = h*uv.y;
-    let r = sqrt(rho*rho+GROUND_RADIUS*GROUND_RADIUS);
-    let d = mix(TOP_RADIUS-r, rho+h, uv.x);
-    let mu = select(clamp(((TOP_RADIUS-r)*(TOP_RADIUS+r)-d*d)/max(2.0*r*d, 1e-6), -1.0, 1.0), 1.0, d <= 1e-6);
+    let r = sqrt(rho*rho+ground_radius(p)*ground_radius(p));
+    let d = mix(top_radius(p)-r, rho+h, uv.x);
+    let mu = select(clamp(((top_radius(p)-r)*(top_radius(p)+r)-d*d)/max(2.0*r*d, 1e-6), -1.0, 1.0), 1.0, d <= 1e-6);
     return vec2(r, mu);
 }
 
-fn sample_transmittance(tex: texture_2d<f32>, filtering: sampler, position: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    if ray_hits_ground(position, direction) { return vec3(0.0); }
+fn sample_transmittance(p: AtmosphereParams, tex: texture_2d<f32>, filtering: sampler, position: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    if ray_hits_ground(p, position, direction) { return vec3(0.0); }
     let r = length(position);
-    let uv = transmittance_uv(r, dot(position/r, direction), textureDimensions(tex));
+    let uv = transmittance_uv(p, r, dot(position/r, direction), textureDimensions(tex));
     return clamp(textureSampleLevel(tex, filtering, uv, 0.0).rgb, vec3(0.0), vec3(1.0));
 }
 
-fn sample_multiple(tex: texture_2d<f32>, filtering: sampler, position: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+fn sample_multiple(p: AtmosphereParams, tex: texture_2d<f32>, filtering: sampler, position: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     let r = length(position);
-    let unit = clamp(vec2(dot(position/r, direction)*0.5+0.5, (r-GROUND_RADIUS)/100.0), vec2(0.0), vec2(1.0));
+    let unit = clamp(vec2(dot(position/r, direction)*0.5+0.5, (r-ground_radius(p))/(top_radius(p)-ground_radius(p))), vec2(0.0), vec2(1.0));
     let size = vec2<f32>(textureDimensions(tex));
     return max(textureSampleLevel(tex, filtering, (0.5+unit*(size-1.0))/size, 0.0).rgb, vec3(0.0));
 }
@@ -138,29 +203,46 @@ fn local_inscattering(p: AtmosphereParams, position: vec3<f32>, direction: vec3<
         if source.w <= 0.0 { continue; }
         let mu = clamp(dot(direction, source.xyz), -1.0, 1.0);
         let phase = medium.rayleigh * phase_rayleigh(mu) + medium.mie * phase_mie(mu, p.medium.w);
-        let direct = sample_transmittance(trans, filtering, position, source.xyz) * phase;
-        let ms = sample_multiple(multi, filtering, position, source.xyz) * medium.scattering * p.ground.w;
-        result += source.w * (direct+ms);
+        let direct = sample_transmittance(p, trans, filtering, position, source.xyz) * phase;
+        let ms = sample_multiple(p, multi, filtering, position, source.xyz) * medium.scattering * p.ground.w;
+        result += source.w * (direct+ms) * source_visibility(p, position, source.xyz);
     }
     return result;
 }
 
 fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32,
     trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler, ground: bool) -> AtmosphereTransport {
-    let boundary = atmosphere_boundary(origin, direction);
-    let length_max = min(distance, boundary.x);
+    var start = 0.0;
+    let outer = sphere_interval(origin, direction, top_radius(p));
+    if outer.y <= 0.0 { return AtmosphereTransport(vec3(0.0),vec3(1.0)); }
+    start = max(outer.x, 0.0);
+    let boundary = atmosphere_boundary(p, origin, direction);
+    let length_max = max(0.0, min(distance, boundary.x)-start);
     var result = AtmosphereTransport(vec3(0.0), vec3(1.0));
     for (var i = 0u; i < samples; i++) {
         // Quadratic intervals improve near-observer integration and still cover
         // the entire segment, including its final endpoint.
         let a = f32(i)/f32(samples);
         let b = f32(i+1u)/f32(samples);
-        let t0 = a*a*length_max;
-        let t1 = b*b*length_max;
+        let t0 = start+a*a*length_max;
+        let t1 = start+b*b*length_max;
         let dt = t1-t0;
         let position = origin+direction*((t0+t1)*0.5);
-        let m = sample_medium(p, length(position)-GROUND_RADIUS);
-        let source = local_inscattering(p, position, direction, m, trans, multi, filtering);
+        var m = sample_medium(p, length(position)-ground_radius(p));
+        var source = local_inscattering(p, position, direction, m, trans, multi, filtering);
+        let cloud = cloud_density(p, position, dt)*p.shell.z;
+        if cloud > 0.0 {
+            let h = length(position)-ground_radius(p);
+            let mu_sun = dot(normalize(position), p.sun.xyz);
+            // Plane-column cloud self-shadow approximation, bounded at grazing angles.
+            let cloud_sun = exp(-cloud*max(8.0-h,0.0)/max(mu_sun,0.08));
+            let light = sample_transmittance(p, trans, filtering, position, p.sun.xyz)
+                * source_visibility(p, position, p.sun.xyz)*cloud_sun*p.sun.w;
+            // A declared two-lobe approximation represents unresolved cloud scattering.
+            let phase = 0.35*phase_mie(dot(direction,p.sun.xyz),0.7)+0.65/(4.0*ATM_PI);
+            source += cloud*0.99*phase*light;
+            m.extinction += vec3(cloud);
+        }
         result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
         result.transmittance *= exp(-m.extinction*dt);
     }
@@ -170,7 +252,7 @@ fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<
         let sources = array<vec4<f32>, 2>(p.sun, p.moon);
         for (var i = 0u; i < 2u; i++) {
             let source = sources[i];
-            let direct = sample_transmittance(trans, filtering, normal*(GROUND_RADIUS+0.001), source.xyz)
+            let direct = sample_transmittance(p, trans, filtering, normal*(ground_radius(p)+0.001), source.xyz)
                 * max(dot(normal, source.xyz), 0.0);
             result.radiance += result.transmittance * p.ground.rgb * source.w * direct / ATM_PI;
         }
@@ -179,8 +261,8 @@ fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<
 }
 
 fn horizon_elevation(p: AtmosphereParams) -> f32 {
-    let r = GROUND_RADIUS+p.observer.x*0.001;
-    return -acos(clamp(GROUND_RADIUS/r, 0.0, 1.0));
+    let r = length(observer_position(p));
+    return -acos(clamp(ground_radius(p)/r, 0.0, 1.0));
 }
 
 fn sky_direction(p: AtmosphereParams, uv: vec2<f32>) -> vec3<f32> {

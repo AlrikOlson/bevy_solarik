@@ -1,5 +1,66 @@
 # Clear-sky atmosphere
 
+## Optional spherical-world mode (development)
+
+Insert `PlanetaryAtmosphere` alongside `AtmosphereState` to supply a sphere's
+radius, finite shell height, body-fixed observer and optional spherical source
+occluder. Public distances are metres; source and camera directions must use
+the same body-fixed axes. Validate settings before insertion. Removing the
+resource restores the existing local-ground mode. Existing constructors and
+their radiometry remain unchanged; the Bistro images still depict that mode.
+
+Planetary mode clips rays to shell entry/exit and opaque scene depth, using
+64 (`Balanced`) or 128 (`High`) integration segments per pixel. A foreground
+object outside the atmosphere receives no aerial effect. Ground mode retains
+its compact aerial volume. The same 256×64 transmittance and 32×32 multiple
+scattering fields now accept the configured radius/height. Medium or geometry
+changes rebuild them; observer/light changes reuse them. All atmospheric
+textures, including the environment cube, occupy 9,191,424 bytes. Planet mode
+does not automatically bind its observer-dependent cube as global lighting.
+
+Optional deterministic cloud density uses body-fixed, warped 3D value noise,
+a finite 2–8 km layer, and integration-footprint filtering. No cloud textures
+or baked sky assets are loaded. Coverage, extinction and u16 seed are explicit.
+Weather is fictional and static. Cloud scattering uses a normalized mixture
+of 35% Cornette–Shanks (g=0.7) and 65% isotropic phase, with albedo 0.99 and a
+bounded plane-column self-shadow approximation. This is not a converged
+multiple-scattering cloud solution. The optional eclipse uses uniform angular
+disk overlap and this atmosphere's nominal 0.004675-radian solar radius.
+
+This is an opaque-depth presentation approximation: secondary rays do not
+integrate atmospheric/cloud transport, cloud shadows are not injected into
+surface BRDFs, and transparent layers retain the existing opaque-endpoint
+limitation. A consumer must separately supply attenuated surface illumination
+where required. One observer and one atmosphere are supported, with validated
+observer/occluder lengths up to 1e9 m; ground interception uses a sphere.
+
+The Vulkan orbital test in `tests/atmosphere_luts.rs` compares 32 azimuth/limb
+samples against an independent f64 metre-based reference with 2,048 view and
+512 solar segments. Maximum clear-air radiance error is 0.158% (limit 10%,
+0.1 cd/m² denominator floor), and absolute transmittance error is 0.000756
+(limit 0.01). It writes 8×4 reference/GPU PPMs under `target/planetary-reference`,
+checks foreground depth, eclipse extinction, finite nonnegative cloud output
+and exact repeated evaluation. The 128/512 cloud quadrature comparison has
+maximum 11.2% radiance-relative or 0–1 transmittance-absolute difference
+(limit 0.25). Clear-air accuracy does not establish cloud physical accuracy.
+
+Native 800×600 orbital/limb/day/night/pole/cloud-free/eclipse/vacuum views on
+RTX 4090/Vulkan driver 616.56 show a bounded limb and stable return view.
+Initial refined orbital composition GPU p50/p95 was 0.283/0.825 ms; limb
+0.705/1.036 ms. The medium rebuild measured 0.0123 ms transmittance and
+1.787 ms multiple scattering. These are individual dispatch timings from
+120 retained samples (87 on the first view), not total frame benchmarks.
+The declared composition p95 budget is 5 ms at this resolution.
+
+The [July 2026 Smolder talk](https://advances.realtimerendering.com/s2026/index.html)
+describes integrated general volumetric effects in Glacier. Its integration
+goals informed explicit layer/depth handling, but its engine implementation
+is not a drop-in WGSL atmosphere. Hillaire/Bruneton remain the numerical
+baseline here; no unmeasured performance advantage over Smolder is claimed.
+
+Run GPU checks serially with `--ignored --nocapture --test-threads=1`, separate
+from captures and builds. Existing local-ground numerical tests remain required.
+
 Development builds provide an optional `AtmospherePlugin`. It generates a
 clear terrestrial atmosphere on the GPU and presents the sky and aerial
 perspective before temporal reconstruction and tonemapping. The playground

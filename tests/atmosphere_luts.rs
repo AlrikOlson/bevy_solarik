@@ -28,7 +28,7 @@ fn lut_source(definition: &str) -> String {
     format!("{model}\n{body}")
 }
 
-fn parameters(state: &AtmosphereState) -> [[f32; 4]; 5] {
+fn parameters(state: &AtmosphereState) -> [[f32; 4]; 8] {
     [
         [
             state.medium.rayleigh,
@@ -52,6 +52,9 @@ fn parameters(state: &AtmosphereState) -> [[f32; 4]; 5] {
             state.stars,
             64.0,
         ],
+        [0.0; 4],
+        [0.0; 4],
+        [0.0; 4],
     ]
 }
 
@@ -156,11 +159,15 @@ impl Luts {
     }
 
     fn generate(&self, state: &AtmosphereState) {
+        self.generate_parameters(&parameters(state));
+    }
+
+    fn generate_parameters(&self, parameters: &[[f32; 4]; 8]) {
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
-                contents: bytemuck::cast_slice(&parameters(state)),
+                contents: bytemuck::cast_slice(parameters),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -497,5 +504,288 @@ fn procedural_stars_preserve_catalogue_flux_in_lighting_cube() {
             ("star cube/catalogue lux", actual, expected)
         )
         .expect("report");
+    });
+}
+
+fn orbit_reference(
+    state: &AtmosphereState,
+    origin: DVec3,
+    dir: DVec3,
+    maximum: f64,
+) -> (DVec3, DVec3) {
+    let interval = |radius: f64| {
+        let b = origin.dot(dir);
+        let delta = b * b - origin.length_squared() + radius * radius;
+        if delta < 0.0 {
+            None
+        } else {
+            Some((-b - delta.sqrt(), -b + delta.sqrt()))
+        }
+    };
+    let Some((entry, exit)) = interval(6_460_000.0) else {
+        return (DVec3::ZERO, DVec3::ONE);
+    };
+    let start = entry.max(0.0);
+    let mut end = exit.min(maximum);
+    if let Some((ground, _)) = interval(6_360_000.0)
+        && ground > 0.0
+    {
+        end = end.min(ground);
+    }
+    if end <= start {
+        return (DVec3::ZERO, DVec3::ONE);
+    }
+    let dt = (end - start) / 2048.0;
+    let mu = dir.dot(state.sun_direction.as_dvec3());
+    let g = f64::from(state.medium.mie_anisotropy);
+    let pr = 3.0 * (1.0 + mu * mu) / (16.0 * core::f64::consts::PI);
+    let pm = 3.0 * (1.0 - g * g) * (1.0 + mu * mu)
+        / (8.0 * core::f64::consts::PI * (2.0 + g * g) * (1.0 + g * g - 2.0 * g * mu).powf(1.5));
+    let mut optical = DVec3::ZERO;
+    let mut radiance = DVec3::ZERO;
+    for i in 0..2048 {
+        let point = origin + dir * (start + (f64::from(i) + 0.5) * dt);
+        let (r, m, e) = extinction(state, point);
+        radiance += exp3(-(optical + e * dt * 0.5))
+            * solar_transmittance(state, point)
+            * (r * pr + m * pm)
+            * f64::from(state.sun_illuminance)
+            * dt;
+        optical += e * dt;
+    }
+    (radiance, exp3(-optical))
+}
+
+impl Luts {
+    fn probe(&self, params: &[[f32; 4]; 8], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+        let model = include_str!("../src/atmosphere/model.wgsl")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let code = format!(
+            r#"{model}
+@group(0) @binding(0) var<uniform> p: AtmosphereParams;
+@group(0) @binding(1) var filtering: sampler;
+@group(0) @binding(2) var trans: texture_2d<f32>;
+@group(0) @binding(3) var multiple: texture_2d<f32>;
+@group(0) @binding(4) var<storage,read> directions: array<vec4<f32>>;
+@group(0) @binding(5) var<storage,read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
+ let d=directions[id.x];
+ let t=integrate_atmosphere(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering,false);
+ result[id.x*2u]=vec4(t.radiance,1.0); result[id.x*2u+1u]=vec4(t.transmittance,1.0);
+}}
+"#
+        );
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(code.into()),
+            });
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None,
+                layout: None,
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let uniform = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let input = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(directions),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let output = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (directions.len() * 32) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: output.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.filtering),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: input.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: output.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(directions.len() as u32, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, output.size());
+        self.queue.submit([encoder.finish()]);
+        mapped(&self.device, &readback)
+    }
+}
+
+#[test]
+#[ignore = "Vulkan GPU: run separately from builds and captures"]
+#[expect(
+    clippy::print_stdout,
+    reason = "Reports numerical evidence during explicit GPU validation"
+)]
+fn orbital_shell_matches_independent_reference_and_depth_limits() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        let mut state = AtmosphereState {
+            sun_direction: Vec3::Z,
+            moon_illuminance: 0.0,
+            stars: 0.0,
+            ..Default::default()
+        };
+        state.medium.multiple_scattering = false;
+        let mut params = parameters(&state);
+        params[5] = [0.0, 0.0, 24000.0, 6360.0];
+        params[6] = [6460.0, 0.0, 0.0, 137.0];
+        gpu.generate_parameters(&params);
+        let mut directions = Vec::new();
+        for azimuth in [
+            0.0_f32,
+            core::f32::consts::FRAC_PI_2,
+            core::f32::consts::PI,
+            core::f32::consts::TAU - 0.00001,
+        ] {
+            for impact in [
+                0.0_f32, 5000.0, 6359.0, 6361.0, 6370.0, 6390.0, 6440.0, 6480.0,
+            ] {
+                let angle = (impact / 24000.0).asin();
+                directions.push([
+                    angle.sin() * azimuth.cos(),
+                    angle.sin() * azimuth.sin(),
+                    -angle.cos(),
+                    1e6,
+                ]);
+            }
+        }
+        // A foreground object at 1 metre must remain outside the atmosphere.
+        directions.push([0.0, 0.0, -1.0, 0.001]);
+        let actual = gpu.probe(&params, &directions);
+        let mut max_error = 0.0_f64;
+        let mut max_trans = 0.0_f64;
+        let mut reference_image = String::from("P3\n8 4\n255\n");
+        let mut actual_image = reference_image.clone();
+        for (i, d) in directions.iter().enumerate() {
+            let dir = DVec3::new(f64::from(d[0]), f64::from(d[1]), f64::from(d[2])).normalize();
+            let (l, t) = orbit_reference(
+                &state,
+                DVec3::new(0.0, 0.0, 24e6),
+                dir,
+                f64::from(d[3]) * 1000.0,
+            );
+            let a = DVec3::from_array([
+                f64::from(actual[i * 2][0]),
+                f64::from(actual[i * 2][1]),
+                f64::from(actual[i * 2][2]),
+            ]);
+            let b = DVec3::from_array([
+                f64::from(actual[i * 2 + 1][0]),
+                f64::from(actual[i * 2 + 1][1]),
+                f64::from(actual[i * 2 + 1][2]),
+            ]);
+            let error = ((a - l).abs() / l.max(DVec3::splat(0.1))).max_element();
+            let trans = (b - t).abs().max_element();
+            max_error = max_error.max(error);
+            max_trans = max_trans.max(trans);
+            assert!(
+                a.is_finite() && b.is_finite() && error <= 0.10 && trans <= 0.01,
+                "ray{i}: relative={error}, trans={trans}, actual{a} reference{l}"
+            );
+            if i < 32 {
+                for (image, color) in [(&mut reference_image, l), (&mut actual_image, a)] {
+                    let rgb = (color / 10000.0).clamp(DVec3::ZERO, DVec3::ONE) * 255.0;
+                    image.push_str(&format!(
+                        "{} {} {}\n",
+                        rgb.x as u32, rgb.y as u32, rgb.z as u32
+                    ));
+                }
+            }
+        }
+        std::fs::create_dir_all("target/planetary-reference").unwrap();
+        std::fs::write("target/planetary-reference/reference.ppm", reference_image).unwrap();
+        std::fs::write("target/planetary-reference/gpu.ppm", actual_image).unwrap();
+        println!(
+            "orbital maximum relative radiance={max_error}, transmittance absolute={max_trans}; 32-ray azimuth/limb reference images + foreground depth"
+        );
+        // With an opaque source occluder, the central clear-air column receives no source.
+        params[7] = [0.0, 0.0, 300000.0, 1737.4];
+        let eclipsed = gpu.probe(&params, &[[0.0, 0.0, -1.0, 1e6]]);
+        assert!(eclipsed[0][..3].iter().all(|v| v.abs() < 1e-5));
+        params[7] = [0.0; 4];
+        params[6][1] = 0.55;
+        params[6][2] = 0.5;
+        let cloudy = gpu.probe(&params, &directions);
+        let repeated = gpu.probe(&params, &directions);
+        assert_eq!(
+            cloudy, repeated,
+            "body-fixed cloud field must repeat exactly"
+        );
+        params[4][3] = 256.0;
+        let dense = gpu.probe(&params, &directions);
+        let mut cloud_error = 0.0_f64;
+        for (i, (a, b)) in cloudy.iter().zip(&dense).enumerate() {
+            for channel in 0..3 {
+                let error = if i % 2 == 0 {
+                    (f64::from(a[channel] - b[channel])).abs() / f64::from(b[channel]).max(1.0)
+                } else {
+                    f64::from(a[channel] - b[channel]).abs()
+                };
+                cloud_error = cloud_error.max(error);
+            }
+        }
+        println!(
+            "cloud 128/512 integration maximum radiance-relative or transmittance-absolute difference={cloud_error}"
+        );
+        assert!(cloud_error < 0.25, "cloud quadrature must stay bounded");
+        assert!(cloudy.iter().flatten().all(|v| v.is_finite() && *v >= 0.0));
+        assert!(
+            cloudy.iter().zip(&actual).any(|(a, b)| a != b),
+            "clouds must alter transport"
+        );
     });
 }

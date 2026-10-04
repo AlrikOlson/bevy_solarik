@@ -1,4 +1,4 @@
-#import bevy_solarik::atmosphere_model::{AtmosphereParams, ATM_PI, GROUND_RADIUS, TOP_RADIUS, observer_position, sample_medium, segment_integral, atmosphere_boundary, optical_transmittance, transmittance_position, sample_transmittance, integrate_atmosphere, sky_direction, sky_uv, cube_direction, star_radiance}
+#import bevy_solarik::atmosphere_model::{AtmosphereParams, ATM_PI, ground_radius, top_radius, observer_position, sample_medium, segment_integral, atmosphere_boundary, optical_transmittance, transmittance_position, sample_transmittance, integrate_atmosphere, sky_direction, sky_uv, cube_direction, star_radiance}
 
 @group(0) @binding(0) var<uniform> p: AtmosphereParams;
 @group(0) @binding(1) var filtering: sampler;
@@ -9,11 +9,11 @@
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let size = textureDimensions(output);
     if any(id.xy >= size) { return; }
-    let rm = transmittance_position(vec2<f32>(id.xy)/vec2<f32>(size-1u));
+    let rm = transmittance_position(p, vec2<f32>(id.xy)/vec2<f32>(size-1u));
     let origin = vec3(0.0, rm.x, 0.0);
     let dir = vec3(sqrt(max(0.0, 1.0-rm.y*rm.y)), rm.y, 0.0);
     let b = rm.x*rm.y;
-    let distance = max(0.0, -b+sqrt(max(0.0, b*b+(TOP_RADIUS-rm.x)*(TOP_RADIUS+rm.x))));
+    let distance = max(0.0, -b+sqrt(max(0.0, b*b+(top_radius(p)-rm.x)*(top_radius(p)+rm.x))));
     textureStore(output, id.xy, vec4(optical_transmittance(p, origin, dir, distance, 128u), 1.0));
 }
 #endif
@@ -26,7 +26,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let size = textureDimensions(output);
     if any(id.xy >= size) { return; }
     let uv = vec2<f32>(id.xy)/vec2<f32>(size-1u);
-    let origin = vec3(0.0, GROUND_RADIUS+clamp(uv.y*100.0, 0.001, 99.999), 0.0);
+    let origin = vec3(0.0, ground_radius(p)+clamp(uv.y*(top_radius(p)-ground_radius(p)), 0.001, top_radius(p)-ground_radius(p)-0.001), 0.0);
     let mu = uv.x*2.0-1.0;
     let sun = vec3(sqrt(max(0.0, 1.0-mu*mu)), mu, 0.0);
     var l2 = vec3(0.0);
@@ -37,7 +37,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let angle = f32(k)*2.39996323;
         let r = sqrt(max(0.0, 1.0-y*y));
         let dir = vec3(r*cos(angle), y, r*sin(angle));
-        let boundary = atmosphere_boundary(origin, dir);
+        let boundary = atmosphere_boundary(p, origin, dir);
         var throughput = vec3(1.0);
         for (var i = 0u; i < 64u; i++) {
             let a = f32(i)/64.0;
@@ -46,15 +46,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let t1 = b*b*boundary.x;
             let dt = t1-t0;
             let position = origin+dir*((t0+t1)*0.5);
-            let m = sample_medium(p, length(position)-GROUND_RADIUS);
+            let m = sample_medium(p, length(position)-ground_radius(p));
             let weight = throughput * m.scattering * segment_integral(m.extinction, dt);
             feedback += weight / 64.0;
-            l2 += weight * sample_transmittance(trans, filtering, position, sun) / (64.0*4.0*ATM_PI);
+            l2 += weight * sample_transmittance(p, trans, filtering, position, sun) / (64.0*4.0*ATM_PI);
             throughput *= exp(-m.extinction*dt);
         }
         if boundary.y > 0.0 {
             let normal = normalize(origin+dir*boundary.x);
-            l2 += throughput * p.ground.rgb * sample_transmittance(trans, filtering, normal*(GROUND_RADIUS+0.001), sun)
+            l2 += throughput * p.ground.rgb * sample_transmittance(p, trans, filtering, normal*(ground_radius(p)+0.001), sun)
                 * max(dot(normal, sun), 0.0) / (64.0*ATM_PI);
         }
     }
@@ -77,7 +77,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let direction = sky_direction(p, uv);
     let origin = observer_position(p);
     let transport = integrate_atmosphere(p, origin, direction, 1e6, u32(p.observer.w), trans, multiple, filtering, true);
-    let reaches_space = atmosphere_boundary(origin, direction).y == 0.0;
+    let reaches_space = atmosphere_boundary(p, origin, direction).y == 0.0;
     // Natural background is always present: daylight hides it through radiance,
     // not a time-of-day fade or exposure-dependent gain.
     let background = vec3(0.00012, 0.00022, 0.0004) * p.observer.z;
@@ -99,7 +99,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let origin = observer_position(p);
     var stars = star_radiance(direction, footprint)*p.observer.z;
     if any(stars > vec3(0.0)) {
-        let boundary = atmosphere_boundary(origin, direction);
+        let boundary = atmosphere_boundary(p, origin, direction);
         if boundary.y > 0.0 { stars = vec3(0.0); }
         else { stars *= optical_transmittance(p, origin, direction, boundary.x, 128u); }
     }

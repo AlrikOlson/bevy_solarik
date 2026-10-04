@@ -43,6 +43,8 @@ The [capture record](docs/readme-captures.md) documents the remaining settling.
 
 ## What changed
 
+- Development builds add optional [planetary atmosphere geometry and procedural clouds](docs/atmosphere.md#optional-spherical-world-mode-development), with finite shell clipping, opaque-depth composition and numerical orbital checks. Existing local-ground mode stays available.
+
 - The optional [GPU atmosphere](docs/atmosphere.md) supplies Rayleigh/Mie scattering, ozone, multiple scattering, physical sun/moon attenuation, stars and aerial perspective. Its disk-free cubemap lights rays that leave the scene.
 - Point and spot lights use Bevy's light units and falloff.
 - Alpha masks let rays pass through gaps in leaves. Authored double-sided masked leaf transmission is supported by the reference pathtracer, primary-foliage realtime pass and bounded glossy/glass reflections. World-cache propagation and ReSTIR GI secondary endpoints also combine both leaf hemispheres; [foliage notes](docs/foliage.md#restir-gi-endpoints) describe side-safe reuse and the remaining primary receiver integration.
