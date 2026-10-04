@@ -1,6 +1,6 @@
 use super::collimated::CollimatedMaterials;
 use super::{
-    RaytracingMesh3d,
+    RaytracingMesh3d, SolarikRaySettings,
     blas::BlasManager,
     extract::StandardMaterialAssets,
     light_sampling::{build_alias_table, local_flux, luminance},
@@ -120,7 +120,7 @@ pub fn prepare_raytracing_scene_bindings(
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
     sky_light: Res<SolarikSkyLight>,
-    alpha_testing: Res<SolarikAlphaTesting>,
+    (alpha_testing, ray_settings): (Res<SolarikAlphaTesting>, Res<SolarikRaySettings>),
     render_device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
     render_queue: Res<RenderQueue>,
@@ -467,7 +467,9 @@ pub fn prepare_raytracing_scene_bindings(
     // also holds binding arrays (the textures and mesh slabs above).
     let mut sky_buffer = StorageBuffer::from(GpuSkyLight {
         intensity: sky_shader_intensity(sky_light.intensity, sky_image.is_some()),
-        _padding: Vec3::ZERO,
+        ray_max_distance: ray_settings.max_distance(),
+        relative_ray_min: ray_settings.relative_min_distance(),
+        _padding: 0.0,
     });
     sky_buffer.write_buffer(&render_device, &render_queue);
 
@@ -796,7 +798,9 @@ impl GpuDirectionalLight {
 #[derive(ShaderType)]
 struct GpuSkyLight {
     intensity: f32,
-    _padding: Vec3,
+    ray_max_distance: f32,
+    relative_ray_min: f32,
+    _padding: f32,
 }
 
 fn tlas_transform(transform: &Mat4) -> [f32; 12] {

@@ -10,7 +10,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::sky_sampling::sample_sky_mixture
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
 #import bevy_solarik::sampling::{sample_random_light_transmitted, shade_gi_connection, balance_heuristic, isnan}
-#import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, RAY_T_MAX}
+#import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, ray_max_distance}
 #import bevy_solarik::world_cache::{query_two_sided_world_cache, WORLD_CACHE_CELL_LIFETIME}
 #import bevy_solarik::realtime_bindings::{view_output, gi_reservoirs_a, gi_reservoirs_b, gbuffer, depth_buffer, motion_vectors, previous_gbuffer, previous_depth_buffer, view, previous_view, constants, Reservoir}
 #import bevy_solarik::specular_gi::DIFFUSE_GI_REUSE_ROUGHNESS_THRESHOLD
@@ -21,7 +21,7 @@ const CONFIDENCE_WEIGHT_CAP = 8.0;
 const MAX_GI_SAMPLE_AGE = 16.0;
 // Where a sample that escaped to the sky is said to sit: far enough along its
 // ray that the resampling jacobians read as 1 and the neighbours' visibility
-// re-trace covers the whole scene, and under RAY_T_MAX.
+// re-trace covers the whole scene, and under ray_max_distance().
 const SKY_SAMPLE_DISTANCE = 10000.0;
 
 @compute @workgroup_size(8, 8, 1)
@@ -98,7 +98,7 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
         reservoir.sample_point_world_normal = -ray_direction;
         return reservoir;
     }
-    let ray = trace_ray(world_position + (world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, RAY_T_MAX, RAY_FLAG_NONE);
+    let ray = trace_ray(world_position + (world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, ray_max_distance(), RAY_FLAG_NONE);
 
     if ray.kind == RAY_QUERY_INTERSECTION_NONE {
         // The ray left the scene: it sees the sky. The sample point is a far

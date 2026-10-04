@@ -57,6 +57,17 @@ The [lighting notes](docs/lighting.md) cover the implementation and tradeoffs. T
 
 ## Usage
 
+Development builds expose `SolarikRaySettings` through the prelude. Insert
+`SolarikRaySettings::new(max_distance, relative_min_distance)?` as a resource
+to choose the scene's traversal range in render units. The defaults retain
+the existing 100,000-unit maximum and zero coordinate-relative floor.
+The optional floor multiplies the largest absolute ray-origin coordinate;
+it can suppress large-coordinate self-intersections but skips nearby occluders.
+Increasing the maximum does not improve floating-point geometry precision.
+Reset view histories after changing these settings. Invalid or nonfinite
+settings are rejected before GPU upload. These settings apply to reference,
+realtime, shadow and glass traversal, without prescribing world units.
+
 Use the tagged version with Bevy 0.19.1. This example enables DLSS Ray Reconstruction; see the SDK requirements below.
 
 ```toml

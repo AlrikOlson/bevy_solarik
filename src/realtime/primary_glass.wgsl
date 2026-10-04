@@ -3,7 +3,7 @@ enable wgpu_ray_query;
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, offset_thin_glass_ray}
 #import bevy_solarik::gbuffer_utils::{reconstruct_world_position, ResolvedGPixel}
-#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, RAY_T_MAX}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, RAY_T_MIN, ray_max_distance}
 #import bevy_solarik::specular_gi::trace_glossy_path
 #import bevy_solarik::surface_path::shade_surface_path
 #import bevy_solarik::realtime_bindings::{view_output, depth_buffer, view, constants}
@@ -18,7 +18,7 @@ fn primary_glass(@builtin(global_invocation_id) id: vec3<u32>) {
     let along_ray = reconstruct_world_position(id.xy, 0.5, view.main_pass_viewport.zw, view.world_from_clip);
     let direction = normalize(along_ray - origin);
     let depth = textureLoad(depth_buffer, id.xy, 0);
-    var distance = RAY_T_MAX;
+    var distance = ray_max_distance();
     if depth > 0.0 {
         let background_position = reconstruct_world_position(id.xy, depth, view.main_pass_viewport.zw, view.world_from_clip);
         distance = max(0.0, dot(background_position - origin, direction) - RAY_T_MIN);

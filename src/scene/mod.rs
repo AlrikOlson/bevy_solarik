@@ -3,10 +3,12 @@ mod blas;
 pub mod collimated;
 mod extract;
 mod light_sampling;
+mod ray_settings;
 mod types;
 
 use bevy_shader::load_shader_library;
 pub use binder::{RaytracingSceneBindings, SolarikAlphaTesting, SolarikSkyLight};
+pub use ray_settings::SolarikRaySettings;
 pub use types::RaytracingMesh3d;
 
 use crate::SolarikPlugins;
@@ -45,6 +47,7 @@ impl Plugin for RaytracingScenePlugin {
         // (no image = no sky, upstream behaviour).
         app.init_resource::<SolarikSkyLight>();
         app.init_resource::<SolarikAlphaTesting>();
+        app.init_resource::<SolarikRaySettings>();
     }
 
     fn finish(&self, app: &mut App) {
@@ -63,6 +66,7 @@ impl Plugin for RaytracingScenePlugin {
             ExtractResourcePlugin::<StandardMaterialAssets>::default(),
             ExtractResourcePlugin::<SolarikSkyLight>::default(),
             ExtractResourcePlugin::<SolarikAlphaTesting>::default(),
+            ExtractResourcePlugin::<SolarikRaySettings>::default(),
         ));
 
         let render_app = app.sub_app_mut(RenderApp);
@@ -73,6 +77,7 @@ impl Plugin for RaytracingScenePlugin {
             .extra_buffer_usages |= BufferUsages::BLAS_INPUT | BufferUsages::STORAGE;
         render_app.init_resource::<SolarikSkyLight>();
         render_app.init_resource::<SolarikAlphaTesting>();
+        render_app.init_resource::<SolarikRaySettings>();
 
         render_app
             .init_gpu_resource::<BlasManager>()

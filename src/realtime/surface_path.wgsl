@@ -4,7 +4,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::rand_f
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
 #import bevy_solarik::sampling::{analytic_light_radiance, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, resolve_ray_hit_full, sample_sky, light_sources, ResolvedRayHitFull, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, resolve_ray_hit_full, sample_sky, light_sources, ResolvedRayHitFull, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, RAY_T_MIN, ray_max_distance, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 
 // A separate estimator avoids feeding two-sided samples to one-sided caches.
@@ -47,9 +47,9 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
         var delta = mirror;
         var origin = offset_thin_glass_ray(hit.world_position, hit.geometric_world_normal, wi, RAY_T_MIN);
         for (var panes = 0u; panes <= 32u; panes += 1u) {
-            let ray = trace_glass_ray(origin, wi, RAY_T_MIN, RAY_T_MAX);
+            let ray = trace_glass_ray(origin, wi, RAY_T_MIN, ray_max_distance());
             radiance += throughput * analytic_light_radiance(origin, wi,
-                select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), delta, previous_position);
+                select(ray.t, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE), delta, previous_position);
             if ray.kind == RAY_QUERY_INTERSECTION_NONE {
                 return radiance + throughput * sample_sky(wi);
             }

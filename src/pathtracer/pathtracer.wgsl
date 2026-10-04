@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
 #import bevy_solarik::sampling::{analytic_light_radiance, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, ggx_vndf_pdf, power_heuristic}
-#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, ray_max_distance, MIRROR_ROUGHNESS_THRESHOLD}
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
 
@@ -45,9 +45,9 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var glass_interactions = 0u;
     var analytic_owned = false;
     loop {
-        let ray = trace_glass_ray(ray_origin, ray_direction, ray_t_min, RAY_T_MAX);
+        let ray = trace_glass_ray(ray_origin, ray_direction, ray_t_min, ray_max_distance());
         radiance += throughput * analytic_light_radiance(ray_origin, ray_direction,
-            select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
+            select(ray.t, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
         if ray.kind != RAY_QUERY_INTERSECTION_NONE {
             let ray_hit = resolve_ray_hit_full(ray);
             let wo = -ray_direction;

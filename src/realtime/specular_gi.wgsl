@@ -12,7 +12,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, ResolvedGPixel}
 #import bevy_solarik::sampling::{analytic_light_radiance, shade_gi_connection, sample_random_light_transmitted, random_emissive_light_solid_angle_pdf, sample_ggx_vndf, ggx_vndf_pdf, ggx_vndf_sample_invalid, power_heuristic}
 #import bevy_solarik::thin_glass::{thin_glass_weights, sample_thin_glass, offset_thin_glass_ray}
-#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, RAY_T_MAX, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{emitted_radiance, trace_glass_ray, materials, material_ids, MATERIAL_FLAG_ALPHA_BLEND, MATERIAL_FLAG_DIFFUSE_BLEND, resolve_material_alpha, resolve_ray_hit_full, sample_sky, ResolvedRayHitFull, RAY_T_MIN, ray_max_distance, MIRROR_ROUGHNESS_THRESHOLD}
 #import bevy_solarik::world_cache::{query_world_cache, get_cell_size, WORLD_CACHE_CELL_LIFETIME}
 #import bevy_solarik::realtime_bindings::{view_output, gi_reservoirs_a, gbuffer, depth_buffer, view, constants}
 #ifdef DLSS_RR_GUIDE_BUFFERS
@@ -78,7 +78,7 @@ fn specular_gi(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(view_output, global_id.xy, pixel_color);
 
 #ifdef VISUALIZE_WORLD_CACHE
-    textureStore(view_output, global_id.xy, vec4(query_world_cache(surface.world_position, surface.world_normal, view.world_position, RAY_T_MAX, WORLD_CACHE_CELL_LIFETIME, &rng) * view.exposure, 1.0));
+    textureStore(view_output, global_id.xy, vec4(query_world_cache(surface.world_position, surface.world_normal, view.world_position, ray_max_distance(), WORLD_CACHE_CELL_LIFETIME, &rng) * view.exposure, 1.0));
 #endif
 }
 
@@ -103,9 +103,9 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
     // Three opaque bounces; thin panes have their own bounded budget.
     for (var i = 0u; i < 3u;) {
         // Trace ray
-        let ray = trace_glass_ray(ray_origin, wi, RAY_T_MIN, RAY_T_MAX);
+        let ray = trace_glass_ray(ray_origin, wi, RAY_T_MIN, ray_max_distance());
         radiance += throughput * analytic_light_radiance(ray_origin, wi,
-            select(ray.t, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
+            select(ray.t, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE {
             // The ray left the scene: it sees the sky. Nothing else samples
             // the sky for this lobe (the sky is not in the light list), so

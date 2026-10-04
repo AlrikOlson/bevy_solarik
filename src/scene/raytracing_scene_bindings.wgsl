@@ -115,7 +115,9 @@ struct LocalLight {
 // (0 when the scene has no sky).
 struct SkyLight {
     intensity: f32,
-    _padding: vec3<f32>,
+    ray_max_distance: f32,
+    relative_ray_min: f32,
+    _padding: f32,
 }
 
 struct DirectionalLight {
@@ -159,6 +161,9 @@ fn sample_sky(direction: vec3<f32>) -> vec3<f32> {
 const RAY_T_MIN = 0.001f;
 const RAY_T_MAX = 100000.0f;
 
+// RAY_T_MAX retains the historical default for external shader compatibility.
+fn ray_max_distance() -> f32 { return sky_light.ray_max_distance; }
+
 const RAY_NO_CULL = 0xFFu;
 
 fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32) -> RayIntersection {
@@ -172,7 +177,13 @@ fn trace_glass_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f
 }
 
 fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> RayIntersection {
-    let ray = RayDesc(ray_flag, RAY_NO_CULL, ray_t_min, ray_t_max, ray_origin, ray_direction);
+    let minimum = max(ray_t_min, max(max(abs(ray_origin.x), abs(ray_origin.y)), abs(ray_origin.z)) * sky_light.relative_ray_min);
+    let maximum = min(ray_t_max, ray_max_distance());
+    if minimum > maximum {
+        var miss: RayIntersection;
+        return miss;
+    }
+    let ray = RayDesc(ray_flag, RAY_NO_CULL, minimum, maximum, ray_origin, ray_direction);
     var rq: ray_query;
     rayQueryInitialize(&rq, tlas, ray);
     // Opaque geometry commits in hardware and never shows up here. Meshes

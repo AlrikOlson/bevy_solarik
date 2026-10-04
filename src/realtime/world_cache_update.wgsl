@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_render::view::View
 #import bevy_solarik::presample_light_tiles::{ResolvedLightSamplePacked, unpack_resolved_light_sample}
 #import bevy_solarik::sampling::{calculate_resolved_light_contribution, trace_light_transmission, trace_shadow_transmission_impl}
-#import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, RAY_T_MAX}
+#import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, ray_max_distance}
 #import bevy_solarik::world_cache::{
     WORLD_CACHE_MAX_TEMPORAL_SAMPLES,
     WORLD_CACHE_DIRECT_LIGHT_SAMPLE_COUNT,
@@ -56,10 +56,10 @@ fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
     // Traced to the end of the world so that geometry beyond the GI ray
     // distance is not mistaken for sky; such far hits contribute nothing, as
     // upstream's shorter ray had them.
-    let ray = trace_ray(geometry_data.world_position + (geometry_data.world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, RAY_T_MAX, RAY_FLAG_NONE);
+    let ray = trace_ray(geometry_data.world_position + (geometry_data.world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, ray_max_distance(), RAY_FLAG_NONE);
     // trace_ray skips thin panes when finding the endpoint. Apply their energy
     // to this new cache sample once, excluding the endpoint itself.
-    let connection_distance = select(ray.t - RAY_T_MIN, RAY_T_MAX, ray.kind == RAY_QUERY_INTERSECTION_NONE);
+    let connection_distance = select(ray.t - RAY_T_MIN, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE);
     let transmission = trace_shadow_transmission_impl(geometry_data.world_position + geometry_data.world_normal * RAY_T_MIN, ray_direction, connection_distance, false).rgb;
     if ray.kind == RAY_QUERY_INTERSECTION_NONE {
         // Escaped to the sky: cosine sampling turns radiance into irradiance

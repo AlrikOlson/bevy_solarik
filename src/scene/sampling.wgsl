@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
 #import bevy_solarik::thin_glass::thin_glass_weights
-#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, RAY_T_MAX, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, ray_max_distance, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
     return balance_heuristic(f * f, g * g);
@@ -344,7 +344,7 @@ fn analytic_light_radiance(origin: vec3<f32>, wi: vec3<f32>, limit: f32, owned: 
                 light_ray / sqrt(distance_squared), distance_squared);
         }
     }
-    if limit == RAY_T_MAX {
+    if limit == ray_max_distance() {
         for (var i = 0u; i < arrayLength(&directional_lights); i += 1u) {
             let light = directional_lights[i];
             if light.cos_theta_max < 1.0 && dot(wi, light.direction_to_light) >= light.cos_theta_max {
@@ -403,7 +403,7 @@ fn shade_gi_connection(world_position: vec3<f32>, world_normal: vec3<f32>, endpo
 // Connection energy and competing straight-through BSDF probability.
 fn trace_light_transmission(origin: vec3<f32>, light_position: vec4<f32>) -> vec4<f32> {
     var direction = light_position.xyz;
-    var distance = RAY_T_MAX;
+    var distance = ray_max_distance();
     if light_position.w != LIGHT_SAMPLE_DIRECTIONAL {
         let delta = light_position.xyz - origin;
         distance = length(delta);
@@ -449,7 +449,7 @@ fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t
 
 fn trace_light_visibility(ray_origin: vec3<f32>, light_sample_world_position: vec4<f32>) -> f32 {
     var ray_direction = light_sample_world_position.xyz;
-    var ray_t_max = RAY_T_MAX;
+    var ray_t_max = ray_max_distance();
 
     if light_sample_world_position.w != LIGHT_SAMPLE_DIRECTIONAL {
         let ray = ray_direction - ray_origin;
