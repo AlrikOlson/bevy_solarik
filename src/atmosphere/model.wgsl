@@ -70,7 +70,7 @@ fn weather_noise(q: vec3<f32>) -> f32 {
 fn cloud_density(p: AtmosphereParams, position: vec3<f32>, footprint: f32) -> f32 {
     if p.shell.y <= 0.0 { return 0.0; }
     let h = length(position)-ground_radius(p);
-    let envelope = smoothstep(2.0,3.0,h)*(1.0-smoothstep(6.0,8.0,h));
+    let envelope = smoothstep(CLOUD_BASE,CLOUD_BASE+1.0,h)*(1.0-smoothstep(CLOUD_TOP-2.0,CLOUD_TOP,h));
     if envelope <= 0.0 { return 0.0; }
     let q = normalize(position)*12.0 + vec3(p.shell.w*0.013);
     let warp = vec3(weather_noise(q+vec3(7.0,2.0,9.0)),weather_noise(q+vec3(3.0,8.0,1.0)),weather_noise(q+vec3(1.0,4.0,5.0)));
@@ -210,24 +210,55 @@ fn local_inscattering(p: AtmosphereParams, position: vec3<f32>, direction: vec3<
     return result;
 }
 
-fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32,
-    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler, ground: bool) -> AtmosphereTransport {
-    var start = 0.0;
-    let outer = sphere_interval(origin, direction, top_radius(p));
-    if outer.y <= 0.0 { return AtmosphereTransport(vec3(0.0),vec3(1.0)); }
-    start = max(outer.x, 0.0);
-    let boundary = atmosphere_boundary(p, origin, direction);
-    let length_max = max(0.0, min(distance, boundary.x)-start);
+// Front-to-back composition of two consecutive ray segments.
+fn combine_transport(front: AtmosphereTransport, back: AtmosphereTransport) -> AtmosphereTransport {
+    return AtmosphereTransport(front.radiance+front.transmittance*back.radiance,
+        front.transmittance*back.transmittance);
+}
+
+// Clear air over [t0, t1]. Quadratic intervals concentrate samples near t0,
+// which suits an observer inside the medium; both spacings cover the endpoint.
+fn integrate_air(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t0: f32, t1: f32, samples: u32,
+    quadratic: bool, trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler) -> AtmosphereTransport {
     var result = AtmosphereTransport(vec3(0.0), vec3(1.0));
+    let span = t1-t0;
+    if span <= 0.0 { return result; }
     for (var i = 0u; i < samples; i++) {
-        // Quadratic intervals improve near-observer integration and still cover
-        // the entire segment, including its final endpoint.
         let a = f32(i)/f32(samples);
         let b = f32(i+1u)/f32(samples);
-        let t0 = start+a*a*length_max;
-        let t1 = start+b*b*length_max;
-        let dt = t1-t0;
-        let position = origin+direction*((t0+t1)*0.5);
+        let near = t0+select(a, a*a, quadratic)*span;
+        let far = t0+select(b, b*b, quadratic)*span;
+        let dt = far-near;
+        let position = origin+direction*((near+far)*0.5);
+        let m = sample_medium(p, length(position)-ground_radius(p));
+        let source = local_inscattering(p, position, direction, m, trans, multi, filtering);
+        result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
+        result.transmittance *= exp(-m.extinction*dt);
+    }
+    return result;
+}
+
+// Cloud shell altitudes above the ground radius, km.
+const CLOUD_BASE: f32 = 2.0;
+const CLOUD_TOP: f32 = 8.0;
+// Cloud march step in km at the 128-sample budget; the step scales inversely
+// with the budget, which also caps the count on long grazing paths.
+const CLOUD_STEP: f32 = 0.25;
+const CLOUD_MIN_SAMPLES: u32 = 8u;
+
+// Air and cloud over one crossing of the cloud shell, on uniform midpoints.
+// The shell is a few km thick inside a ~100 km atmosphere, so it cannot share
+// the clear-air quadrature without aliasing into altitude contours.
+fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t0: f32, t1: f32, budget: u32,
+    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler) -> AtmosphereTransport {
+    var result = AtmosphereTransport(vec3(0.0), vec3(1.0));
+    let span = t1-t0;
+    if span <= 0.0 { return result; }
+    let limit = max(budget, CLOUD_MIN_SAMPLES);
+    let count = clamp(u32(ceil(span*f32(limit)/(CLOUD_STEP*128.0))), CLOUD_MIN_SAMPLES, limit);
+    let dt = span/f32(count);
+    for (var i = 0u; i < count; i++) {
+        let position = origin+direction*(t0+(f32(i)+0.5)*dt);
         var m = sample_medium(p, length(position)-ground_radius(p));
         var source = local_inscattering(p, position, direction, m, trans, multi, filtering);
         let cloud = cloud_density(p, position, dt)*p.shell.z;
@@ -235,7 +266,7 @@ fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<
             let h = length(position)-ground_radius(p);
             let mu_sun = dot(normalize(position), p.sun.xyz);
             // Plane-column cloud self-shadow approximation, bounded at grazing angles.
-            let cloud_sun = exp(-cloud*max(8.0-h,0.0)/max(mu_sun,0.08));
+            let cloud_sun = exp(-cloud*max(CLOUD_TOP-h,0.0)/max(mu_sun,0.08));
             let light = sample_transmittance(p, trans, filtering, position, p.sun.xyz)
                 * source_visibility(p, position, p.sun.xyz)*cloud_sun*p.sun.w;
             // A declared two-lobe approximation represents unresolved cloud scattering.
@@ -245,7 +276,60 @@ fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<
         }
         result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
         result.transmittance *= exp(-m.extinction*dt);
+        if max(result.transmittance.x, max(result.transmittance.y, result.transmittance.z)) < 0.0001 { break; }
     }
+    return result;
+}
+
+// Planetary view transport with clouds: clear air and cloud-shell crossings
+// are integrated separately and composited in ray order. A ray crosses the
+// shell at most twice, before and after passing below the cloud base.
+fn integrate_view(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32,
+    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler) -> AtmosphereTransport {
+    let outer = sphere_interval(origin, direction, top_radius(p));
+    if outer.y <= 0.0 { return AtmosphereTransport(vec3(0.0),vec3(1.0)); }
+    let start = max(outer.x, 0.0);
+    let end = max(start, min(distance, atmosphere_boundary(p, origin, direction).x));
+    if p.shell.y <= 0.0 || p.shell.z <= 0.0 {
+        return integrate_air(p, origin, direction, start, end, samples, true, trans, multi, filtering);
+    }
+    let top = sphere_interval(origin, direction, ground_radius(p)+CLOUD_TOP);
+    let base = sphere_interval(origin, direction, ground_radius(p)+CLOUD_BASE);
+    var first = top;
+    var second = vec2(start);
+    if base.y > base.x {
+        first = vec2(top.x, base.x);
+        second = vec2(base.y, top.y);
+    }
+    first = clamp(first, vec2(start), vec2(end));
+    second = clamp(second, vec2(first.y), vec2(end));
+    let has_second = second.y > second.x;
+    let middle = select(end, second.x, has_second);
+    // Clear-air samples follow path length. An observer inside the medium
+    // keeps the near-weighted spacing on the first segment.
+    let scale = f32(samples)/max(end-start, 1e-6);
+    var result = integrate_air(p, origin, direction, start, first.x,
+        clamp(u32(ceil((first.x-start)*scale)), 8u, samples), start <= 0.0, trans, multi, filtering);
+    result = combine_transport(result, integrate_cloud(p, origin, direction, first.x, first.y, samples, trans, multi, filtering));
+    result = combine_transport(result, integrate_air(p, origin, direction, first.y, middle,
+        clamp(u32(ceil((middle-first.y)*scale)), 8u, samples), first.y <= 0.0, trans, multi, filtering));
+    if has_second {
+        result = combine_transport(result, integrate_cloud(p, origin, direction, second.x, second.y, samples, trans, multi, filtering));
+        result = combine_transport(result, integrate_air(p, origin, direction, second.y, end,
+            clamp(u32(ceil((end-second.y)*scale)), 8u, samples), false, trans, multi, filtering));
+    }
+    return result;
+}
+
+// Clear-air transport for lookup fields and local-ground views.
+fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32,
+    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler, ground: bool) -> AtmosphereTransport {
+    let outer = sphere_interval(origin, direction, top_radius(p));
+    if outer.y <= 0.0 { return AtmosphereTransport(vec3(0.0),vec3(1.0)); }
+    let start = max(outer.x, 0.0);
+    let boundary = atmosphere_boundary(p, origin, direction);
+    let length_max = max(0.0, min(distance, boundary.x)-start);
+    var result = integrate_air(p, origin, direction, start, start+length_max, samples, true, trans, multi, filtering);
     if ground && boundary.y > 0.0 && distance >= boundary.x {
         let position = origin+direction*boundary.x;
         let normal = normalize(position);

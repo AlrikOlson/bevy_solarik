@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Planetary clouds are integrated on their own ray intervals instead of sharing the clear-air quadrature, and cloud extinction accepts physical liquid-cloud values (up to 0.2 m⁻¹). Cloud-march convergence error fell from 11.2% to 0.51%. Lookup fields are now clear air only. [Details and cost](docs/atmosphere.md#optional-spherical-world-mode-development).
+
 - Optional GPU clear-sky atmosphere: Rayleigh/Mie scattering, ozone, multiple scattering, attenuated sun/moon lighting, photometric stars and aerial perspective. The visible sky, raster environment and ray-traced transport share physical radiance units. [Controls, numerical validation and limits](docs/atmosphere.md).
 
 - Solarik now includes its own `bevy_render` fork. The CPU-visible entity lookup uses the list's main-entity ordering, preserving visible meshes while their materials load. Applications using development checkouts must apply the root Cargo patch documented in the README; tagged `v0.1.0` is unchanged.

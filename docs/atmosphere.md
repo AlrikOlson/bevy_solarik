@@ -21,6 +21,19 @@ does not automatically bind its observer-dependent cube as global lighting.
 Optional deterministic cloud density uses body-fixed, warped 3D value noise,
 a finite 2–8 km layer, and integration-footprint filtering. No cloud textures
 or baked sky assets are loaded. Coverage, extinction and u16 seed are explicit.
+Extinction is validated over 0–0.2 m⁻¹, which covers liquid water cloud
+(roughly 0.01–0.1 m⁻¹).
+
+The planetary view integrates the cloud shell separately from clear air.
+A ray crosses the shell at most twice (before and after passing below the
+cloud base); each crossing is marched on uniform midpoints with a 0.25 km
+step at the `High` budget (0.5 km at `Balanced`), at least 8 and at most the
+view sample count, and stops once transmittance falls below 1e-4. Clear-air
+segments before, between and after the crossings receive samples in
+proportion to their length. Segments are composited in ray order. Lookup
+fields (sky view, lighting cube, aerial volume) are clear air only: their
+sample counts cannot resolve the shell, so clouds do not appear in the
+lighting environment.
 Weather is fictional and static. Cloud scattering uses a normalized mixture
 of 35% Cornette–Shanks (g=0.7) and 65% isotropic phase, with albedo 0.99 and a
 bounded plane-column self-shadow approximation. This is not a converged
@@ -40,9 +53,17 @@ samples against an independent f64 metre-based reference with 2,048 view and
 0.1 cd/m² denominator floor), and absolute transmittance error is 0.000756
 (limit 0.01). It writes 8×4 reference/GPU PPMs under `target/planetary-reference`,
 checks foreground depth, eclipse extinction, finite nonnegative cloud output
-and exact repeated evaluation. The 128/512 cloud quadrature comparison has
-maximum 11.2% radiance-relative or 0–1 transmittance-absolute difference
-(limit 0.25). Clear-air accuracy does not establish cloud physical accuracy.
+and exact repeated evaluation. With the dedicated shell march, the 128/512
+view-budget comparison has maximum 0.51% radiance-relative or 0–1
+transmittance-absolute difference (limit 5%); the shared quadrature it
+replaced measured 11.2%. Segmenting a ray at the shell with a vanishing cloud
+extinction reproduces the clear-air reference to 0.034% radiance and 0.00017
+transmittance. Convergence of the march does not establish cloud physical
+accuracy: the lighting model above is unchanged.
+
+At 1920×1080 on the same hardware the shell march raised planetary composite
+GPU time from 0.68 to 1.42 ms p50 for a full-disk orbital view and from 1.43
+to 3.07 ms for a limb view; clear views are unchanged.
 
 Native 800×600 orbital/limb/day/night/pole/cloud-free/eclipse/vacuum views on
 RTX 4090/Vulkan driver 616.56 show a bounded limb and stable return view.

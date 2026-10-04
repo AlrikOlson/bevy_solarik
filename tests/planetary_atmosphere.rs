@@ -39,6 +39,11 @@ fn planetary_geometry_rejects_invalid_domains() {
     p.cloud_coverage = 0.0;
     p.cloud_extinction = -0.001;
     assert!(p.validate().is_err());
+    // Liquid-cloud extinction of tens per kilometre is in range; the bound is 0.2 per metre.
+    p.cloud_extinction = 0.045;
+    assert!(p.validate().is_ok());
+    p.cloud_extinction = 0.21;
+    assert!(p.validate().is_err());
     p.cloud_extinction = 0.0;
     p.occluder_radius = f32::NAN;
     assert!(p.validate().is_err());

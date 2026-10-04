@@ -14,7 +14,8 @@ pub struct PlanetaryAtmosphere {
     pub observer: Vec3,
     /// Fictional static weather coverage, 0..1; zero disables clouds.
     pub cloud_coverage: f32,
-    /// Maximum cloud extinction per metre, 0..0.002.
+    /// Maximum cloud extinction per metre, 0..0.2. Liquid water clouds are
+    /// roughly 0.01 to 0.1 per metre.
     pub cloud_extinction: f32,
     /// Stable recipe seed, exactly representable on the GPU.
     pub seed: u16,
@@ -40,7 +41,7 @@ impl PlanetaryAtmosphere {
             || !self.cloud_coverage.is_finite()
             || !(0.0..=1.0).contains(&self.cloud_coverage)
             || !self.cloud_extinction.is_finite()
-            || !(0.0..=0.002).contains(&self.cloud_extinction)
+            || !(0.0..=0.2).contains(&self.cloud_extinction)
         {
             return Err("invalid planetary atmosphere geometry or cloud controls");
         }

@@ -1,5 +1,5 @@
 #import bevy_render::view::View
-#import bevy_solarik::atmosphere_model::{AtmosphereParams, ATM_PI, observer_position, atmosphere_boundary, integrate_atmosphere, sample_transmittance, sky_uv, star_radiance}
+#import bevy_solarik::atmosphere_model::{AtmosphereParams, ATM_PI, observer_position, atmosphere_boundary, integrate_atmosphere, integrate_view, sample_transmittance, sky_uv, star_radiance}
 
 @group(0) @binding(0) var<uniform> p: AtmosphereParams;
 @group(0) @binding(1) var filtering: sampler;
@@ -67,8 +67,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let h = view.view_from_clip * vec4(uv*vec2(2.0,-2.0)+vec2(-1.0,1.0),pixel_depth,1.0);
             distance = length(h.xyz/h.w)*0.001;
         }
-        let result = integrate_atmosphere(p, observer_position(p), direction, distance,
-            u32(p.observer.w)*2u, trans, multiple, filtering, false);
+        let result = integrate_view(p, observer_position(p), direction, distance,
+            u32(p.observer.w)*2u, trans, multiple, filtering);
         let previous = textureLoad(output,id.xy).rgb;
         let color = previous*result.transmittance+result.radiance*view.exposure;
         textureStore(output,id.xy,vec4(clamp(color,vec3(0.0),vec3(65000.0)),1.0));

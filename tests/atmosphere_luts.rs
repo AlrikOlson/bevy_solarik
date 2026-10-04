@@ -557,7 +557,30 @@ fn orbit_reference(
 }
 
 impl Luts {
+    /// Clear-air transport, as used by lookup fields.
     fn probe(&self, params: &[[f32; 4]; 8], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+        self.probe_with(
+            "integrate_atmosphere(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering,false)",
+            params,
+            directions,
+        )
+    }
+
+    /// Planetary view transport including the cloud shell, as composited.
+    fn probe_view(&self, params: &[[f32; 4]; 8], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+        self.probe_with(
+            "integrate_view(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering)",
+            params,
+            directions,
+        )
+    }
+
+    fn probe_with(
+        &self,
+        call: &str,
+        params: &[[f32; 4]; 8],
+        directions: &[[f32; 4]],
+    ) -> Vec<[f32; 4]> {
         let model = include_str!("../src/atmosphere/model.wgsl")
             .lines()
             .filter(|l| !l.starts_with('#'))
@@ -574,7 +597,7 @@ impl Luts {
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
  let d=directions[id.x];
- let t=integrate_atmosphere(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering,false);
+ let t={call};
  result[id.x*2u]=vec4(t.radiance,1.0); result[id.x*2u+1u]=vec4(t.transmittance,1.0);
 }}
 "#
@@ -757,16 +780,44 @@ fn orbital_shell_matches_independent_reference_and_depth_limits() {
         let eclipsed = gpu.probe(&params, &[[0.0, 0.0, -1.0, 1e6]]);
         assert!(eclipsed[0][..3].iter().all(|v| v.abs() < 1e-5));
         params[7] = [0.0; 4];
+        // Segmenting the ray at the cloud shell must not change clear air:
+        // a vanishing cloud extinction has to reproduce the same reference.
         params[6][1] = 0.55;
+        params[6][2] = 1e-9;
+        let segmented = gpu.probe_view(&params, &directions);
+        let mut segmented_error = 0.0_f64;
+        let mut segmented_trans = 0.0_f64;
+        for (i, d) in directions.iter().enumerate() {
+            let dir = DVec3::new(f64::from(d[0]), f64::from(d[1]), f64::from(d[2])).normalize();
+            let (l, t) = orbit_reference(
+                &state,
+                DVec3::new(0.0, 0.0, 24e6),
+                dir,
+                f64::from(d[3]) * 1000.0,
+            );
+            for channel in 0..3 {
+                let a = f64::from(segmented[i * 2][channel]);
+                let b = f64::from(segmented[i * 2 + 1][channel]);
+                segmented_error = segmented_error.max((a - l[channel]).abs() / l[channel].max(0.1));
+                segmented_trans = segmented_trans.max((b - t[channel]).abs());
+            }
+        }
+        println!(
+            "segmented clear-air maximum relative radiance={segmented_error}, transmittance absolute={segmented_trans}"
+        );
+        assert!(
+            segmented_error <= 0.10 && segmented_trans <= 0.01,
+            "cloud-shell segmentation must preserve clear-air transport"
+        );
         params[6][2] = 0.5;
-        let cloudy = gpu.probe(&params, &directions);
-        let repeated = gpu.probe(&params, &directions);
+        let cloudy = gpu.probe_view(&params, &directions);
+        let repeated = gpu.probe_view(&params, &directions);
         assert_eq!(
             cloudy, repeated,
             "body-fixed cloud field must repeat exactly"
         );
         params[4][3] = 256.0;
-        let dense = gpu.probe(&params, &directions);
+        let dense = gpu.probe_view(&params, &directions);
         let mut cloud_error = 0.0_f64;
         for (i, (a, b)) in cloudy.iter().zip(&dense).enumerate() {
             for channel in 0..3 {
@@ -781,7 +832,7 @@ fn orbital_shell_matches_independent_reference_and_depth_limits() {
         println!(
             "cloud 128/512 integration maximum radiance-relative or transmittance-absolute difference={cloud_error}"
         );
-        assert!(cloud_error < 0.25, "cloud quadrature must stay bounded");
+        assert!(cloud_error < 0.05, "cloud-shell march must converge");
         assert!(cloudy.iter().flatten().all(|v| v.is_finite() && *v >= 0.0));
         assert!(
             cloudy.iter().zip(&actual).any(|(a, b)| a != b),
