@@ -4,6 +4,7 @@ use bevy_asset::{AssetServer, load_embedded_asset};
 use bevy_ecs::{prelude::*, resource::Resource, system::Commands};
 use bevy_render::{
     camera::ExtractedCamera,
+    diagnostic::RecordDiagnostics,
     render_resource::{
         BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
         CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor,
@@ -121,6 +122,8 @@ pub fn pathtracer(
         )),
     );
 
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
     let command_encoder = ctx.command_encoder();
 
     if pathtracer_settings.reset {
@@ -134,8 +137,10 @@ pub fn pathtracer(
         label: Some("pathtracer"),
         timestamp_writes: None,
     });
+    let span = diagnostics.time_span(&mut pass, "pathtracer");
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, scene_bind_group, &[]);
     pass.set_bind_group(1, &bind_group, &[view_uniform_offset.offset]);
     pass.dispatch_workgroups(viewport.x.div_ceil(8), viewport.y.div_ceil(8), 1);
+    span.end(&mut pass);
 }
