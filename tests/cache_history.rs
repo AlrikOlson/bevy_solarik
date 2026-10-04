@@ -44,6 +44,11 @@ fn cache_history_gpu() {
 @group(0) @binding(0) var<storage,read> config:array<vec4<f32>>;
 @group(0) @binding(1) var<storage,read_write> output:array<vec4<f32>>;
 const WORLD_CACHE_MAX_TEMPORAL_SAMPLES=32.0;
+const WORLD_CACHE_EMPTY_CELL=0u;
+var<private> world_cache_life:array<u32,1>;
+var<private> world_cache_checksums:array<u32,1>;
+var<private> world_cache_radiance:array<vec4<f32>,1>;
+var<private> world_cache_luminance_deltas:array<f32,1>;
 @compute @workgroup_size(1)
 fn probe() {
  let p=config[0].x;
@@ -51,10 +56,22 @@ fn probe() {
  var expected=1.0;
  for(var frame=0u;frame<64u;frame++) { expected*=1.0-p*alpha; }
  output[0]=vec4(alpha,expected,mix(10.0,10.0,alpha),0.0);
+ for(var reset=0u;reset<2u;reset++) {
+  world_cache_life[0]=10u;
+  world_cache_checksums[0]=10u;
+  world_cache_radiance[0]=vec4(10.0);
+  world_cache_luminance_deltas[0]=10.0;
+  decay_world_cache_cell(0u,reset==1u);
+  output[reset+1u]=vec4(f32(world_cache_life[0]),f32(world_cache_checksums[0]),world_cache_radiance[0].x,world_cache_luminance_deltas[0]);
+ }
 }
 "#
         .to_owned();
         source.push_str(&function(gi, "cache_blend_amount"));
+        source.push_str(&function(
+            include_str!("../src/realtime/world_cache_compact.wgsl"),
+            "decay_world_cache_cell",
+        ));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production cache temporal response"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -126,6 +143,12 @@ fn probe() {
                 samples[0]
             );
             assert_eq!(samples[0][2], 10.0, "constant light must retain its energy");
+            assert_eq!(
+                samples[1],
+                [9.0, 10.0, 10.0, 10.0],
+                "normal decay preserves live radiance"
+            );
+            assert_eq!(samples[2], [0.0; 4], "reset must discard all cache history");
             drop(data);
             readback.unmap();
         }

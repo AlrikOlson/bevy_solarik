@@ -2,6 +2,7 @@ enable wgpu_ray_query;
 
 #import bevy_solarik::world_cache::WORLD_CACHE_EMPTY_CELL
 #import bevy_solarik::realtime_bindings::{
+    constants,
     world_cache_life,
     world_cache_checksums,
     world_cache_radiance,
@@ -19,15 +20,21 @@ var<workgroup> w2: array<u32, 1024u>;
 
 @compute @workgroup_size(1024, 1, 1)
 fn decay_world_cache(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var life = world_cache_life[global_id.x];
+    decay_world_cache_cell(global_id.x, bool(constants.reset));
+}
+
+// A reset discards world-space history too, including after coordinate rebasing.
+// Reuse the allocation; the following compaction rebuilds an empty active list.
+fn decay_world_cache_cell(index: u32, reset: bool) {
+    var life = select(world_cache_life[index], 1u, reset);
     if life > 0u {
         life -= 1u;
-        world_cache_life[global_id.x] = life;
+        world_cache_life[index] = life;
 
         if life == 0u {
-            world_cache_checksums[global_id.x] = WORLD_CACHE_EMPTY_CELL;
-            world_cache_radiance[global_id.x] = vec4(0.0);
-            world_cache_luminance_deltas[global_id.x] = 0.0;
+            world_cache_checksums[index] = WORLD_CACHE_EMPTY_CELL;
+            world_cache_radiance[index] = vec4(0.0);
+            world_cache_luminance_deltas[index] = 0.0;
         }
     }
 }

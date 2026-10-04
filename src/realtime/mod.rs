@@ -124,6 +124,9 @@ pub struct SolarikLighting {
     ///
     /// Useful for preventing ghosting when the history is no longer
     /// representative of the current frame, such as in sudden camera cuts.
+    /// Discards both screen-space reservoirs and world-cache history, so it is
+    /// also suitable after coordinate-origin or material discontinuities.
+    /// GPU allocations and the camera entity are retained.
     ///
     /// After setting this to true, it will automatically be toggled
     /// back to false at the end of the frame.
