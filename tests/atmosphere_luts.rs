@@ -581,6 +581,18 @@ impl Luts {
         params: &[[f32; 4]; 8],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
+        self.probe_program("", call, params, directions)
+    }
+
+    /// Runs `call` once per input vector `d`, with optional WGSL `helpers`
+    /// compiled after the production model.
+    fn probe_program(
+        &self,
+        helpers: &str,
+        call: &str,
+        params: &[[f32; 4]; 8],
+        directions: &[[f32; 4]],
+    ) -> Vec<[f32; 4]> {
         let model = include_str!("../src/atmosphere/model.wgsl")
             .lines()
             .filter(|l| !l.starts_with('#'))
@@ -594,6 +606,7 @@ impl Luts {
 @group(0) @binding(3) var multiple: texture_2d<f32>;
 @group(0) @binding(4) var<storage,read> directions: array<vec4<f32>>;
 @group(0) @binding(5) var<storage,read_write> result: array<vec4<f32>>;
+{helpers}
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
  let d=directions[id.x];
@@ -838,5 +851,181 @@ fn orbital_shell_matches_independent_reference_and_depth_limits() {
             cloudy.iter().zip(&actual).any(|(a, b)| a != b),
             "clouds must alter transport"
         );
+    });
+}
+
+// Jendersie & d'Eon (2023) Eq. 4-7 at the droplet diameter the shader declares.
+const DROPLET_DIAMETER_UM: f64 = 20.0;
+
+fn droplet_fit() -> (f64, f64, f64, f64) {
+    let d = DROPLET_DIAMETER_UM;
+    let g = (-2.20679 / (d + 3.91029) - 0.428934).exp();
+    let alpha = (3.62489 - 8.29288 / (d + 5.52825)).exp();
+    let weight = (-0.599085 / (d - 0.641583) - 0.665888).exp();
+    let mean =
+        g * (1.0 + alpha * (3.0 + 2.0 * g * g) / 5.0) / (1.0 + alpha * (1.0 + 2.0 * g * g) / 3.0);
+    (weight, g, alpha, mean)
+}
+
+fn shader_constant(name: &str) -> f64 {
+    let source = include_str!("../src/atmosphere/model.wgsl");
+    let declaration = format!("const {name}: f32 = ");
+    let start = source.find(&declaration).expect("declared constant") + declaration.len();
+    let end = start + source[start..].find(';').expect("constant terminator");
+    source[start..end].parse().expect("numeric constant")
+}
+
+#[test]
+fn cloud_phase_constants_match_the_published_fit() {
+    let (weight, g, alpha, mean) = droplet_fit();
+    for (name, expected) in [
+        ("CLOUD_DRAINE_WEIGHT", weight),
+        ("CLOUD_DRAINE_G", g),
+        ("CLOUD_DRAINE_ALPHA", alpha),
+        ("CLOUD_DRAINE_MEAN_COSINE", mean),
+    ] {
+        let actual = shader_constant(name);
+        assert!(
+            (actual - expected).abs() <= expected * 1e-5,
+            "{name}: shader {actual}, fit {expected}"
+        );
+    }
+}
+
+fn draine(mu: f64) -> f64 {
+    let (_, g, alpha, _) = droplet_fit();
+    (1.0 - g * g) * (1.0 + alpha * mu * mu)
+        / (4.0
+            * core::f64::consts::PI
+            * (1.0 + alpha * (1.0 + 2.0 * g * g) / 3.0)
+            * (1.0 + g * g - 2.0 * g * mu).powf(1.5))
+}
+
+/// Deterministic uniform variates in [0, 1).
+struct Variates(u64);
+
+impl Variates {
+    fn next(&mut self) -> f64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// Monte Carlo reflection of a conservative plane-parallel slab with the
+/// Draine phase function over a black boundary, for unit beam-normal
+/// irradiance. Returns the flux albedo and the radiance leaving the top
+/// toward a detector at `mu_view` on the sun's side of the solar plane.
+fn slab_reference(depth: f64, mu_sun: f64, mu_view: f64, photons: u32) -> (f64, f64) {
+    const TABLE: usize = 8192;
+    let mut cdf = vec![0.0; TABLE + 1];
+    for i in 0..TABLE {
+        let mu = -1.0 + 2.0 * (i as f64 + 0.5) / TABLE as f64;
+        cdf[i + 1] = cdf[i] + draine(mu);
+    }
+    let total = cdf[TABLE];
+    let detector = [-(1.0 - mu_view * mu_view).sqrt(), 0.0, -mu_view];
+    let mut variates = Variates(0x9E37_79B9_7F4A_7C15);
+    let (mut reflected, mut radiance) = (0u32, 0.0);
+    for _ in 0..photons {
+        let mut direction = [(1.0 - mu_sun * mu_sun).sqrt(), 0.0, mu_sun];
+        let mut tau = 0.0;
+        loop {
+            tau += -(1.0 - variates.next()).ln() * direction[2];
+            if tau < 0.0 {
+                reflected += 1;
+                break;
+            }
+            if tau > depth {
+                break;
+            }
+            let cosine = direction[0] * detector[0] + direction[2] * detector[2];
+            radiance += draine(cosine) * (-tau / mu_view).exp() / mu_view;
+            let target = variates.next() * total;
+            let bin = cdf.partition_point(|v| *v < target).clamp(1, TABLE);
+            let fraction = (target - cdf[bin - 1]) / (cdf[bin] - cdf[bin - 1]);
+            let mu = -1.0 + 2.0 * (bin as f64 - 1.0 + fraction) / TABLE as f64;
+            let sine = (1.0 - mu * mu).max(0.0).sqrt();
+            let phi = variates.next() * core::f64::consts::TAU;
+            let [x, y, z] = direction;
+            let planar = (1.0 - z * z).max(0.0).sqrt();
+            direction = if planar < 1e-6 {
+                [sine * phi.cos(), sine * phi.sin(), mu * z.signum()]
+            } else {
+                [
+                    sine * (x * z * phi.cos() - y * phi.sin()) / planar + x * mu,
+                    sine * (y * z * phi.cos() + x * phi.sin()) / planar + y * mu,
+                    -sine * phi.cos() * planar + z * mu,
+                ]
+            };
+        }
+    }
+    (
+        f64::from(reflected) / f64::from(photons),
+        radiance / f64::from(photons) * mu_sun,
+    )
+}
+
+/// Integrates the production cloud source functions through a homogeneous
+/// slab. Inputs are scaled optical depth, solar cosine and view cosine. The transmittance
+/// slot carries the diffuse source at the slab top for light leaving upward.
+const SLAB_PROBE: &str = r#"
+fn slab_probe(d: vec4<f32>) -> AtmosphereTransport {
+    // Keeps every binding of the shared probe layout in use.
+    let keep = (textureSampleLevel(trans, filtering, vec2(0.5), 0.0).r
+        + textureSampleLevel(multiple, filtering, vec2(0.5), 0.0).r + p.sun.w)*0.0;
+    let steps = 4096u;
+    let dt = d.x/f32(steps);
+    let cosine = -d.y*d.z-sqrt(max(0.0, 1.0-d.y*d.y))*sqrt(max(0.0, 1.0-d.z*d.z));
+    var radiance = 0.0;
+    for (var i = 0u; i < steps; i++) {
+        let t = (f32(i)+0.5)*dt;
+        let source = phase_draine(cosine)*exp(-t/d.y)+cloud_diffuse(t, d.x, d.y, -d.z, 0.0);
+        radiance += source*exp(-t/d.z)/d.z*dt;
+    }
+    return AtmosphereTransport(vec3(radiance+keep), vec3(cloud_diffuse(0.0, d.x, d.y, -1.0, 0.0)));
+}
+"#;
+
+#[test]
+#[ignore = "Vulkan GPU: run separately from builds and captures"]
+#[expect(
+    clippy::print_stdout,
+    reason = "Reports numerical evidence during explicit GPU validation"
+)]
+fn cloud_slab_reflection_matches_monte_carlo() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        let params = parameters(&AtmosphereState::default());
+        gpu.generate_parameters(&params);
+        let cases: Vec<[f32; 4]> = [5.0_f32, 15.0, 40.0]
+            .into_iter()
+            .flat_map(|depth| [1.0_f32, 0.5].map(|mu_sun| [depth, mu_sun, 1.0, 0.0]))
+            .collect();
+        let actual = gpu.probe_program(SLAB_PROBE, "slab_probe(d)", &params, &cases);
+        let (_, _, _, mean) = droplet_fit();
+        for (i, case) in cases.iter().enumerate() {
+            let (depth, mu_sun) = (f64::from(case[0]), f64::from(case[1]));
+            let (albedo, radiance) = slab_reference(depth, mu_sun, 1.0, 40_000);
+            let model_radiance = f64::from(actual[i * 2][0]);
+            // At the top the downward diffuse flux vanishes, so I1 = -1.5 I0 and
+            // the upward flux is 2 pi I0.
+            let top = f64::from(actual[i * 2 + 1][0]) / (1.0 + 1.5 * mean);
+            let model_albedo = core::f64::consts::TAU * top / mu_sun;
+            let ratio = model_radiance / radiance;
+            println!(
+                "slab depth={depth} mu_sun={mu_sun}: albedo model={model_albedo:.4} reference={albedo:.4}; nadir radiance ratio={ratio:.3}"
+            );
+            assert!(
+                (model_albedo - albedo).abs() <= 0.03,
+                "slab albedo outside 0.03 of Monte Carlo"
+            );
+            let tolerance = if mu_sun > 0.9 { 0.05 } else { 0.25 };
+            assert!(
+                (ratio - 1.0).abs() <= tolerance,
+                "slab nadir radiance outside {tolerance} of Monte Carlo"
+            );
+        }
     });
 }

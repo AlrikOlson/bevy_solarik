@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Planetary cloud lighting: droplet phase from the Jendersie & d'Eon (2023) HG + Draine fit with the forward peak delta-scaled, a marched sun optical depth, and a closed-form delta-Eddington diffuse field for multiple scattering. Thick cloud now reflects like thick cloud; a GPU test compares slab albedo and radiance with Monte Carlo. [Model, measured error and limits](docs/atmosphere.md#optional-spherical-world-mode-development).
+
 - Planetary clouds are integrated on their own ray intervals instead of sharing the clear-air quadrature, and cloud extinction accepts physical liquid-cloud values (up to 0.2 m⁻¹). Cloud-march convergence error fell from 11.2% to 0.51%. Lookup fields are now clear air only. [Details and cost](docs/atmosphere.md#optional-spherical-world-mode-development).
 
 - Optional GPU clear-sky atmosphere: Rayleigh/Mie scattering, ozone, multiple scattering, attenuated sun/moon lighting, photometric stars and aerial perspective. The visible sky, raster environment and ray-traced transport share physical radiance units. [Controls, numerical validation and limits](docs/atmosphere.md).

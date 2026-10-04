@@ -34,10 +34,38 @@ proportion to their length. Segments are composited in ray order. Lookup
 fields (sky view, lighting cube, aerial volume) are clear air only: their
 sample counts cannot resolve the shell, so clouds do not appear in the
 lighting environment.
-Weather is fictional and static. Cloud scattering uses a normalized mixture
-of 35% Cornette–Shanks (g=0.7) and 65% isotropic phase, with albedo 0.99 and a
-bounded plane-column self-shadow approximation. This is not a converged
-multiple-scattering cloud solution. The optional eclipse uses uniform angular
+Weather is fictional and static.
+
+Cloud light transport is a physically motivated approximation with three
+parts. (1) Droplet phase: the HG + Draine fit of Jendersie & d'Eon (2023) at a
+declared 20 µm droplet diameter. Its HG lobe (g = 0.9946, weight 0.502) is a
+forward peak a few degrees wide and is treated as unscattered light, so cloud
+extinction is multiplied by the Draine weight 0.498 and the Draine lobe
+(g = 0.5938, α = 27.11, mean cosine 0.763) is the phase function of the scaled
+medium. A test recomputes these constants from the published equations.
+(2) Single scattering uses that phase and a scaled optical depth marched
+toward the sun on five geometrically growing segments. (3) Higher orders use
+the closed-form conservative Eddington solution for a plane-parallel slab
+over a Lambertian boundary (Shettle & Weinman 1970) after a second delta
+scaling (Joseph, Wiscombe & Weinman 1976), evaluated at the sample's vertical
+optical depth, total column depth and local solar zenith angle. The vertical
+column of the shell profile is analytic, so this adds no samples.
+
+`cloud_slab_reflection_matches_monte_carlo` integrates the production phase
+and diffuse-field functions through a homogeneous slab on the GPU and compares
+with an independent CPU Monte Carlo (40,000 photons, same Draine phase, black
+boundary). For scaled optical depths 5, 15 and 40: albedo differs by at most
+0.020 (limit 0.03); nadir radiance is within 1.5% for an overhead sun (limit
+5%) and 10–17% high at 60° solar zenith (limit 25%). A wider offline sweep
+found thin slabs at 78° solar zenith up to 63% high in nadir radiance, where
+the radiance is under 1% of the overhead-sun thick-slab value.
+
+Limits: no horizontal transport (cloud sides are not brightened and thick
+cores do not light their neighbours), plane-parallel geometry near the
+terminator, a heuristic that attenuates the diffuse field by the excess sun
+optical depth of neighbouring cloud, no forward-peak glow when looking toward
+the sun through thin cloud, sun only (no moonlit cloud), and no sky-light
+illumination of cloud. The optional eclipse uses uniform angular
 disk overlap and this atmosphere's nominal 0.004675-radian solar radius.
 
 This is an opaque-depth presentation approximation: secondary rays do not
@@ -58,12 +86,14 @@ view-budget comparison has maximum 0.51% radiance-relative or 0–1
 transmittance-absolute difference (limit 5%); the shared quadrature it
 replaced measured 11.2%. Segmenting a ray at the shell with a vanishing cloud
 extinction reproduces the clear-air reference to 0.034% radiance and 0.00017
-transmittance. Convergence of the march does not establish cloud physical
-accuracy: the lighting model above is unchanged.
+transmittance.
 
 At 1920×1080 on the same hardware the shell march raised planetary composite
 GPU time from 0.68 to 1.42 ms p50 for a full-disk orbital view and from 1.43
-to 3.07 ms for a limb view; clear views are unchanged.
+to 3.07 ms for a limb view; the sun march and diffuse field raise those to
+4.29 and 5.27 ms. Clear views are unchanged. Cover is evaluated from
+procedural noise at every view and sun sample; a baked weather field would
+remove most of this cost.
 
 Native 800×600 orbital/limb/day/night/pole/cloud-free/eclipse/vacuum views on
 RTX 4090/Vulkan driver 616.56 show a bounded limb and stable return view.
