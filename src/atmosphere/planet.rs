@@ -17,6 +17,11 @@ pub struct PlanetaryAtmosphere {
     pub radius: f32,
     pub height: f32,
     pub observer: Vec3,
+    /// Planet centre in the world space of the lit scene, metres. Ray-traced
+    /// lighting uses it to carry directional light through the air to each
+    /// surface point; with a camera-relative world it is minus `observer`
+    /// plus the camera's world position.
+    pub world_centre: Vec3,
     /// Cloud control, 0..1; zero disables clouds. Without a weather map it is
     /// the cover of the built-in noise field; with one it only enables the
     /// layer, because the map defines cover.
@@ -54,6 +59,7 @@ impl PlanetaryAtmosphere {
             || !self.height.is_finite()
             || !(10_000.0..=200_000.0).contains(&self.height)
             || !self.observer.is_finite()
+            || !self.world_centre.is_finite()
             || self.observer.length() <= self.radius
             || self.observer.length() > 1.0e9
             || !self.occluder.is_finite()

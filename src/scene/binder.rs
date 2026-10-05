@@ -120,7 +120,12 @@ pub fn prepare_raytracing_scene_bindings(
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
     sky_light: Res<SolarikSkyLight>,
-    (alpha_testing, ray_settings): (Res<SolarikAlphaTesting>, Res<SolarikRaySettings>),
+    (alpha_testing, ray_settings, planet, atmosphere): (
+        Res<SolarikAlphaTesting>,
+        Res<SolarikRaySettings>,
+        Option<Res<crate::atmosphere::PlanetaryAtmosphere>>,
+        Option<Res<crate::atmosphere::AtmosphereState>>,
+    ),
     render_device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
     render_queue: Res<RenderQueue>,
@@ -470,6 +475,7 @@ pub fn prepare_raytracing_scene_bindings(
         ray_max_distance: ray_settings.max_distance(),
         relative_ray_min: ray_settings.relative_min_distance(),
         _padding: 0.0,
+        medium: GpuLightMedium::new(planet.as_deref(), atmosphere.as_deref()),
     });
     sky_buffer.write_buffer(&render_device, &render_queue);
 
@@ -801,6 +807,57 @@ struct GpuSkyLight {
     ray_max_distance: f32,
     relative_ray_min: f32,
     _padding: f32,
+    medium: GpuLightMedium,
+}
+
+/// Mirrors `LightMedium` in `light_medium.wgsl`. Metres.
+#[derive(ShaderType, Clone, Copy, Debug, PartialEq)]
+struct GpuLightMedium {
+    centre: Vec3,
+    radius: f32,
+    rayleigh: Vec3,
+    top: f32,
+    ozone: Vec3,
+    mie: f32,
+}
+
+/// Extinction of Earth's air at the ground, per metre: the atmosphere pass's
+/// Rayleigh and ozone coefficients, and its Mie scattering over a
+/// single-scattering albedo of 0.9.
+const RAYLEIGH_EXTINCTION: Vec3 = Vec3::new(5.802e-6, 13.558e-6, 33.1e-6);
+const OZONE_ABSORPTION: Vec3 = Vec3::new(0.65e-6, 1.881e-6, 0.085e-6);
+const MIE_EXTINCTION: f32 = 3.996e-6 / 0.9;
+
+impl GpuLightMedium {
+    /// The air directional light crosses: that of the planetary atmosphere,
+    /// when the scene has a valid one.
+    fn new(
+        planet: Option<&crate::atmosphere::PlanetaryAtmosphere>,
+        atmosphere: Option<&crate::atmosphere::AtmosphereState>,
+    ) -> Self {
+        let none = Self {
+            centre: Vec3::ZERO,
+            radius: 0.0,
+            rayleigh: Vec3::ZERO,
+            top: 0.0,
+            ozone: Vec3::ZERO,
+            mie: 0.0,
+        };
+        let (Some(planet), Some(atmosphere)) = (planet, atmosphere) else {
+            return none;
+        };
+        if planet.validate().is_err() || atmosphere.validate().is_err() {
+            return none;
+        }
+        Self {
+            centre: planet.world_centre,
+            radius: planet.radius,
+            rayleigh: RAYLEIGH_EXTINCTION * atmosphere.medium.rayleigh,
+            top: planet.radius + planet.height,
+            ozone: OZONE_ABSORPTION * atmosphere.medium.ozone,
+            mie: MIE_EXTINCTION * atmosphere.medium.mie,
+        }
+    }
 }
 
 fn tlas_transform(transform: &Mat4) -> [f32; 12] {

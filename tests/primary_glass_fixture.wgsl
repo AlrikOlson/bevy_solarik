@@ -2,6 +2,7 @@
 @group(0) @binding(1) var<storage, read_write> output: vec4<f32>;
 const RAY_T_MIN = 0.0001;
 const RAY_T_MAX = 100000.0;
+fn ray_max_distance() -> f32 { return RAY_T_MAX; }
 const RAY_QUERY_INTERSECTION_NONE = 0u;
 const MATERIAL_FLAG_ALPHA_BLEND = 4u;
 const MATERIAL_FLAG_DIFFUSE_BLEND = 16u;

@@ -5,6 +5,7 @@ const LIGHT_SOURCE_KIND_DIRECTIONAL: u32 = 0u;
 const LIGHT_SAMPLE_LOCAL: f32 = 2.0;
 const RAY_T_MIN: f32 = 0.001;
 const RAY_T_MAX: f32 = 10000.0;
+fn ray_max_distance() -> f32 { return RAY_T_MAX; }
 @group(0) @binding(0) var<storage> config: array<vec4f>;
 @group(0) @binding(1) var<storage, read_write> output: array<vec4f>;
 var<private> local_lights: array<LocalLight, 1>;

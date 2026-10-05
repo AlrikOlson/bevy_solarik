@@ -4,6 +4,7 @@
 const PI = 3.141592653589793;
 const RAY_T_MIN = 0.001;
 const RAY_T_MAX = 100000.0;
+fn ray_max_distance() -> f32 { return RAY_T_MAX; }
 const RAY_FLAG_NONE = 0u;
 const RAY_QUERY_INTERSECTION_NONE = 0u;
 const SKY_SAMPLE_DISTANCE = 10000.0;

@@ -6,7 +6,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
 #import bevy_solarik::thin_glass::thin_glass_weights
-#import bevy_solarik::scene_bindings::{trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, ray_max_distance, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
+#import bevy_solarik::scene_bindings::{directional_light_transmittance, trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, ray_max_distance, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
     return balance_heuristic(f * f, g * g);
@@ -409,8 +409,11 @@ fn trace_light_transmission(origin: vec3<f32>, light_position: vec4<f32>) -> vec
         distance = length(delta);
         if distance <= RAY_T_MIN { return vec4(0.0); }
         direction = delta / distance;
+        return trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
     }
-    return trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
+    // A directional light comes from beyond the air.
+    let shadow = trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
+    return vec4(shadow.rgb * directional_light_transmittance(origin, direction), shadow.a);
 }
 
 // RGB straight-through energy plus probability of the competing BSDF path.

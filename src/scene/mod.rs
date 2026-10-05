@@ -39,6 +39,7 @@ impl Plugin for RaytracingScenePlugin {
             app.add_plugins(collimated::CollimatedEmissionPlugin);
         }
         load_shader_library!(app, "brdf.wgsl");
+        load_shader_library!(app, "light_medium.wgsl");
         load_shader_library!(app, "thin_glass.wgsl");
         load_shader_library!(app, "raytracing_scene_bindings.wgsl");
         load_shader_library!(app, "sampling.wgsl");

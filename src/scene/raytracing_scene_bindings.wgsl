@@ -3,6 +3,7 @@ enable wgpu_ray_query;
 #define_import_path bevy_solarik::scene_bindings
 
 #import bevy_solarik::collimated::collimated_weight
+#import bevy_solarik::light_medium::{LightMedium, medium_transmittance}
 #import bevy_pbr::lighting::perceptualRoughnessToRoughness
 #import bevy_pbr::pbr_functions::calculate_tbn_mikktspace
 
@@ -118,6 +119,9 @@ struct SkyLight {
     ray_max_distance: f32,
     relative_ray_min: f32,
     _padding: f32,
+    // The air of the planet the scene stands on, which directional light
+    // crosses on its way to a surface. No medium when its radius is zero.
+    medium: LightMedium,
 }
 
 struct DirectionalLight {
@@ -156,6 +160,13 @@ const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 fn sample_sky(direction: vec3<f32>) -> vec3<f32> {
     let cube_direction = vec3(direction.xy, -direction.z);
     return textureSampleLevel(sky_texture, sky_sampler, cube_direction, 0.0).rgb * sky_light.intensity;
+}
+
+// Share of a directional light that reaches `origin` from `direction`
+// through the planet's air: a low sun is dimmer and redder at the ground
+// than a high one. One when the scene has no planetary atmosphere.
+fn directional_light_transmittance(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    return medium_transmittance(sky_light.medium, origin, direction);
 }
 
 const RAY_T_MIN = 0.001f;

@@ -10,6 +10,7 @@ struct ResolvedLightSample { world_position:vec4<f32> }
 struct LightSample { resolved_light_sample:ResolvedLightSample }
 struct TransmittedLightContribution { light:Light, continuation_probability:f32 }
 const RAY_T_MIN=0.001; const RAY_T_MAX=10000.0;
+fn ray_max_distance() -> f32 { return RAY_T_MAX; }
 const RAY_QUERY_INTERSECTION_NONE=0u; const RAY_FLAG_NONE=0u;
 const MIRROR_ROUGHNESS_THRESHOLD=0.001;
 const MATERIAL_FLAG_ALPHA_BLEND=1u; const MATERIAL_FLAG_DIFFUSE_BLEND=2u;

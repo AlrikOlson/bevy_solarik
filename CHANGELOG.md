@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Directional light now crosses the planetary atmosphere on its way to each surface point. Ray-traced lighting multiplies a directional light's transmission by the transmittance of the air between the shaded point and space, integrated over the same Rayleigh, Mie and ozone profiles the atmosphere pass uses, so a low sun is dimmer and redder at the ground than a high one and a planet seen from orbit darkens towards its terminator. `PlanetaryAtmosphere` gains `world_centre`, the planet's centre in the lit scene. A production-WGSL GPU test compares the transmittance with 64-bit quadrature (within 0.01 down to 10 degrees of elevation, 0.02 at the horizon). Sky light at a surface point still comes from the observer's sky map.
+
+- Test fixtures: six GPU tests that stopped compiling when `ray_max_distance()` and the cloud uniform were added run again.
+
 - Rough surfaces seen at grazing angles are no longer dark. Diffuse light is now reduced by the specular lobe's directional albedo from the split-sum table instead of the Fresnel reflectance of a smooth interface, which the table reproduces at zero roughness; the smooth value removed about 90% of the diffuse light at a view cosine of 0.02 whatever the roughness. A shading normal that faces away from the direction it is seen from is mirrored into the visible hemisphere instead of shading black, which had outlined the silhouettes of normal-mapped surfaces in dark pixels. A production-WGSL GPU test covers both.
 
 - Planetary clouds can be driven by an application-supplied cube weather map (cover, cloud-top height, extinction scale) in a configurable shell, with an adiabatic vertical profile, independent-column treatment of partial cover, mip selection by footprint and sub-texel detail. `PlanetaryAtmosphere` gains `cloud_base`, `cloud_top`, `weather` and `cloud_detail`; the built-in noise cover remains when no map is given. [Details](docs/atmosphere.md#optional-spherical-world-mode-development).

@@ -7,6 +7,7 @@ fn planet() -> PlanetaryAtmosphere {
         radius: 6_378_136.5,
         height: 100_000.0,
         observer: Vec3::Z * 24_000_000.0,
+        world_centre: Vec3::ZERO,
         cloud_coverage: 0.55,
         cloud_extinction: 0.0005,
         cloud_base: 2_000.0,

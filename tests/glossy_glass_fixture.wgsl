@@ -11,6 +11,7 @@ struct ShadowSample { light: Light, continuation_probability: f32 }
 struct Light { wi: vec3f, inverse_pdf: f32, brdf_rays_can_hit: bool, radiance: vec3f, solid_angle_pdf: f32 }
 const RAY_T_MIN: f32 = 0.001;
 const RAY_T_MAX: f32 = 10000.0;
+fn ray_max_distance() -> f32 { return RAY_T_MAX; }
 const RAY_QUERY_INTERSECTION_NONE: u32 = 0u;
 const RAY_FLAG_NONE: u32 = 0u;
 const MATERIAL_FLAG_ALPHA_BLEND: u32 = 1u;
