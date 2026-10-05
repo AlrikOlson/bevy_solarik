@@ -19,11 +19,17 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
     // Near the camera the scene is camera-relative: the planet centre is far
     // and the receiver is near the origin.
     let centre = select(vec3(0.0), vec3(0.0, -(RADIUS + c.x), 0.0), c.z > 0.5);
-    let m = LightMedium(centre, RADIUS, vec3(5.802e-6, 13.558e-6, 33.1e-6), TOP,
-        vec3(0.65e-6, 1.881e-6, 0.085e-6), 4.44e-6, vec4(0.0));
+    var m = LightMedium(centre, RADIUS, vec3(5.802e-6, 13.558e-6, 33.1e-6), TOP,
+        vec3(0.65e-6, 1.881e-6, 0.085e-6), 4.44e-6, vec4(0.0), array<vec4<f32>,5>());
+    if c.w>0.5 {
+        m.physical=array<vec4<f32>,5>(vec4(0.01,0.02,0.04,11.0),vec4(214.0,0.0,214.0,0.0),vec4(0.036363636,0.036363636,0.036363636,11.0),vec4(0.95,0.86,0.76,0.0),vec4(0.68,0.73,0.78,0.0));
+    }
+    if c.w>1.5 {
+        m.physical=array<vec4<f32>,5>(vec4(0.3,0.7,1.7,15.9),vec4(737.0,8.0,235.0,0.0),vec4(1.9713,1.9713,1.9713,7.0),vec4(1.0,1.0,1.0,55.0),vec4(0.75,0.75,0.75,0.0));
+    }
     let origin = centre + vec3(0.0, RADIUS + c.x, 0.0);
     let direction = vec3(sqrt(max(0.0, 1.0 - c.y * c.y)), c.y, 0.0);
-    let none = LightMedium(centre, 0.0, m.rayleigh, TOP, m.ozone, m.mie, vec4(0.0));
+    let none = LightMedium(centre, 0.0, m.rayleigh, TOP, m.ozone, m.mie, vec4(0.0), array<vec4<f32>,5>());
     output[id.x] = vec4(medium_transmittance(m, origin, direction), medium_transmittance(none, origin, direction).x);
 }
 ";
@@ -186,4 +192,55 @@ fn run(cases: &[[f32; 4]]) -> Vec<[f32; 4]> {
         let data = readback.slice(..).get_mapped_range();
         bytemuck::cast_slice::<u8, [f32; 4]>(&data).to_vec()
     })
+}
+
+#[test]
+#[ignore = "Vulkan GPU; serialize with builds and captures"]
+fn physical_surface_sunlight_matches_independent_columns() {
+    let cases: Vec<_> = [1.0_f32, 2.0]
+        .into_iter()
+        .flat_map(|profile| {
+            [0.0_f32, 20000.0, 50000.0, 70000.0, 90000.0]
+                .into_iter()
+                .flat_map(move |h| [0.2_f32, 0.6, 1.0].map(move |mu| [h, mu, 1.0, profile]))
+        })
+        .collect();
+    let actual = run(&cases);
+    for (case, result) in cases.iter().zip(actual) {
+        let r = RADIUS + f64::from(case[0]);
+        let mu = f64::from(case[1]);
+        let far = -r * mu + (r * r * mu * mu + TOP * TOP - r * r).sqrt();
+        let dt = far / 20000.0;
+        let mut tau = [0.0; 3];
+        for i in 0..20000 {
+            let t = (f64::from(i) + 0.5) * dt;
+            let h = ((r * r + 2.0 * r * mu * t + t * t).sqrt() - RADIUS) * 0.001;
+            let (density, a, beta) = if case[3] < 1.5 {
+                (
+                    (-h / 11.0).exp(),
+                    (-h / 11.0).exp() * 0.4 / 11.0,
+                    [0.01, 0.02, 0.04],
+                )
+            } else {
+                let temp = (737.0 - 8.0 * h).max(235.0);
+                (
+                    (temp / 737.0).powf(737.0 / (8.0 * 15.9) - 1.0)
+                        * (-(h - 62.75).max(0.0) / (15.9 * 235.0 / 737.0)).exp(),
+                    1.9713 * (-0.5 * ((h - 55.0) / 7.0).powi(2)).exp(),
+                    [0.3, 0.7, 1.7],
+                )
+            };
+            for c in 0..3 {
+                tau[c] += (beta[c] * density + a) * dt * 0.001;
+            }
+        }
+        for c in 0..3 {
+            let expected = (-tau[c]).exp();
+            assert!(
+                (f64::from(result[c]) - expected).abs() < 0.002,
+                "case{case:?} channel{c} got{} expected{expected}",
+                result[c]
+            );
+        }
+    }
 }

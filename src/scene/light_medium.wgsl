@@ -21,6 +21,7 @@ struct LightMedium {
     // extinction of the delta-scaled cloud medium per metre, and whether a
     // weather map gives it shape (above zero).
     cloud: vec4<f32>,
+    physical: array<vec4<f32>,5>,
 }
 
 const MEDIUM_RAYLEIGH_HEIGHT: f32 = 8000.0;
@@ -35,6 +36,19 @@ const MEDIUM_CLOUD_MEAN_COSINE: f32 = 0.763159;
 const MEDIUM_CLOUD_COLUMN: f32 = 0.585;
 
 fn medium_extinction(m: LightMedium, altitude: f32) -> vec3<f32> {
+    if m.physical[0].w>0.0 {
+        let gas=m.physical[0]; let thermal=m.physical[1]; let aerosol=m.physical[2]; let particle=m.physical[3];
+        let h=altitude*0.001-thermal.w;
+        var density=exp(-h/gas.w);
+        if thermal.y>0.0 {
+            let t=max(thermal.x-thermal.y*h,thermal.z);
+            let cap=(thermal.x-thermal.z)/thermal.y;
+            density=pow(t/thermal.x,thermal.x/(thermal.y*gas.w)-1.0)*exp(-max(h-cap,0.0)/(gas.w*thermal.z/thermal.x));
+        }
+        var a=exp(-h/aerosol.w);
+        if particle.w>0.0 {let z=(h-particle.w)/aerosol.w;a=exp(-0.5*z*z);}
+        return (gas.rgb*density+aerosol.rgb*a)*0.001;
+    }
     let h = max(altitude, 0.0);
     return m.rayleigh * exp(-h / MEDIUM_RAYLEIGH_HEIGHT)
         + vec3(m.mie * exp(-h / MEDIUM_MIE_HEIGHT))
@@ -60,10 +74,11 @@ fn medium_transmittance(m: LightMedium, origin: vec3<f32>, direction: vec3<f32>)
     // outside, the densest part is in the middle and even steps serve.
     let inside = near == 0.0;
     var depth = vec3(0.0);
-    for (var i = 0u; i < MEDIUM_STEPS; i += 1u) {
-        let u = (f32(i) + 0.5) / f32(MEDIUM_STEPS);
+    let steps=select(MEDIUM_STEPS,128u,m.physical[0].w>0.0);
+    for (var i = 0u; i < steps; i += 1u) {
+        let u = (f32(i) + 0.5) / f32(steps);
         let t = near + length_inside * select(u, u * u, inside);
-        let weight = length_inside * select(1.0, 2.0 * u, inside) / f32(MEDIUM_STEPS);
+        let weight = length_inside * select(1.0, 2.0 * u, inside) / f32(steps);
         let altitude = length(p + direction * t) - m.radius;
         depth += medium_extinction(m, altitude) * weight;
     }

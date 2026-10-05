@@ -6,11 +6,13 @@
 
 mod gpu;
 mod planet;
+mod profile;
 pub use gpu::{
     AtmosphereBackground, AtmosphereCamera, AtmosphereComposite, AtmosphereEnvironment,
     AtmospherePlugin,
 };
 pub use planet::PlanetaryAtmosphere;
+pub use profile::PhysicalAtmosphere;
 
 use bevy_ecs::resource::Resource;
 use bevy_math::{DVec3, Vec3, Vec4};
@@ -59,6 +61,7 @@ pub enum AtmosphereQuality {
 /// Sources are top-of-atmosphere illuminances, before atmospheric attenuation.
 #[derive(Resource, ExtractResource, Debug, Clone, PartialEq)]
 pub struct AtmosphereState {
+    pub physical: Option<PhysicalAtmosphere>,
     pub medium: AtmosphereMedium,
     pub sun_direction: Vec3,
     pub sun_illuminance: f32,
@@ -82,6 +85,7 @@ pub struct AtmosphereState {
 impl Default for AtmosphereState {
     fn default() -> Self {
         Self {
+            physical: None,
             medium: AtmosphereMedium::default(),
             sun_direction: Vec3::Y,
             sun_illuminance: 110_000.0,
@@ -103,6 +107,9 @@ impl Default for AtmosphereState {
 impl AtmosphereState {
     /// Reject invalid controls before either renderer consumes them.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if let Some(profile) = self.physical {
+            profile.validate()?;
+        }
         for colour in [self.sun_colour, self.moon_colour] {
             if !colour.is_finite() || colour.min_element() < 0.0 || colour.max_element() > 16.0 {
                 return Err("source colour must be finite linear RGB in0..16");
@@ -144,8 +151,8 @@ impl AtmosphereState {
             }
         }
         for lux in [self.sun_illuminance, self.moon_illuminance] {
-            if !lux.is_finite() || !(0.0..=200_000.0).contains(&lux) {
-                return Err("atmosphere source illuminance must be finite in 0..200000 lux");
+            if !lux.is_finite() || !(0.0..=500_000.0).contains(&lux) {
+                return Err("atmosphere source illuminance must be finite in 0..500000 lux");
             }
         }
         if !self.observer_height.is_finite() || !(1.0..=20_000.0).contains(&self.observer_height) {
@@ -185,7 +192,9 @@ impl AtmosphereState {
             let ozone = DVec3::new(0.00065, 0.001881, 0.000085)
                 * f64::from(self.medium.ozone)
                 * (1.0 - (h - 25.0).abs() / 15.0).max(0.0);
-            optical += (rayleigh + mie + ozone) * dt;
+            optical += self.physical.map_or(rayleigh + mie + ozone, |profile| {
+                profile.extinction(h * 1000.0) * 1000.0
+            }) * dt;
         }
         Vec3::new(
             (-optical.x).exp() as f32,
@@ -208,6 +217,9 @@ impl AtmosphereState {
 
     pub(crate) fn uniform(&self) -> AtmosphereParams {
         AtmosphereParams {
+            physical: self
+                .physical
+                .map_or([Vec4::ZERO; 5], PhysicalAtmosphere::gpu_fields),
             medium: Vec4::new(
                 self.medium.rayleigh,
                 self.medium.mie,
@@ -259,4 +271,5 @@ pub(crate) struct AtmosphereParams {
     disks: Vec4,
     sun_colour: Vec4,
     moon_colour: Vec4,
+    physical: [Vec4; 5],
 }

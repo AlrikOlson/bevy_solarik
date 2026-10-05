@@ -913,6 +913,7 @@ struct GpuLightMedium {
     ozone: Vec3,
     mie: f32,
     cloud: Vec4,
+    physical: [Vec4; 5],
 }
 
 /// Extinction of Earth's air at the ground, per metre: the atmosphere pass's
@@ -941,6 +942,7 @@ impl GpuLightMedium {
             ozone: Vec3::ZERO,
             mie: 0.0,
             cloud: Vec4::ZERO,
+            physical: [Vec4::ZERO; 5],
         };
         let (Some(planet), Some(atmosphere)) = (planet, atmosphere) else {
             return none;
@@ -949,6 +951,10 @@ impl GpuLightMedium {
             return none;
         }
         Self {
+            physical: atmosphere.physical.map_or(
+                [Vec4::ZERO; 5],
+                crate::atmosphere::PhysicalAtmosphere::gpu_fields,
+            ),
             centre: planet.world_centre,
             radius: planet.radius,
             rayleigh: RAYLEIGH_EXTINCTION * atmosphere.medium.rayleigh,

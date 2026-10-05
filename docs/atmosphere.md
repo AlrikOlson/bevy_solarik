@@ -395,3 +395,21 @@ must produce identical transform bits throughout the timeline, avoiding false
 sky invalidation and reference accumulation resets. Capture provenance,
 fixed-view settling and refreshed README assets are recorded in
 [readme-captures.md](readme-captures.md).
+
+
+## Optional physical dry profiles
+
+AtmosphereState.physical accepts PhysicalAtmosphere. Public coefficients are inverse metres and lengths metres; the GPU conversion is explicit. Default None keeps the Earth path unchanged. Molecular density follows hydrostatic balance with T=max(T0-Lz,Tcap): n/n0=(T/T0)^(T0/(L H0)-1), followed by an isothermal cap. L=0 selects an exponential. Aerosols use either an exponential from ground or a Gaussian mass layer with supplied centre and width. Both have explicit physical normalization supplied by the caller. Molecular and aerosol extinction, particle RGB albedo and HG g are independent inputs. The physical profile uses normalized Henyey-Greenstein; the existing Earth Cornette-Shanks phase remains unchanged.
+
+Validation bounds coefficients to0..0.1/m, scale heights100m..100km, T50..2000K, lapse0..20K/km, albedo0..1 and g0...95. Valid numerical inputs are not a claim of chemical or climatic equilibrium. The app owns composition, gravity, inventory, microphysical derivation and provenance. The profile contains no arbitrary colour/noise controls. Thin absorbing profiles use Hillaire LUTs for higher-order scattering. Conservative Gaussian decks use the vertically coupled column approximation below; neither is an exact polarized radiative-transfer solver. Primary transport reference: https://sebh.github.io/publications/egsr2020.pdf .
+
+Production probes compare121altitudes (including negative pressure-relative heights) in thin isothermal and dense lapse/cap columns to independently integrated10m hydrostatic pressure at2e-5relative tolerance. Existing Earth CPU/GPU fixtures retain disabled profile fields explicitly and exercise their previous coefficient path.
+
+
+### Conservative dense columns and direct surface illumination
+
+The ray-tracing light medium now carries the same five physical profile vectors as the atmosphere. Its 128-point quadrature uses metres externally and explicitly converts profile inputs from kilometres; it no longer substitutes Earth scale heights for an opt-in profile. The pressure datum is independent of the clipping floor: the diffuse column ends at that datum, or at the current lower point in a valley. A GPU invariance probe lowers only the geometry floor by12km and verifies unchanged diffuse RGB. This prevents fictitious buried scattering gas from changing surface illumination. Actual 3D valley boundaries remain outside the independent-column approximation.
+
+For a conservative Gaussian deck, molecular vertical optical depth above z is beta0 H0 P(z)/P0. The Gaussian tail integrates analytically through erfc; its approximation has absolute erf error below 1.5e-7 (Abramowitz & Stegun 7.1.26). Both columns subtract the residual above the finite atmosphere top. Let total optical depth be T, aerosol column Ta, and effective g = ga Ta/T. The conservative Eddington solution uses delta scaling t'=(1-g²)t and g'=g/(1+g), a Lambertian lower boundary, and zero incident diffuse flux at the top. Its diffuse moments obey Fnet=4 pi I1/3 + mu0 exp(-t'/mu0), constant with depth. The directional source is I0 + glocal mu_view I1; the local scattering mixture sets glocal. This is a plane-parallel flux closure applied independently to spherical columns, not a circulation model. It requires conservative particles; absorbing profiles retain the thin-medium path.
+
+Primary basis: [Joseph, Wiscombe & Weinman 1976](https://ntrs.nasa.gov/citations/19770033965), together with the conservative slab derivation already cited above. Near the terminator the angular closure uses mu0 >= 0.05; horizontal diffuse transport and polarization are absent. [Heng, Mendonca & Lee 2014](https://arxiv.org/abs/1405.0026) explains the limitations of two-stream closures, particularly for absorbing and thermal transfer; this implementation does not apply the conservative solution to those regimes. GPU probes check depth-independent net flux and nonzero illumination below the deck. Surface sunlight is separately compared against independent 20,000-cell double-precision spherical quadrature.

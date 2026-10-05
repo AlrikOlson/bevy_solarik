@@ -22,6 +22,7 @@ struct AtmosphereParams {
     disks: vec4<f32>, // actual apparent sun/moon angular radii, reserved
     sun_colour: vec4<f32>,
     moon_colour: vec4<f32>,
+    physical: array<vec4<f32>,5>,
 }
 
 fn ground_radius(p: AtmosphereParams) -> f32 { return select(GROUND_RADIUS, p.planet.w, p.planet.w > 0.0); }
@@ -319,6 +320,20 @@ fn observer_position(p: AtmosphereParams) -> vec3<f32> {
 fn sample_medium(p: AtmosphereParams, altitude: f32) -> MediumSample {
     if altitude > top_radius(p)-ground_radius(p) { return MediumSample(vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0)); }
     let h = max(altitude, 0.0);
+    if p.physical[0].w > 0.0 {
+        let gas=p.physical[0];let thermal=p.physical[1];let aerosol=p.physical[2];let particle=p.physical[3];
+        let h=altitude-thermal.w;
+        var density=exp(-h/gas.w);
+        if thermal.y>0.0 {
+            let t=max(thermal.x-thermal.y*h,thermal.z);
+            let cap=(thermal.x-thermal.z)/thermal.y;
+            density=pow(t/thermal.x,thermal.x/(thermal.y*gas.w)-1.0)*exp(-max(h-cap,0.0)/(gas.w*thermal.z/thermal.x));
+        }
+        var a=exp(-h/aerosol.w);
+        if particle.w>0.0 {let z=(h-particle.w)/aerosol.w;a=exp(-0.5*z*z);}
+        let r=gas.rgb*density;let ext=aerosol.rgb*a;let m=ext*particle.rgb;
+        return MediumSample(r,m,r+m,r+ext);
+    }
     let r = vec3(0.005802, 0.013558, 0.0331) * p.medium.x * exp(-h / 8.0);
     let m = vec3(0.003996 * p.medium.y * exp(-h / 1.2));
     let absorption = vec3(0.00065, 0.001881, 0.000085) * p.medium.z
@@ -372,6 +387,10 @@ fn phase_rayleigh(mu: f32) -> f32 {
     return 3.0 * (1.0 + mu*mu) / (16.0 * ATM_PI);
 }
 
+// Normalized Henyey-Greenstein, for profiles whose supplied g uses that convention.
+fn phase_hg(mu:f32,g:f32)->f32 {
+    return (1.0-g*g)/(4.0*ATM_PI*pow(max(1.0+g*g-2.0*g*mu,1e-5),1.5));
+}
 fn phase_mie(mu: f32, g: f32) -> f32 {
     let g2 = g*g;
     return 3.0 * (1.0-g2) * (1.0+mu*mu)
@@ -427,14 +446,69 @@ fn local_inscattering(p: AtmosphereParams, position: vec3<f32>, direction: vec3<
         let source = sources[i];
         if source.w <= 0.0 { continue; }
         let mu = clamp(dot(direction, source.xyz), -1.0, 1.0);
-        let phase = medium.rayleigh * phase_rayleigh(mu) + medium.mie * phase_mie(mu, p.medium.w);
+        var phase = medium.rayleigh * phase_rayleigh(mu) + medium.mie * phase_mie(mu, p.medium.w);
+        if p.physical[0].w>0.0 {let g=p.physical[4].rgb;phase=medium.rayleigh*phase_rayleigh(mu)+medium.mie*vec3(phase_hg(mu,g.x),phase_hg(mu,g.y),phase_hg(mu,g.z));}
         let direct = sample_transmittance(p, trans, filtering, position, source.xyz) * phase;
-        let ms = sample_multiple(p, multi, filtering, position, source.xyz) * medium.scattering * p.ground.w;
+        var ms = sample_multiple(p, multi, filtering, position, source.xyz) * medium.scattering * p.ground.w;
+        if p.physical[3].w>0.0 && all(p.physical[3].rgb>=vec3(0.99999)) {
+            ms=physical_diffuse(p,position,direction,source.xyz,medium)*medium.scattering*p.ground.w;
+        }
         let colour=select(p.sun_colour.rgb,p.moon_colour.rgb,i==1u);
         result += colour * source.w * (direct+ms) * source_visibility(p, position, source.xyz)
             * source_shade[i];
     }
     return result;
+}
+
+// Gaussian tail integral: Abramowitz & Stegun 7.1.26, absolute erf error <1.5e-7.
+fn gaussian_tail(x:f32)->f32 {
+    let z=abs(x)*0.70710678118;
+    let t=1.0/(1.0+0.3275911*z);
+    let tail=(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*exp(-z*z);
+    return select(2.0-tail,tail,x>=0.0)*1.25331413732;
+}
+// Hydrostatic pressure is the exact molecular column above a height. Aerosol
+// columns integrate the supplied exponential or Gaussian density analytically.
+fn physical_columns(p:AtmosphereParams, altitude:f32)->mat2x3<f32> {
+    let gas=p.physical[0];let thermal=p.physical[1];let aerosol=p.physical[2];
+    let h=altitude-thermal.w;
+    var pressure=exp(-h/gas.w);
+    if thermal.y>0.0 {
+        let t=max(thermal.x-thermal.y*h,thermal.z);
+        let cap=(thermal.x-thermal.z)/thermal.y;
+        pressure=pow(t/thermal.x,thermal.x/(thermal.y*gas.w))*exp(-max(h-cap,0.0)/(gas.w*thermal.z/thermal.x));
+    }
+    var a=aerosol.w*exp(-h/aerosol.w);
+    if p.physical[3].w>0.0 {a=aerosol.w*gaussian_tail((h-p.physical[3].w)/aerosol.w);}
+    return mat2x3(gas.rgb*gas.w*pressure,aerosol.rgb*a);
+}
+// Vertically coupled conservative Eddington column, including Rayleigh gas.
+// Unlike the local geometric-series closure, this carries flux below a thick
+// deck. Only selected for conservative Gaussian cloud profiles. The column
+// effective asymmetry closes the flux moments; the local asymmetry scatters I1.
+fn physical_diffuse(p:AtmosphereParams,position:vec3<f32>,direction:vec3<f32>,sun:vec3<f32>,m:MediumSample)->vec3<f32> {
+    let up=normalize(position); let mu=dot(up,sun);
+    if mu<=0.0 {return vec3(0.0);}
+    let top=physical_columns(p,top_radius(p)-ground_radius(p));
+    // The geometry floor only permits clipping below-datum valleys; it is
+    // not a buried reservoir of scattering gas. Flux closure terminates at
+    // the pressure datum, or at the current lower surface in a valley.
+    let boundary=min(p.physical[1].w,length(position)-ground_radius(p));
+    let all=physical_columns(p,boundary)-top;
+    let here=physical_columns(p,length(position)-ground_radius(p))-top;
+    let total=max(all[0]+all[1],vec3(1e-8));
+    let above=clamp(here[0]+here[1],vec3(0.0),total);
+    let g1=p.physical[4].rgb*all[1]/total;
+    let scale=vec3(1.0)-g1*g1;let g=g1/(vec3(1.0)+g1);
+    let t=above*scale;let slab=total*scale;let mu0=max(mu,0.05);
+    let a=0.75*mu0/ATM_PI;let e_slab=exp(-slab/mu0);
+    let albedo=p.ground.rgb;
+    let c1=(vec3(1.0)-albedo)*a*(mu0*(vec3(1.0)-e_slab)+(2.0/3.0)*(vec3(1.0)+e_slab))
+        /((vec3(1.0)-albedo)*(vec3(1.0)-g)*slab+vec3(4.0/3.0));
+    let c2=vec3(a*mu0)+(2.0/3.0)*(vec3(a)-c1);let e=exp(-t/mu0);
+    let i1=c1-a*e;let i0=c2-a*mu0*e-(vec3(1.0)-g)*c1*t;
+    let local_g=p.physical[4].rgb*m.mie/max(m.scattering,vec3(1e-20));
+    return max(i0+local_g*dot(up,direction)*i1,vec3(0.0));
 }
 
 // Front-to-back composition of two consecutive ray segments.

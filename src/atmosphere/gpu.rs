@@ -455,7 +455,7 @@ fn generate_atmosphere(
     let medium_changed = gpu
         .last
         .as_ref()
-        .is_none_or(|last| last.medium != state.medium)
+        .is_none_or(|last| last.medium != state.medium || last.physical != state.physical)
         || gpu.last_planet.as_ref().map(|p| (p.radius, p.height))
             != planet.as_deref().map(|p| (p.radius, p.height));
     *gpu.uniform.get_mut() = state.uniform();

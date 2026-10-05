@@ -138,7 +138,7 @@ fn lut_source(definition: &str) -> String {
     format!("{model}\n{body}")
 }
 
-fn parameters(state: &AtmosphereState) -> [[f32; 4]; 12] {
+fn parameters(state: &AtmosphereState) -> [[f32; 4]; 17] {
     [
         [
             state.medium.rayleigh,
@@ -174,6 +174,11 @@ fn parameters(state: &AtmosphereState) -> [[f32; 4]; 12] {
         ],
         state.sun_colour.extend(0.0).to_array(),
         state.moon_colour.extend(0.0).to_array(),
+        [0.0; 4],
+        [0.0; 4],
+        [0.0; 4],
+        [0.0; 4],
+        [0.0; 4],
     ]
 }
 
@@ -281,7 +286,7 @@ impl Luts {
         self.generate_parameters(&parameters(state));
     }
 
-    fn generate_parameters(&self, parameters: &[[f32; 4]; 12]) {
+    fn generate_parameters(&self, parameters: &[[f32; 4]; 17]) {
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -680,7 +685,7 @@ const VIEW_PROBE: &str = "integrate_view(p,observer_position(p),d.xyz,d.w,u32(p.
 
 impl Luts {
     /// Clear-air transport, as used by lookup fields.
-    fn probe(&self, params: &[[f32; 4]; 12], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    fn probe(&self, params: &[[f32; 4]; 17], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
         self.probe_with(
             "integrate_atmosphere(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering,false)",
             params,
@@ -689,14 +694,14 @@ impl Luts {
     }
 
     /// Planetary view transport including the cloud shell, as composited.
-    fn probe_view(&self, params: &[[f32; 4]; 12], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    fn probe_view(&self, params: &[[f32; 4]; 17], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
         self.probe_with(VIEW_PROBE, params, directions)
     }
 
     fn probe_with(
         &self,
         call: &str,
-        params: &[[f32; 4]; 12],
+        params: &[[f32; 4]; 17],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
         self.probe_program("", call, [0; 4], params, directions)
@@ -710,7 +715,7 @@ impl Luts {
         helpers: &str,
         call: &str,
         weather_texel: [u8; 4],
-        params: &[[f32; 4]; 12],
+        params: &[[f32; 4]; 17],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
         let model = include_str!("../src/atmosphere/model.wgsl")
@@ -1221,6 +1226,158 @@ fn cloud_slab_reflection_matches_monte_carlo() {
             assert!(
                 (ratio - 1.0).abs() <= tolerance,
                 "slab nadir radiance outside {tolerance} of Monte Carlo"
+            );
+        }
+    });
+}
+
+#[test]
+#[ignore = "Vulkan GPU: serialize with builds and captures"]
+fn physical_profiles_match_independent_hydrostatic_columns() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        for dense in [false, true] {
+            let (t0, lapse, tmin, h0, peak, centre, width) = if dense {
+                (737.0, 8.0, 235.0, 15.9, 1.9713, 55.0, 7.0)
+            } else {
+                (214.0, 0.0, 214.0, 11.0, 0.4 / 11.0, 0.0, 11.0)
+            };
+            let mut p = parameters(&AtmosphereState::default());
+            p[5][3] = 6360.0;
+            p[6][0] = 6480.0;
+            p[12] = [0.01, 0.02, 0.04, h0];
+            p[13] = [t0, lapse, tmin, 12.0];
+            p[14] = [peak; 4];
+            p[14][3] = width;
+            p[15] = [0.95, 0.86, 0.76, centre];
+            p[16] = [0.68, 0.73, 0.78, 0.0];
+            let samples: Vec<_> = (0..121).map(|i| [i as f32, 0.0, 0.0, 0.0]).collect();
+            let result=gpu.probe_program(r#"
+fn profile_probe(d:vec4<f32>)->AtmosphereTransport {
+    if d.w<0.0 {return integrate_atmosphere(p,observer_position(p),vec3(0.0,1.0,0.0),1.0,8u,trans,multiple,filtering,false);}
+    let m=sample_medium(p,d.x);
+    return AtmosphereTransport(m.scattering,m.extinction);
+}"#, "profile_probe(d)",[0;4],&p,&samples);
+            for (i, pair) in result.chunks_exact(2).enumerate() {
+                let h = i as f64 - 12.0;
+                // Independent hydrostatic pressure integration with 10m midpoint cells.
+                let count = ((h.abs() * 100.0) as usize).max(1);
+                let dz = h / count as f64;
+                let integral = (0..count)
+                    .map(|j| {
+                        let z = (j as f64 + 0.5) * dz;
+                        f64::from(t0)
+                            / (f64::from(h0)
+                                * (f64::from(t0) - f64::from(lapse) * z).max(f64::from(tmin)))
+                            * dz
+                    })
+                    .sum::<f64>();
+                let t = (f64::from(t0) - f64::from(lapse) * h).max(f64::from(tmin));
+                let gas = (-integral).exp() * f64::from(t0) / t;
+                let aerosol = if dense {
+                    (-0.5 * ((h - f64::from(centre)) / f64::from(width)).powi(2)).exp()
+                } else {
+                    (-h / f64::from(width)).exp()
+                };
+                for c in 0..3 {
+                    let ext = f64::from(p[12][c]) * gas + f64::from(peak) * aerosol;
+                    let scat =
+                        f64::from(p[12][c]) * gas + f64::from(peak) * aerosol * f64::from(p[15][c]);
+                    assert!(
+                        (f64::from(pair[1][c]) - ext).abs() < 2e-5 * ext.max(1e-5),
+                        "ext h{h} {pair:?} expected{ext}"
+                    );
+                    assert!((f64::from(pair[0][c]) - scat).abs() < 2e-5 * scat.max(1e-5));
+                }
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore = "Vulkan GPU; serialize with builds and captures"]
+fn dense_column_carries_diffuse_flux_below_clouds() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        let mut p = parameters(&AtmosphereState::default());
+        p[5] = [0.0, 6360.002, 0.0, 6360.0];
+        p[6][0] = 6480.0;
+        p[12] = [0.3, 0.7, 1.7, 15.9];
+        p[13] = [737.0, 8.0, 235.0, 0.0];
+        p[14] = [1.9713, 1.9713, 1.9713, 7.0];
+        p[15] = [1.0, 1.0, 1.0, 55.0];
+        p[16] = [0.75, 0.75, 0.75, 0.0];
+        let rays: Vec<_> = (0..=100)
+            .flat_map(|h| [-1.0, 1.0].map(move |sign| [h as f32, sign, 0.0, 0.0]))
+            .collect();
+        let out=gpu.probe_program(r#"
+fn dense_probe(d:vec4<f32>)->AtmosphereTransport {
+    if d.w<0.0 {return integrate_atmosphere(p,observer_position(p),vec3(0.0,1.0,0.0),1.0,8u,trans,multiple,filtering,false);}
+    let pos=vec3(0.0,ground_radius(p)+d.x,0.0);
+    let m=MediumSample(vec3(0.0),vec3(1.0),vec3(1.0),vec3(1.0));
+    let top=physical_columns(p,top_radius(p)-ground_radius(p));
+    let here=physical_columns(p,d.x)-top;
+    return AtmosphereTransport(physical_diffuse(p,pos,vec3(0.994987437,0.1*d.y,0.0),vec3(0.8,0.6,0.0),m),here[0]+here[1]);
+}"#,"dense_probe(d)",[0;4],&p,&rays);
+        let total = out[1];
+        let mut flux0 = [0.0; 3];
+        for h in 0..=80 {
+            let minus = out[h * 4];
+            let plus = out[h * 4 + 2];
+            let above = out[h * 4 + 1];
+            for c in 0..3 {
+                // Recover the flux moment using two oblique source directions.
+                // A fixed known scattering moment avoids cancellation where the
+                // actual aerosol concentration is negligible below the deck.
+                let i1 = f64::from(plus[c] - minus[c]) / 0.15;
+                let effective_g = 0.75 * 34.58921422446064 / f64::from(total[c]);
+                let direct =
+                    0.6 * (-f64::from(above[c]) * (1.0 - effective_g * effective_g) / 0.6).exp();
+                let flux = core::f64::consts::PI * 4.0 / 3.0 * i1 + direct;
+                if h == 0 {
+                    flux0[c] = flux;
+                    assert!(minus[c] > 0.001, "diffuse light must reach below deck");
+                }
+                assert!(
+                    (flux - flux0[c]).abs() < 0.0001,
+                    "flux h{h} c{c}: {flux} vs{}",
+                    flux0[c]
+                );
+                assert!(minus[c].is_finite() && plus[c].is_finite());
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore = "Vulkan GPU; serialize with builds and captures"]
+fn dense_diffuse_datum_is_independent_of_geometry_floor() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        let mut p = parameters(&AtmosphereState::default());
+        p[5] = [0.0, 6051.802, 0.0, 6051.8];
+        p[6][0] = 6151.8;
+        p[12] = [0.48366346, 1.1302153, 2.759_266, 15.9];
+        p[13] = [737.0, 8.0, 235.0, 0.0];
+        p[14] = [1.9713, 1.9713, 1.9713, 7.0];
+        p[15] = [1.0, 1.0, 1.0, 55.0];
+        p[16] = [0.75, 0.75, 0.75, 0.0];
+        let source = r#"
+fn datum_probe(d:vec4<f32>)->AtmosphereTransport {
+    if d.w<0.0 {return integrate_atmosphere(p,observer_position(p),vec3(0.0,1.0,0.0),1.0,8u,trans,multiple,filtering,false);}
+    let position=observer_position(p);let m=sample_medium(p,length(position)-ground_radius(p));
+    return AtmosphereTransport(physical_diffuse(p,position,vec3(0.0,1.0,0.0),vec3(0.36756,0.93,0.0),m),m.extinction);
+}"#;
+        let a = gpu.probe_program(source, "datum_probe(d)", [0; 4], &p, &[[0.0; 4]]);
+        p[5][3] -= 12.0;
+        p[13][3] = 12.0;
+        let b = gpu.probe_program(source, "datum_probe(d)", [0; 4], &p, &[[0.0; 4]]);
+        for c in 0..3 {
+            assert!(
+                (a[0][c] - b[0][c]).abs() < 1e-5,
+                "GPU diffuse baseline{:?}, lowered geometry floor{:?}",
+                a,
+                b
             );
         }
     });
