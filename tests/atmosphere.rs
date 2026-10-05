@@ -142,6 +142,7 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {{
                     [0.0; 4],
                     // Planet, shell, occluder and cloud: the local-ground mode.
                     [0.0; 4],
+                    [state.sun_angular_radius, 0.00452, 0.0, 0.0],
                 ];
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
@@ -231,6 +232,15 @@ use bevy_solarik::atmosphere::{AtmosphereMedium, AtmosphereState};
 fn atmosphere_rejects_nonphysical_controls() {
     let mut state = AtmosphereState::default();
     assert!(state.validate().is_ok());
+    let nominal_radius = state.sun_angular_radius;
+    for value in [0.0, -1.0, f32::NAN, f32::INFINITY, 0.11] {
+        state.sun_angular_radius = value;
+        assert!(
+            state.validate().is_err(),
+            "invalid apparent solar radius {value}"
+        );
+    }
+    state.sun_angular_radius = nominal_radius;
     for value in [f32::NAN, f32::INFINITY, -1.0, 17.0] {
         state.medium.mie = value;
         assert!(

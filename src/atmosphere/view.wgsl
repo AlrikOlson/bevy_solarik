@@ -71,7 +71,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let pixel_angle = length(view_direction(uv+vec2(1.0/f32(size.x), 0.0))-direction);
         let result = integrate_view(p, observer_position(p), direction, distance,
             u32(p.observer.w)*2u, pixel_angle, trans, multiple, filtering, weather);
-        let previous = textureLoad(output,id.xy).rgb;
+        var previous = textureLoad(output,id.xy).rgb;
+        if pixel_depth == 0.0 {
+            // Unattenuated source first, then the same cloud/air view transmittance.
+            let angle=atan2(length(cross(direction,p.sun.xyz)),dot(direction,p.sun.xyz));
+            let half_pixel=max(pixel_angle*0.5,1e-6);
+            let coverage=1.0-smoothstep(p.disks.x-half_pixel,p.disks.x+half_pixel,angle);
+            previous+=vec3(coverage*p.sun.w/(ATM_PI*pow(sin(p.disks.x),2.0))*view.exposure);
+        }
         let color = previous*result.transmittance+result.radiance*view.exposure;
         textureStore(output,id.xy,vec4(clamp(color,vec3(0.0),vec3(65000.0)),1.0));
         return;
@@ -84,8 +91,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let pixel_angle = max(length(dx-direction), length(dy-direction));
         color += star_radiance(direction, pixel_angle) * p.observer.z
             * sample_transmittance(p, trans, filtering, observer_position(p), direction);
-        color += disk_radiance(direction, p.sun, 0.004675, pixel_angle);
-        color += disk_radiance(direction, p.moon, 0.00452, pixel_angle);
+        color += disk_radiance(direction, p.sun, p.disks.x, pixel_angle);
+        color += disk_radiance(direction, p.moon, p.disks.y, pixel_angle);
         color *= view.exposure;
     } else {
         let h = view.view_from_clip * vec4(uv*vec2(2.0,-2.0)+vec2(-1.0,1.0), pixel_depth, 1.0);

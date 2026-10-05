@@ -62,6 +62,8 @@ pub struct AtmosphereState {
     pub medium: AtmosphereMedium,
     pub sun_direction: Vec3,
     pub sun_illuminance: f32,
+    /// Actual apparent angular radius in radians, including observer distance.
+    pub sun_angular_radius: f32,
     pub moon_direction: Vec3,
     pub moon_illuminance: f32,
     pub observer_height: f32,
@@ -76,6 +78,7 @@ impl Default for AtmosphereState {
             medium: AtmosphereMedium::default(),
             sun_direction: Vec3::Y,
             sun_illuminance: 110_000.0,
+            sun_angular_radius: SUN_ANGULAR_RADIUS,
             moon_direction: Vec3::new(0.0, 0.66, -0.75).normalize(),
             moon_illuminance: 0.25,
             observer_height: 2.0,
@@ -89,6 +92,10 @@ impl Default for AtmosphereState {
 impl AtmosphereState {
     /// Reject invalid controls before either renderer consumes them.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.sun_angular_radius.is_finite() || !(1e-6..=0.1).contains(&self.sun_angular_radius)
+        {
+            return Err("solar angular radius outside1e-6..0.1rad");
+        }
         for (value, maximum) in [
             (self.medium.rayleigh, 8.0),
             (self.medium.mie, 16.0),
@@ -205,6 +212,7 @@ impl AtmosphereState {
             shell: Vec4::ZERO,
             occluder: Vec4::ZERO,
             cloud: Vec4::ZERO,
+            disks: Vec4::new(self.sun_angular_radius, MOON_ANGULAR_RADIUS, 0.0, 0.0),
         }
     }
 }
@@ -220,4 +228,5 @@ pub(crate) struct AtmosphereParams {
     shell: Vec4,
     occluder: Vec4,
     cloud: Vec4,
+    disks: Vec4,
 }

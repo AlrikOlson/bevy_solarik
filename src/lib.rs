@@ -12,6 +12,7 @@ pub mod atmosphere;
 pub mod depth_probe;
 pub mod gaussian;
 pub mod lommel;
+pub mod optics;
 pub mod pathtracer;
 pub mod realtime;
 pub mod scene;

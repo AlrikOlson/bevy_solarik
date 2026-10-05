@@ -19,6 +19,7 @@ struct AtmosphereParams {
     shell: vec4<f32>, // outer radius km; cloud coverage, extinction/km, seed
     occluder: vec4<f32>, // body-local centre km, radius km
     cloud: vec4<f32>, // shell base km, shell top km, weather map enable, detail strength
+    disks: vec4<f32>, // actual apparent sun/moon angular radii, reserved
 }
 
 fn ground_radius(p: AtmosphereParams) -> f32 { return select(GROUND_RADIUS, p.planet.w, p.planet.w > 0.0); }
@@ -41,8 +42,7 @@ fn source_visibility(p: AtmosphereParams, position: vec3<f32>, direction: vec3<f
     if distance<=p.occluder.w {return 0.0;}
     let axis=offset/distance;
     let d=atan2(length(cross(axis,direction)),dot(axis,direction));
-    // Matches this atmosphere's fixed nominal solar angular radius.
-    let a=0.004675; let b=asin(clamp(p.occluder.w/distance,0.0,1.0));
+    let a=p.disks.x; let b=asin(clamp(p.occluder.w/distance,0.0,1.0));
     if d>=a+b {return 1.0;}
     if d<=abs(a-b) {return max(0.0,1.0-b*b/(a*a));}
     let x=clamp((d*d+a*a-b*b)/(2.0*d*a),-1.0,1.0);
