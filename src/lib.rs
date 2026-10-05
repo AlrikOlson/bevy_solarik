@@ -20,6 +20,7 @@ pub mod realtime;
 pub mod scene;
 pub mod stellar_disks;
 pub mod surface_detail;
+pub mod thin_volume;
 
 /// The solarik prelude.
 ///

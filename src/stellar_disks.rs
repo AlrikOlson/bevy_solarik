@@ -29,6 +29,8 @@ pub struct StellarDisks {
     pub irradiance: [Vec4; 2],
 }
 pub struct StellarDisksPlugin;
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StellarBackground;
 #[derive(Resource)]
 struct Gpu {
     layout: BindGroupLayoutDescriptor,
@@ -42,6 +44,7 @@ impl Plugin for StellarDisksPlugin {
             render.add_systems(RenderStartup, initialize).add_systems(
                 Core3d,
                 compose
+                    .in_set(StellarBackground)
                     .after(crate::point_sky::PointBackground)
                     .after(crate::radiance_sky::RadianceBackground)
                     .before(crate::atmosphere::AtmosphereBackground)
