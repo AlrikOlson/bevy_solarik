@@ -39,7 +39,12 @@ fn foliage_gpu() {
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        let production = format!("{gaussian}\n{production}");
+        let lommel = include_str!("../src/lommel_math.wgsl")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let production = format!("{lommel}\n{gaussian}\n{production}");
         let source = format!(
             "{production}\n{math}\n{}",
             include_str!("foliage_fixture.wgsl")

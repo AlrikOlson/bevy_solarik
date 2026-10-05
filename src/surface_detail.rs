@@ -77,6 +77,9 @@ pub struct SurfaceDetail {
     #[texture(108)]
     #[sampler(109)]
     pub gaussian_mask: Option<Handle<Image>>,
+    /// x enables the particulate disk law instead of dielectric optics.
+    #[uniform(110)]
+    pub lommel: Vec4,
 }
 
 impl MaterialExtension for SurfaceDetail {

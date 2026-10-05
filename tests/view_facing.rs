@@ -38,7 +38,12 @@ fn run_probe() -> Vec<[f32; 4]> {
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        let production = format!("{gaussian}\n{production}");
+        let lommel = include_str!("../src/lommel_math.wgsl")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let production = format!("{lommel}\n{gaussian}\n{production}");
         let source = format!("{production}\n{}", include_str!("view_facing_fixture.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production BRDF, view-facing normals"),

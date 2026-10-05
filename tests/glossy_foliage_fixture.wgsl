@@ -12,7 +12,7 @@ const MIRROR_ROUGHNESS_THRESHOLD: f32 = 0.002;
 const DIFFUSE_GI_REUSE_ROUGHNESS_THRESHOLD: f32 = 0.4;
 const SPECULAR_GI_FOR_DI_ROUGHNESS_THRESHOLD: f32 = 0.0225;
 const WORLD_CACHE_CELL_LIFETIME: u32 = 1u;
-struct ResolvedMaterial { base_color: vec3f, emissive: vec3f, reflectance: f32, perceptual_roughness: f32, roughness: f32, metallic: f32, diffuse_transmission: f32, gaussian_weight: f32 }
+struct ResolvedMaterial { base_color: vec3f, emissive: vec3f, reflectance: f32, perceptual_roughness: f32, roughness: f32, metallic: f32, diffuse_transmission: f32, gaussian_weight: f32, lommel: bool }
 struct ResolvedGPixel { world_position: vec3f, world_normal: vec3f, material: ResolvedMaterial }
 struct ResolvedRayHitFull { world_position: vec3f, world_normal: vec3f, geometric_world_normal: vec3f, material: ResolvedMaterial, uv: vec2f }
 struct RawMaterial { flags: u32 }
@@ -40,8 +40,8 @@ fn trace_glass_ray(origin: vec3f, wi: vec3f, lo: f32, hi: f32) -> Ray {
     return Ray(0u, 1u, 1.0);
 }
 fn resolve_ray_hit_full(ray: Ray) -> ResolvedRayHitFull {
-    var m = ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(config[0].z),0.0,1.0,1.0,0.0,config[0].x,0.0);
-    if ray.instance_index == 0u { m = ResolvedMaterial(vec3(0.5),vec3(0.0),0.0,0.0,0.0,0.0,0.0,0.0); }
+    var m = ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(config[0].z),0.0,1.0,1.0,0.0,config[0].x,0.0,false);
+    if ray.instance_index == 0u { m = ResolvedMaterial(vec3(0.5),vec3(0.0),0.0,0.0,0.0,0.0,0.0,0.0,false); }
     return ResolvedRayHitFull(vec3(0.0),vec3(0.0,0.0,1.0),vec3(0.0,0.0,1.0),m,vec2(0.0));
 }
 fn resolve_material_alpha(m: RawMaterial, uv: vec2f) -> f32 { return 1.0; }
@@ -73,7 +73,7 @@ fn sample_cosine_hemisphere(n:vec3f,r:ptr<function,u32>)->vec3f {
 @compute @workgroup_size(64)
 fn probe(@builtin(global_invocation_id) id: vec3u) {
     var rng = id.x * 747796405u + 2891336453u;
-    let m = ResolvedMaterial(vec3(1.0),vec3(0.0),0.5,sqrt(config[0].y),config[0].y,1.0,0.0,0.0);
+    let m = ResolvedMaterial(vec3(1.0),vec3(0.0),0.5,sqrt(config[0].y),config[0].y,1.0,0.0,0.0,false);
     let primary = ResolvedGPixel(vec3(0.0,0.0,1.0),vec3(0.0,0.0,1.0),m);
     let result = trace_glossy_path(vec2u(0u),primary,1.0,vec3(0.0,0.0,-1.0),0.5,&rng);
     output[id.x*2u] = vec4(result,f32(steps));

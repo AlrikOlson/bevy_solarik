@@ -192,7 +192,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         // Two-sided leaf radiance cannot terminate in the one-sided cache.
         // The incoming emission/MIS and PSR above remain owned by this path;
         // continue scattering with the bounded two-sided surface estimator.
-        if ray_hit.material.diffuse_transmission > 0.0 {
+        if ray_hit.material.diffuse_transmission > 0.0 || ray_hit.material.lommel {
             radiance += throughput * shade_surface_scattering(ray_hit, wo, rng);
             break;
         }

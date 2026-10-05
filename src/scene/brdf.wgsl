@@ -1,6 +1,7 @@
 enable wgpu_ray_query;
 
 #define_import_path bevy_solarik::brdf
+#import bevy_solarik::lommel_math::lommel_scattering
 #import bevy_solarik::gaussian_math::{gaussian_specular, dielectric_ior, dielectric_fresnel}
 
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
@@ -38,9 +39,9 @@ fn evaluate_and_sample_brdf(
     let NdotV = dot(world_normal, wo);
     if NdotV < 0.0001 { return EvaluateAndSampleBrdfResult(vec3(0.0), vec3(0.0), 0.0); }
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
-    let df = 1.0 - luminance(specular_albedo(F0, NdotV, material.perceptual_roughness));
+    let df = select(1.0 - luminance(specular_albedo(F0, NdotV, material.perceptual_roughness)), 1.0, material.lommel);
 
-    let diffuse_weight = mix(df, 0.0, material.metallic);
+    let diffuse_weight = select(mix(df, 0.0, material.metallic), 1.0, material.lommel);
     let specular_weight = 1.0 - diffuse_weight;
 
     let TBN = orthonormalize(world_normal);
@@ -97,6 +98,7 @@ fn evaluate_diffuse_brdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>
 
     let NdotL = dot(world_normal, wi);
     let NdotV = dot(world_normal, wo);
+    if material.lommel { return lommel_scattering(material.base_color, NdotL, NdotV); }
     if abs(NdotL) < 0.0001 || NdotV < 0.0001 { return vec3(0.0); }
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
     // Light the specular layer reflects on the way in or out never reaches
@@ -114,6 +116,7 @@ fn evaluate_diffuse_brdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>
 }
 
 fn evaluate_specular_brdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>, material: ResolvedMaterial) -> vec3<f32> {
+    if material.lommel { return vec3(0.0); }
     let world_normal = view_facing_normal(shading_normal, wo);
     if dot(world_normal, wi) < 0.0001 { return vec3(0.0); }
     let H = normalize(wi + wo);
@@ -171,7 +174,7 @@ fn evaluate_brdf_pdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>, ma
     if NdotV < 0.0001 { return 0.0; }
     let NdotL = dot(world_normal, wi);
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
-    let diffuse_weight = mix(1.0 - luminance(specular_albedo(F0, NdotV, material.perceptual_roughness)), 0.0, material.metallic);
+    let diffuse_weight = select(mix(1.0 - luminance(specular_albedo(F0, NdotV, material.perceptual_roughness)), 0.0, material.metallic), 1.0, material.lommel);
     let side_weight = select(1.0 - material.diffuse_transmission, material.diffuse_transmission, NdotL < 0.0);
     let diffuse_pdf = diffuse_weight * side_weight * abs(NdotL) / PI;
     // GGX has support only on the reflection hemisphere.

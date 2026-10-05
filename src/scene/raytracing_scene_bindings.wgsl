@@ -324,6 +324,7 @@ struct ResolvedMaterial {
     diffuse_transmission: f32,
     emission_cone: vec4<f32>,
     gaussian_weight: f32,
+    lommel: bool,
 }
 
 fn emitted_radiance(material: ResolvedMaterial, outgoing: vec3<f32>) -> vec3<f32> {
@@ -360,6 +361,7 @@ fn resolve_material(material: Material, uv: vec2<f32>) -> ResolvedMaterial {
     }
 
     m.reflectance = material.reflectance;
+    m.lommel = (material.flags & 32u) != 0u;
     // Realtime estimators opt in only once both hemispheres are supported.
 #ifdef FOLIAGE_TRANSMISSION
     m.diffuse_transmission = f32(material.flags >> 16u) / 65535.0;

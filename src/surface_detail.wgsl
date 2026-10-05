@@ -1,4 +1,5 @@
 #import bevy_solarik::gaussian_math::gaussian_gbuffer
+#import bevy_solarik::lommel_math::lommel_gbuffer
 #import bevy_solarik::detail_sampling::{DetailCoordinates, sample_surface_detail, detail_normal}
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -22,6 +23,7 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var<uniform> gaussian_parameters: vec4<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var gaussian_mask: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(109) var gaussian_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(110) var<uniform> lommel:vec4<f32>;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOutput {
@@ -45,6 +47,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOut
 #ifdef PREPASS_PIPELINE
     var out = deferred_output(in, pbr);
     out.deferred = gaussian_gbuffer(out.deferred, weight);
+    out.deferred = lommel_gbuffer(out.deferred, lommel.x);
     return out;
 #else
     var out: FragmentOutput;

@@ -48,7 +48,7 @@ fn glossy_foliage_gpu() {
             let glossy = shader_body(&glossy[start..end], rr);
             let surface = shader_body(include_str!("../src/realtime/surface_path.wgsl"), rr)
                 .replace("arrayLength(&light_sources)", "arrayLength(&config)");
-            let brdf = format!("{}\n{}", shader_body(include_str!("../src/gaussian_math.wgsl"), rr), shader_body(include_str!("../src/scene/brdf.wgsl"), rr)).replace(
+            let brdf = format!("{}\n{}\n{}", shader_body(include_str!("../src/lommel_math.wgsl"), rr), shader_body(include_str!("../src/gaussian_math.wgsl"), rr), shader_body(include_str!("../src/scene/brdf.wgsl"), rr)).replace(
                 "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
                 "return vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0));");
             let glass = shader_body(include_str!("../src/scene/thin_glass.wgsl"), rr);

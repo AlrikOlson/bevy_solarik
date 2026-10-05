@@ -120,10 +120,11 @@ pub fn prepare_raytracing_scene_bindings(
     mesh_allocator: Res<MeshAllocator>,
     mut blas_manager: ResMut<BlasManager>,
     material_assets: Res<StandardMaterialAssets>,
-    (collimated, detailed, gaussian): (
+    (collimated, detailed, gaussian, lommel): (
         Res<CollimatedMaterials>,
         Res<DetailedRayMaterials>,
         Res<GaussianRayMaterials>,
+        Res<crate::lommel::LommelRayMaterials>,
     ),
     texture_assets: Res<RenderAssets<GpuImage>>,
     fallback_texture: Res<FallbackImage>,
@@ -290,7 +291,7 @@ pub fn prepare_raytracing_scene_bindings(
             emissive: material.emissive.to_vec3(),
             metallic: material.metallic,
             alpha_cutoff: alpha.cutoff,
-            flags: alpha.flags,
+            flags: alpha.flags | if lommel.0.contains(asset_id) { 32 } else { 0 },
             base_color_alpha: LinearRgba::from(material.base_color).alpha,
             reflectance: material.reflectance,
             gaussian: gaussian_parameters,

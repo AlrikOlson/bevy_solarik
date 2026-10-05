@@ -7,6 +7,7 @@ enable wgpu_ray_query;
 #import bevy_render::maths::PI
 #import bevy_render::view::View
 #import bevy_solarik::brdf::evaluate_diffuse_brdf
+#import bevy_solarik::surface_path::shade_surface_scattering
 #import bevy_solarik::sky_sampling::sample_sky_mixture
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
 #import bevy_solarik::sampling::{sample_random_light_transmitted, shade_gi_connection, balance_heuristic, isnan}
@@ -130,6 +131,15 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
             dot(triangle_normal, world_position - sample_point.world_position) >= 0.0);
     }
     reservoir.confidence_weight = 1.0;
+
+    // Particulate radiance depends on emission angle. It cannot be recovered
+    // by multiplying cached hemisphere irradiance by a Lambert coefficient.
+    if sample_point.material.lommel {
+        reservoir.radiance = shade_surface_scattering(sample_point,
+            normalize(world_position-sample_point.world_position), rng);
+        reservoir.unbiased_contribution_weight = direction_sample.inverse_pdf;
+        return reservoir;
+    }
 
 #ifdef NO_WORLD_CACHE
     let direct_lighting = sample_random_light_transmitted(sample_point.world_position, sample_point.world_normal, sample_point.geometric_world_normal, rng).light;
