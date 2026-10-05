@@ -3,6 +3,7 @@
 fn emitted_radiance(m: ResolvedMaterial, outgoing: vec3f) -> vec3f { return m.emissive; }
 const PI: f32 = 3.141592653589793;
 const RAY_T_MIN: f32 = 0.001;
+fn ray_max_distance() -> f32 { return 1.0e30; }
 const RAY_T_MAX: f32 = 10000.0;
 const RAY_QUERY_INTERSECTION_NONE: u32 = 0u;
 const MATERIAL_FLAG_ALPHA_BLEND: u32 = 1u;

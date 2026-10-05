@@ -16,16 +16,28 @@ struct EvaluateAndSampleBrdfResult {
     pdf: f32,
 }
 
+// A surface point seen from `wo` faces `wo`. Interpolated and mapped shading
+// normals can point past the viewer's horizon at grazing angles, where every
+// lobe is zero: the silhouette of a normal-mapped surface is then outlined in
+// black pixels. The facets such a normal stands for are hidden behind others
+// that tilt towards the viewer about as far, so the normal is mirrored into
+// the visible hemisphere. A normal that already faces `wo` is unchanged.
+fn view_facing_normal(shading_normal: vec3<f32>, wo: vec3<f32>) -> vec3<f32> {
+    let cosine = dot(shading_normal, wo);
+    return shading_normal - 2.0 * min(cosine, 0.0) * wo;
+}
+
 fn evaluate_and_sample_brdf(
     wo: vec3<f32>,
-    world_normal: vec3<f32>,
+    shading_normal: vec3<f32>,
     material: ResolvedMaterial,
     rng: ptr<function, u32>,
 ) -> EvaluateAndSampleBrdfResult {
+    let world_normal = view_facing_normal(shading_normal, wo);
     let NdotV = dot(world_normal, wo);
     if NdotV < 0.0001 { return EvaluateAndSampleBrdfResult(vec3(0.0), vec3(0.0), 0.0); }
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
-    let df = 1.0 - luminance(fresnel(F0, NdotV));
+    let df = 1.0 - luminance(specular_albedo(F0, NdotV, material.perceptual_roughness));
 
     let diffuse_weight = mix(df, 0.0, material.metallic);
     let specular_weight = 1.0 - diffuse_weight;
@@ -78,20 +90,25 @@ fn evaluate_brdf(
     return evaluate_diffuse_brdf(wo, wi, world_normal, material) + evaluate_specular_brdf(wo, wi, world_normal, material);
 }
 
-fn evaluate_diffuse_brdf(wo: vec3<f32>, wi: vec3<f32>, world_normal: vec3<f32>, material: ResolvedMaterial) -> vec3<f32> {
+fn evaluate_diffuse_brdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>, material: ResolvedMaterial) -> vec3<f32> {
+    let world_normal = view_facing_normal(shading_normal, wo);
     let diffuse_color = calculate_diffuse_color(material.base_color, material.metallic, 0.0, 0.0) / PI;
 
     let NdotL = dot(world_normal, wi);
     let NdotV = dot(world_normal, wo);
     if abs(NdotL) < 0.0001 || NdotV < 0.0001 { return vec3(0.0); }
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
-    let layering = (1.0 - fresnel(F0, abs(NdotL))) * (1.0 - fresnel(F0, NdotV));
+    // Light the specular layer reflects on the way in or out never reaches
+    // the diffuse base.
+    let layering = (1.0 - specular_albedo(F0, abs(NdotL), material.perceptual_roughness))
+        * (1.0 - specular_albedo(F0, NdotV, material.perceptual_roughness));
 
     let side_weight = select(1.0 - material.diffuse_transmission, material.diffuse_transmission, NdotL < 0.0);
     return diffuse_color * layering * abs(NdotL) * side_weight;
 }
 
-fn evaluate_specular_brdf(wo: vec3<f32>, wi: vec3<f32>, world_normal: vec3<f32>, material: ResolvedMaterial) -> vec3<f32> {
+fn evaluate_specular_brdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>, material: ResolvedMaterial) -> vec3<f32> {
+    let world_normal = view_facing_normal(shading_normal, wo);
     if dot(world_normal, wi) < 0.0001 { return vec3(0.0); }
     let H = normalize(wi + wo);
     let NdotL = dot(world_normal, wi);
@@ -121,18 +138,31 @@ fn fresnel(f0: vec3<f32>, LdotH: f32) -> vec3<f32> {
     return f0 + (1.0 - f0) * pow(1.0 - LdotH, 5.0);
 }
 
+// Share of the light arriving at `cosine` to the normal that the specular
+// layer reflects: the directional albedo of the GGX lobe from the split-sum
+// table (Karis 2013, "Real Shading in Unreal Engine 4"). A smooth interface
+// reflects its Fresnel reflectance, which the table reproduces at zero
+// roughness. A rough one reflects far less at grazing angles; using the smooth
+// value there removed nine tenths of the diffuse light from every rough
+// surface seen edge-on.
+fn specular_albedo(F0: vec3<f32>, cosine: f32, perceptual_roughness: f32) -> vec3<f32> {
+    let F_ab = F_AB(perceptual_roughness, cosine);
+    return saturate(F0 * F_ab.x + F_ab.y);
+}
+
 // Scale/bias approximation
 fn F_AB(perceptual_roughness: f32, NdotV: f32) -> vec2<f32> {
     return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;
 }
 
 // Solid-angle PDF shared by continuation sampling and light-sample MIS.
-fn evaluate_brdf_pdf(wo: vec3<f32>, wi: vec3<f32>, world_normal: vec3<f32>, material: ResolvedMaterial) -> f32 {
+fn evaluate_brdf_pdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>, material: ResolvedMaterial) -> f32 {
+    let world_normal = view_facing_normal(shading_normal, wo);
     let NdotV = dot(world_normal, wo);
     if NdotV < 0.0001 { return 0.0; }
     let NdotL = dot(world_normal, wi);
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
-    let diffuse_weight = mix(1.0 - luminance(fresnel(F0, NdotV)), 0.0, material.metallic);
+    let diffuse_weight = mix(1.0 - luminance(specular_albedo(F0, NdotV, material.perceptual_roughness)), 0.0, material.metallic);
     let side_weight = select(1.0 - material.diffuse_transmission, material.diffuse_transmission, NdotL < 0.0);
     let diffuse_pdf = diffuse_weight * side_weight * abs(NdotL) / PI;
     // GGX has support only on the reflection hemisphere.

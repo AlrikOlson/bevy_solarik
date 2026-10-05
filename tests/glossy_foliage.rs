@@ -50,7 +50,7 @@ fn glossy_foliage_gpu() {
                 .replace("arrayLength(&light_sources)", "arrayLength(&config)");
             let brdf = shader_body(include_str!("../src/scene/brdf.wgsl"), rr).replace(
                 "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
-                "return vec2(0.0);");
+                "return vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0));");
             let glass = shader_body(include_str!("../src/scene/thin_glass.wgsl"), rr);
             let source = format!(
                 "{glossy}\n{surface}\n{brdf}\n{glass}\n{}",

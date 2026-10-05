@@ -23,10 +23,11 @@ fn foliage_gpu() {
             .filter(|line| !line.starts_with('#') && !line.starts_with("enable "))
             .collect::<Vec<_>>()
             .join("\n");
-        // DFG is specular-only; this probe exercises diffuse transport.
+        // The probe's interface is smooth: the table's zero-roughness limit,
+        // which is the Fresnel reflectance.
         let production = production.replace(
             "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
-            "return vec2(0.0);"
+            "return vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0));"
         );
         let math = include_str!("../src/realtime/foliage_math.wgsl")
             .lines()

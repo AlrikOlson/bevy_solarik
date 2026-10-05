@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rough surfaces seen at grazing angles are no longer dark. Diffuse light is now reduced by the specular lobe's directional albedo from the split-sum table instead of the Fresnel reflectance of a smooth interface, which the table reproduces at zero roughness; the smooth value removed about 90% of the diffuse light at a view cosine of 0.02 whatever the roughness. A shading normal that faces away from the direction it is seen from is mirrored into the visible hemisphere instead of shading black, which had outlined the silhouettes of normal-mapped surfaces in dark pixels. A production-WGSL GPU test covers both.
+
 - Planetary clouds can be driven by an application-supplied cube weather map (cover, cloud-top height, extinction scale) in a configurable shell, with an adiabatic vertical profile, independent-column treatment of partial cover, mip selection by footprint and sub-texel detail. `PlanetaryAtmosphere` gains `cloud_base`, `cloud_top`, `weather` and `cloud_detail`; the built-in noise cover remains when no map is given. [Details](docs/atmosphere.md#optional-spherical-world-mode-development).
 
 - Planetary cloud lighting: droplet phase from the Jendersie & d'Eon (2023) HG + Draine fit with the forward peak delta-scaled, a marched sun optical depth, and a closed-form delta-Eddington diffuse field for multiple scattering. Thick cloud now reflects like thick cloud; a GPU test compares slab albedo and radiance with Monte Carlo. [Model, measured error and limits](docs/atmosphere.md#optional-spherical-world-mode-development).
