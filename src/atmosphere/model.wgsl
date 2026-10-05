@@ -222,6 +222,39 @@ fn cloud_diffuse(above: f32, total: f32, mu_sun: f32, mu_light: f32, albedo: f32
     return max(i0+g1*mu_light*i1, 0.0);
 }
 
+// Share of a beam's flux that leaves the bottom of a cloud slab over a black
+// surface: the direct beam plus the downward flux of `cloud_diffuse`'s field
+// at the slab's base, pi (I0 + 2/3 I1), over the incident flux. `total` is
+// the vertical optical depth of the scaled medium.
+fn cloud_slab_transmission(mu_sun: f32, total: f32) -> f32 {
+    if total <= 0.0 { return 1.0; }
+    let g1 = CLOUD_DRAINE_MEAN_COSINE;
+    let g = g1/(1.0+g1);
+    let mu0 = max(mu_sun, 0.05);
+    let slab = total*(1.0-g1*g1);
+    let direct = exp(-slab/mu0);
+    let diffuse = 0.75*(1.0-direct)*(mu0+2.0/3.0)
+        - 0.75*(1.0-g)*slab*(mu0*(1.0-direct)+(2.0/3.0)*(1.0+direct))/((1.0-g)*slab+4.0/3.0);
+    return clamp(direct+diffuse, 0.0, 1.0);
+}
+
+// Share of sunlight that reaches `position`, below the cloud base, through
+// the cloud its sun ray crosses. Partial cover is independent columns, as in
+// the cloud march: the covered share of the footprint is shaded and the rest
+// is not. One weather sample where the ray meets the cloud base.
+fn cloud_shade(p: AtmosphereParams, position: vec3<f32>, weather: texture_cube<f32>, filtering: sampler) -> f32 {
+    let exit = sphere_interval(position, p.sun.xyz, ground_radius(p)+p.cloud.x).y;
+    if exit <= 0.0 { return 1.0; }
+    let crossing = position+p.sun.xyz*exit;
+    let mu = dot(normalize(crossing), p.sun.xyz);
+    // Below the horizon the planet shades the air, not the cloud.
+    if mu <= 0.0 { return 1.0; }
+    let w = cloud_weather(p, crossing, 0.0, weather, filtering);
+    if w.cover <= 0.0 { return 1.0; }
+    let column = p.shell.z*CLOUD_DRAINE_WEIGHT*w.density*(w.top-p.cloud.x)*cloud_profile_above(0.0);
+    return 1.0-w.cover*(1.0-cloud_slab_transmission(mu, column));
+}
+
 // Scaled cloud optical depths from `position` toward the source, on
 // geometrically growing segments out to the shell top. x: depth through an
 // overcast column with the local cloud type. y: depth of neighbouring cloud
@@ -366,8 +399,9 @@ struct AtmosphereTransport {
     transmittance: vec3<f32>,
 }
 
+// `sun_shade` is the share of sunlight that cloud above lets through.
 fn local_inscattering(p: AtmosphereParams, position: vec3<f32>, direction: vec3<f32>, medium: MediumSample,
-    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler) -> vec3<f32> {
+    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler, sun_shade: f32) -> vec3<f32> {
     var result = vec3(0.0);
     let sources = array<vec4<f32>, 2>(p.sun, p.moon);
     for (var i = 0u; i < 2u; i++) {
@@ -377,7 +411,8 @@ fn local_inscattering(p: AtmosphereParams, position: vec3<f32>, direction: vec3<
         let phase = medium.rayleigh * phase_rayleigh(mu) + medium.mie * phase_mie(mu, p.medium.w);
         let direct = sample_transmittance(p, trans, filtering, position, source.xyz) * phase;
         let ms = sample_multiple(p, multi, filtering, position, source.xyz) * medium.scattering * p.ground.w;
-        result += source.w * (direct+ms) * source_visibility(p, position, source.xyz);
+        result += source.w * (direct+ms) * source_visibility(p, position, source.xyz)
+            * select(1.0, sun_shade, i == 0u);
     }
     return result;
 }
@@ -403,7 +438,26 @@ fn integrate_air(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t
         let dt = far-near;
         let position = origin+direction*((near+far)*0.5);
         let m = sample_medium(p, length(position)-ground_radius(p));
-        let source = local_inscattering(p, position, direction, m, trans, multi, filtering);
+        let source = local_inscattering(p, position, direction, m, trans, multi, filtering, 1.0);
+        result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
+        result.transmittance *= exp(-m.extinction*dt);
+    }
+    return result;
+}
+
+// Air below the cloud base over [t0, t1], on even steps: as `integrate_air`,
+// with the sun's light at each sample reduced by the cloud its ray crosses,
+// so the air under a cloud is darker than the air beside it.
+fn integrate_air_below(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t0: f32, t1: f32, samples: u32,
+    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler, weather: texture_cube<f32>) -> AtmosphereTransport {
+    var result = AtmosphereTransport(vec3(0.0), vec3(1.0));
+    let dt = (t1-t0)/f32(samples);
+    if dt <= 0.0 { return result; }
+    for (var i = 0u; i < samples; i++) {
+        let position = origin+direction*(t0+(f32(i)+0.5)*dt);
+        let m = sample_medium(p, length(position)-ground_radius(p));
+        let source = local_inscattering(p, position, direction, m, trans, multi, filtering,
+            cloud_shade(p, position, weather, filtering));
         result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
         result.transmittance *= exp(-m.extinction*dt);
     }
@@ -443,7 +497,7 @@ fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>,
         let normal = position/radius;
         let h = radius-ground_radius(p);
         let m = sample_medium(p, h);
-        let source = local_inscattering(p, position, direction, m, trans, multi, filtering);
+        let source = local_inscattering(p, position, direction, m, trans, multi, filtering, 1.0);
         clear.radiance += clear.transmittance * source * segment_integral(m.extinction, dt);
         clear.transmittance *= exp(-m.extinction*dt);
         if opaque { continue; }
@@ -514,8 +568,16 @@ fn integrate_view(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, 
     var result = integrate_air(p, origin, direction, start, first.x,
         clamp(u32(ceil((first.x-start)*scale)), 8u, samples), start <= 0.0, trans, multi, filtering);
     result = combine_transport(result, integrate_cloud(p, origin, direction, first.x, first.y, samples, pixel_angle, trans, multi, filtering, weather));
-    result = combine_transport(result, integrate_air(p, origin, direction, first.y, middle,
-        clamp(u32(ceil((middle-first.y)*scale)), 8u, samples), first.y <= 0.0, trans, multi, filtering));
+    let between = clamp(u32(ceil((middle-first.y)*scale)), 8u, samples);
+    if base.y > base.x {
+        // The ray is under the cloud base here, in the shadow of whatever
+        // cloud stands between this air and the sun.
+        result = combine_transport(result, integrate_air_below(p, origin, direction, first.y, middle,
+            between, trans, multi, filtering, weather));
+    } else {
+        result = combine_transport(result, integrate_air(p, origin, direction, first.y, middle,
+            between, first.y <= 0.0, trans, multi, filtering));
+    }
     if has_second {
         result = combine_transport(result, integrate_cloud(p, origin, direction, second.x, second.y, samples, pixel_angle, trans, multi, filtering, weather));
         result = combine_transport(result, integrate_air(p, origin, direction, second.y, end,

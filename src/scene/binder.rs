@@ -14,7 +14,7 @@ use bevy_ecs::{
 };
 use bevy_image::Image;
 use bevy_material::AlphaMode;
-use bevy_math::{Mat4, Vec3, ops::cos};
+use bevy_math::{Mat4, Vec3, Vec4, ops::cos};
 use bevy_mesh::Mesh;
 use bevy_pbr::{
     DfgLut, ExtractedDirectionalLight, ExtractedPointLight, MeshMaterial3d,
@@ -245,7 +245,7 @@ pub fn prepare_raytracing_scene_bindings(
             emission_cone: collimated
                 .0
                 .get(asset_id)
-                .map_or(bevy_math::Vec4::ZERO, |cone| cone.gpu()),
+                .map_or(Vec4::ZERO, |cone| cone.gpu()),
         });
 
         material_id_map.insert(*asset_id, material_id);
@@ -468,6 +468,18 @@ pub fn prepare_raytracing_scene_bindings(
             &fallback_texture.cube.texture_view,
             &fallback_texture.cube.sampler,
         ));
+    // The weather of the planet's cloud layer, for cloud shadows.
+    let weather_image = planet
+        .as_deref()
+        .filter(|planet| planet.cloud_coverage > 0.0)
+        .and_then(|planet| planet.weather.as_ref())
+        .and_then(|image| texture_assets.get(image.id()));
+    let (weather_view, weather_sampler) = weather_image
+        .map(|image| (&image.texture_view, &image.sampler))
+        .unwrap_or((
+            &fallback_texture.cube.texture_view,
+            &fallback_texture.cube.sampler,
+        ));
     // A storage buffer: wgpu refuses a uniform buffer in a bind group that
     // also holds binding arrays (the textures and mesh slabs above).
     let mut sky_buffer = StorageBuffer::from(GpuSkyLight {
@@ -475,7 +487,11 @@ pub fn prepare_raytracing_scene_bindings(
         ray_max_distance: ray_settings.max_distance(),
         relative_ray_min: ray_settings.relative_min_distance(),
         _padding: 0.0,
-        medium: GpuLightMedium::new(planet.as_deref(), atmosphere.as_deref()),
+        medium: GpuLightMedium::new(
+            planet.as_deref(),
+            atmosphere.as_deref(),
+            weather_image.is_some(),
+        ),
     });
     sky_buffer.write_buffer(&render_device, &render_queue);
 
@@ -502,6 +518,8 @@ pub fn prepare_raytracing_scene_bindings(
             sky_view,
             sky_sampler,
             sky_buffer.binding().unwrap(),
+            weather_view,
+            weather_sampler,
         )),
     ));
 }
@@ -535,6 +553,8 @@ impl RaytracingSceneBindings {
                         texture_cube(TextureSampleType::Float { filterable: true }),
                         sampler(SamplerBindingType::Filtering),
                         storage_buffer_read_only::<GpuSkyLight>(false),
+                        texture_cube(TextureSampleType::Float { filterable: true }),
+                        sampler(SamplerBindingType::Filtering),
                     ),
                 ),
             ),
@@ -612,7 +632,7 @@ struct GpuMaterial {
     flags: u32,
     base_color_alpha: f32,
     reflectance: f32,
-    emission_cone: bevy_math::Vec4,
+    emission_cone: Vec4,
 }
 
 /// `Material.flags` bits, mirrored in `raytracing_scene_bindings.wgsl`.
@@ -819,6 +839,7 @@ struct GpuLightMedium {
     top: f32,
     ozone: Vec3,
     mie: f32,
+    cloud: Vec4,
 }
 
 /// Extinction of Earth's air at the ground, per metre: the atmosphere pass's
@@ -827,6 +848,9 @@ struct GpuLightMedium {
 const RAYLEIGH_EXTINCTION: Vec3 = Vec3::new(5.802e-6, 13.558e-6, 33.1e-6);
 const OZONE_ABSORPTION: Vec3 = Vec3::new(0.65e-6, 1.881e-6, 0.085e-6);
 const MIE_EXTINCTION: f32 = 3.996e-6 / 0.9;
+/// Share of cloud extinction left after the droplets' forward peak is
+/// counted as unscattered: the atmosphere pass's `CLOUD_DRAINE_WEIGHT`.
+const CLOUD_SCALED_SHARE: f32 = 0.498_159;
 
 impl GpuLightMedium {
     /// The air directional light crosses: that of the planetary atmosphere,
@@ -834,6 +858,7 @@ impl GpuLightMedium {
     fn new(
         planet: Option<&crate::atmosphere::PlanetaryAtmosphere>,
         atmosphere: Option<&crate::atmosphere::AtmosphereState>,
+        weather_bound: bool,
     ) -> Self {
         let none = Self {
             centre: Vec3::ZERO,
@@ -842,6 +867,7 @@ impl GpuLightMedium {
             top: 0.0,
             ozone: Vec3::ZERO,
             mie: 0.0,
+            cloud: Vec4::ZERO,
         };
         let (Some(planet), Some(atmosphere)) = (planet, atmosphere) else {
             return none;
@@ -856,6 +882,14 @@ impl GpuLightMedium {
             top: planet.radius + planet.height,
             ozone: OZONE_ABSORPTION * atmosphere.medium.ozone,
             mie: MIE_EXTINCTION * atmosphere.medium.mie,
+            // Clouds cast shadows when a weather map gives them shape; the
+            // built-in noise cover has no map to look up.
+            cloud: Vec4::new(
+                planet.radius + planet.cloud_base,
+                planet.radius + planet.cloud_top,
+                planet.cloud_extinction * CLOUD_SCALED_SHARE,
+                f32::from(weather_bound),
+            ),
         }
     }
 }

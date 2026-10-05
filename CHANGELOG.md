@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Planetary clouds cast shadows. With a weather map, ray-traced lighting dims a directional light by the cloud its ray crosses on the way to each surface point, and the atmosphere pass dims the sunlight scattered by air below the cloud base the same way. The cloud is looked up where the sun ray meets it, so a shadow lies down-sun of its cloud and further off the lower the sun. Darkness is the flux that leaves the bottom of the cloud, direct and diffuse, from the conservative Eddington slab already used for cloud brightness; a GPU test checks it against that field (within 0.002). A cloud of optical depth 30 under a high sun passes about a third of the light. Shadows are as sharp as the weather map's texels; the built-in noise cover casts none. Composite cost rose by 0.1 to 0.2 ms at 1080p.
+
 - Directional light now crosses the planetary atmosphere on its way to each surface point. Ray-traced lighting multiplies a directional light's transmission by the transmittance of the air between the shaded point and space, integrated over the same Rayleigh, Mie and ozone profiles the atmosphere pass uses, so a low sun is dimmer and redder at the ground than a high one and a planet seen from orbit darkens towards its terminator. `PlanetaryAtmosphere` gains `world_centre`, the planet's centre in the lit scene. A production-WGSL GPU test compares the transmittance with 64-bit quadrature (within 0.01 down to 10 degrees of elevation, 0.02 at the horizon). Sky light at a surface point still comes from the observer's sky map.
 
 - Test fixtures: six GPU tests that stopped compiling when `ray_max_distance()` and the cloud uniform were added run again.

@@ -20,10 +20,10 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
     // and the receiver is near the origin.
     let centre = select(vec3(0.0), vec3(0.0, -(RADIUS + c.x), 0.0), c.z > 0.5);
     let m = LightMedium(centre, RADIUS, vec3(5.802e-6, 13.558e-6, 33.1e-6), TOP,
-        vec3(0.65e-6, 1.881e-6, 0.085e-6), 4.44e-6);
+        vec3(0.65e-6, 1.881e-6, 0.085e-6), 4.44e-6, vec4(0.0));
     let origin = centre + vec3(0.0, RADIUS + c.x, 0.0);
     let direction = vec3(sqrt(max(0.0, 1.0 - c.y * c.y)), c.y, 0.0);
-    let none = LightMedium(centre, 0.0, m.rayleigh, TOP, m.ozone, m.mie);
+    let none = LightMedium(centre, 0.0, m.rayleigh, TOP, m.ozone, m.mie, vec4(0.0));
     output[id.x] = vec4(medium_transmittance(m, origin, direction), medium_transmittance(none, origin, direction).x);
 }
 ";

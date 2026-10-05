@@ -17,6 +17,10 @@ struct LightMedium {
     ozone: vec3<f32>,
     // Mie extinction at the ground, per metre.
     mie: f32,
+    // Cloud layer: radius of its base and of its highest top, peak
+    // extinction of the delta-scaled cloud medium per metre, and whether a
+    // weather map gives it shape (above zero).
+    cloud: vec4<f32>,
 }
 
 const MEDIUM_RAYLEIGH_HEIGHT: f32 = 8000.0;
@@ -24,6 +28,11 @@ const MEDIUM_MIE_HEIGHT: f32 = 1200.0;
 const MEDIUM_OZONE_CENTRE: f32 = 25000.0;
 const MEDIUM_OZONE_HALF_WIDTH: f32 = 15000.0;
 const MEDIUM_STEPS: u32 = 24u;
+// Mean cosine of the cloud droplets' Draine lobe, and the integral of the
+// adiabatic cloud profile over a cloud's thickness: the atmosphere pass's
+// CLOUD_DRAINE_MEAN_COSINE and cloud_profile_above(0).
+const MEDIUM_CLOUD_MEAN_COSINE: f32 = 0.763159;
+const MEDIUM_CLOUD_COLUMN: f32 = 0.585;
 
 fn medium_extinction(m: LightMedium, altitude: f32) -> vec3<f32> {
     let h = max(altitude, 0.0);
@@ -59,4 +68,21 @@ fn medium_transmittance(m: LightMedium, origin: vec3<f32>, direction: vec3<f32>)
         depth += medium_extinction(m, altitude) * weight;
     }
     return exp(-depth);
+}
+
+// Share of a beam's flux that leaves the bottom of a cloud of vertical scaled
+// optical depth `total`, direct and diffuse together, for a sun at zenith
+// cosine `mu_sun`: the conservative Eddington slab of the atmosphere pass
+// (its `cloud_slab_transmission`). The diffuse part is counted as if it came
+// from the sun's direction, which is right for level ground.
+fn cloud_transmission(mu_sun: f32, total: f32) -> f32 {
+    if total <= 0.0 { return 1.0; }
+    let g1 = MEDIUM_CLOUD_MEAN_COSINE;
+    let g = g1/(1.0+g1);
+    let mu0 = max(mu_sun, 0.05);
+    let slab = total*(1.0-g1*g1);
+    let direct = exp(-slab/mu0);
+    let diffuse = 0.75*(1.0-direct)*(mu0+2.0/3.0)
+        - 0.75*(1.0-g)*slab*(mu0*(1.0-direct)+(2.0/3.0)*(1.0+direct))/((1.0-g)*slab+4.0/3.0);
+    return clamp(direct+diffuse, 0.0, 1.0);
 }

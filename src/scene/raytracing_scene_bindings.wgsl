@@ -3,7 +3,7 @@ enable wgpu_ray_query;
 #define_import_path bevy_solarik::scene_bindings
 
 #import bevy_solarik::collimated::collimated_weight
-#import bevy_solarik::light_medium::{LightMedium, medium_transmittance}
+#import bevy_solarik::light_medium::{LightMedium, medium_transmittance, cloud_transmission, MEDIUM_CLOUD_COLUMN}
 #import bevy_pbr::lighting::perceptualRoughnessToRoughness
 #import bevy_pbr::pbr_functions::calculate_tbn_mikktspace
 
@@ -152,6 +152,10 @@ const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 @group(0) @binding(16) var sky_texture: texture_cube<f32>;
 @group(0) @binding(17) var sky_sampler: sampler;
 @group(0) @binding(18) var<storage> sky_light: SkyLight; // storage: uniforms can't share a group with binding arrays
+// The planet's weather cube, as the atmosphere pass reads it: R cover, G
+// cloud-top height as a fraction of the cloud layer, B extinction scale.
+@group(0) @binding(19) var weather_texture: texture_cube<f32>;
+@group(0) @binding(20) var weather_sampler: sampler;
 
 // Radiance arriving from the sky along `direction` (world space, pointing
 // away from the surface), for a ray that left the scene. Black when the
@@ -166,7 +170,43 @@ fn sample_sky(direction: vec3<f32>) -> vec3<f32> {
 // through the planet's air: a low sun is dimmer and redder at the ground
 // than a high one. One when the scene has no planetary atmosphere.
 fn directional_light_transmittance(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    return medium_transmittance(sky_light.medium, origin, direction);
+    return medium_transmittance(sky_light.medium, origin, direction) * cloud_shadow(origin, direction);
+}
+
+// Distance along `direction` at which a ray from `p`, inside a sphere of
+// `radius` about the origin, leaves it.
+fn sphere_exit(p: vec3<f32>, direction: vec3<f32>, radius: f32) -> f32 {
+    let b = dot(p, direction);
+    return -b + sqrt(max(b * b - dot(p, p) + radius * radius, 0.0));
+}
+
+// Share of a directional light that the planet's cloud lets through to
+// `origin`: the cloud is looked up where the ray to the light crosses its
+// base and the middle of its depth, so a shadow lies down-sun of its cloud
+// and further away the lower the sun. Partial cover shades that share of
+// the light. The world's axes are taken to be the planet's body-fixed axes.
+fn cloud_shadow(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
+    let m = sky_light.medium;
+    if m.radius <= 0.0 || m.cloud.w <= 0.0 { return 1.0; }
+    let p = origin - m.centre;
+    let r = length(p);
+    if r >= m.cloud.y { return 1.0; }
+    let at_base = p + direction * select(0.0, sphere_exit(p, direction, m.cloud.x), r < m.cloud.x);
+    let mu = dot(normalize(at_base), direction);
+    // Below the horizon the planet itself is in the way.
+    if mu <= 0.0 { return 1.0; }
+    let low = textureSampleLevel(weather_texture, weather_sampler, normalize(at_base), 0.0);
+    let shell = m.cloud.y - m.cloud.x;
+    let middle = m.cloud.x + 0.5 * low.g * shell;
+    let at_middle = p + direction * select(0.0, sphere_exit(p, direction, middle), r < middle);
+    let high = textureSampleLevel(weather_texture, weather_sampler, normalize(at_middle), 0.0);
+    let weather = 0.5 * (low + high);
+    if weather.r <= 0.0 { return 1.0; }
+    let thickness = weather.g * shell;
+    // Inside the layer only the cloud above the point shades it.
+    let above = clamp((m.cloud.x + thickness - r) / max(thickness, 1.0), 0.0, 1.0);
+    let column = m.cloud.z * weather.b * thickness * MEDIUM_CLOUD_COLUMN * above;
+    return 1.0 - weather.r * (1.0 - cloud_transmission(mu, column));
 }
 
 const RAY_T_MIN = 0.001f;
