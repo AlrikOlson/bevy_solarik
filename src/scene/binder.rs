@@ -254,18 +254,30 @@ pub fn prepare_raytracing_scene_bindings(
             ..Default::default()
         };
         if let Some(extension) = detailed.0.get(asset_id) {
-            let (Some(cover0), Some(cover1), Some(colour), Some(normal)) = (
+            let (
+                Some(cover0),
+                Some(cover1),
+                Some(colour),
+                Some(normal),
+                Some(meso_colour),
+                Some(meso_normal),
+            ) = (
                 process_texture(&Some(extension.coverage0.clone())),
                 process_texture(&Some(extension.coverage1.clone())),
                 texture_assets.get(&extension.colour),
                 texture_assets.get(&extension.detail),
-            ) else {
+                texture_assets.get(&extension.meso_colour),
+                texture_assets.get(&extension.meso_detail),
+            )
+            else {
                 continue;
             };
-            let mut scan_ids = [0; 2];
+            let mut scan_ids = [0; 4];
             for (slot, (image, id)) in [
                 (colour, extension.colour.id()),
                 (normal, extension.detail.id()),
+                (meso_colour, extension.meso_colour.id()),
+                (meso_normal, extension.meso_detail.id()),
             ]
             .into_iter()
             .enumerate()
@@ -278,6 +290,7 @@ pub fn prepare_raytracing_scene_bindings(
             }
             detail.coordinates = extension.coordinates.clone();
             detail.textures = UVec4::new(cover0, cover1, scan_ids[0], scan_ids[1]);
+            detail.meso = UVec4::new(scan_ids[2], scan_ids[3], 0, 0);
         }
         detail_parameters.get_mut().push(detail);
         let alpha = material_alpha(material);

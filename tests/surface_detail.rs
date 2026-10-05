@@ -18,6 +18,27 @@ fn neighbouring_origins_preserve_millimetres_on_a_planet() {
         assert!((pa - pb).abs().max_element() * size < 0.00001);
     }
     assert!(DetailCoordinates::new(origin, [0.0; 8]).is_none());
+    assert!(
+        a.meso_phase.iter().all(|p| p.w == 0.0),
+        "new() leaves the mesoscale octave disabled"
+    );
+    let meso_sizes = [50.0, 20.0, 80.0, 25.0, 15.0, 15.0, 20.0, 90.0];
+    let m = DetailCoordinates::with_mesoscale(origin, sizes, meso_sizes).unwrap();
+    assert_eq!(m.phase, a.phase);
+    assert_eq!(m.cell, a.cell);
+    for (i, size) in meso_sizes.into_iter().enumerate() {
+        let local = Vec3::new(3.25, -7.5, 0.125);
+        let expected = (origin + local.as_dvec3()) / size;
+        assert!(
+            (m.reconstruct_mesoscale(i, local) - expected)
+                .abs()
+                .max_element()
+                * size
+                < 0.00001
+        );
+        assert!(((1.0 / f64::from(m.meso_phase[i].w)) - size).abs() < 1e-4 * size);
+    }
+    assert!(DetailCoordinates::with_mesoscale(origin, sizes, [0.0; 8]).is_none());
     assert!(DetailCoordinates::new(DVec3::NAN, sizes).is_none());
     assert!(DetailCoordinates::new(DVec3::ZERO, [f64::MIN_POSITIVE; 8]).is_none());
     assert!(DetailCoordinates::new(DVec3::ZERO, [f64::MAX; 8]).is_none());
@@ -81,7 +102,7 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
     var coordinates: DetailCoordinates;
     coordinates.phase[0] = vec4f(0.0, 0.0, 0.0, 0.5);
     let index = u32(inputs[2u * id.x].w);
-    let sample = sample_surface_detail(index, index, index, coordinates,
+    let sample = sample_surface_detail(index, index, index, index, index, coordinates,
         vec3f(f32(id.x) * 0.1), inputs[2u * id.x].xyz, 0.001, vec4f(1.0, 0.0, 0.0, 0.0), vec4f(0.0));
     outputs[id.x] = vec4f(detail_normal(inputs[2u * id.x].xyz, inputs[2u * id.x + 1u].xyz), sample.colour.x);
 }

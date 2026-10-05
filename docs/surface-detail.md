@@ -52,6 +52,25 @@ are independently filtered. The shared shader modulates the base mean by the
 coverage-weighted scan variation: this assumes the relative variation is
 representative across the unresolved mixture, rather than tracing each grain.
 
+## Mesoscale octave
+
+Each layer carries a second, coarser scan: `SurfaceDetail::meso_colour` and
+`meso_detail` are array textures of the same eight layers at the sizes
+`DetailCoordinates::with_mesoscale` records (tens of metres), with their
+own integer cells and phases. `DetailCoordinates::new` leaves that octave
+disabled (inverse size zero), and the sampler then returns the single-octave
+result unchanged. Both octaves are sampled with the same coverage weight,
+triplanar weights and lattice placement. Per layer, colour and roughness are
+factors about 1, `mix(1, 2 s, fade)` for each octave, multiplied together;
+tangent gradients add. Each octave fades between 0.1 and 0.5 of its own
+size, so at a footprint of a metre the metre-scale scans have faded while a
+20 m scan is still present. The product of two mean-1 factors is a
+mean-1 factor only when the octaves are uncorrelated; translated random
+placement makes them so. Multiplying deviations assumes the fine
+microstructure rides on the coarse relief without changing its statistics.
+A consumer that wants a layer without a mesoscale octave binds any array
+and leaves that layer's inverse size at zero.
+
 Ray hits call the same sampler at the interpolated local mesh position.
 They evaluate a point sample; stochastic ray/pixel sampling performs the
 integration. Raster derivatives have no equivalent on the ray path yet.
@@ -61,8 +80,9 @@ filter. Colour, roughness, scale, projection and normal equations are shared.
 ## Verification and native driver issue
 
 `tests/surface_detail.rs` checks neighbouring f64 origins at Earth radius,
-preserving millimetre changes to better than 0.01 mm, and executes the
-production sampler on Vulkan. GPU normals are compared to the cross product
+preserving millimetre changes to better than 0.01 mm, checks that the
+mesoscale octave reconstructs its own sizes and that `new` leaves it
+disabled, and executes the production sampler on Vulkan. GPU normals are compared to the cross product
 of analytically displaced surface tangents, not another copy of the shader's
 projection equation. Constant scans must preserve their input mean.
 

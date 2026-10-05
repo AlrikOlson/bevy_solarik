@@ -24,6 +24,9 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var gaussian_mask: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(109) var gaussian_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(110) var<uniform> lommel:vec4<f32>;
+// The mesoscale octave: the same layers at tens of metres.
+@group(#{MATERIAL_BIND_GROUP}) @binding(111) var meso_colour: texture_2d_array<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(112) var meso_detail: texture_2d_array<f32>;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOutput {
@@ -36,8 +39,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOut
     let p = (local_from_world * in.world_position).xyz;
     let n = normalize((local_from_world * vec4f(pbr.N, 0.0)).xyz);
     let footprint = max(length(dpdx(p)), length(dpdy(p)));
-    let detail = sample_surface_detail(scan_colour, scan_detail, scan_sampler, coordinates,
-        p, n, footprint,
+    let detail = sample_surface_detail(scan_colour, scan_detail, scan_sampler, meso_colour, meso_detail,
+        coordinates, p, n, footprint,
         textureSample(coverage0, cover_sampler, in.uv),
         textureSample(coverage1, cover_sampler, in.uv));
     pbr.material.base_color = alpha_discard(pbr.material, pbr.material.base_color);

@@ -12,15 +12,30 @@ fn detail_normal(normal: vec3f, gradient: vec3f) -> vec3f {
     return normalize(normal - (gradient - normal * dot(normal, gradient)));
 }
 
+// Two octaves of scanned detail per layer: the fine scans (metres) and the
+// mesoscale scans (tens of metres). Each entry is the fractional phase of
+// the material-frame origin in scan cells (xyz) and the inverse scan size
+// in 1/m (w); a zero inverse size disables that octave for the layer.
 struct DetailCoordinates {
     phase: array<vec4f, 8>,
     cell: array<vec4i, 8>,
+    meso_phase: array<vec4f, 8>,
+    meso_cell: array<vec4i, 8>,
 }
 
 struct DetailSample {
     colour: vec3f,
     roughness: f32,
     gradient: vec3f,
+}
+
+// One octave of one layer: colour and roughness as factors about 1, the
+// tangent gradient, and the share of the octave kept at this footprint.
+struct OctaveSample {
+    colour: vec3f,
+    roughness: f32,
+    gradient: vec3f,
+    fade: f32,
 }
 
 fn detail_hash(p: vec2i, layer: u32) -> vec2f {
@@ -68,14 +83,73 @@ fn detail_plane(
     return array<vec4f, 2>(c, d);
 }
 
-// Inputs have mean 0.5 for colour and roughness; geometric coverage is given
-// by the application. Filter footprints are in metres, independent of tile LOD.
-fn sample_surface_detail(
+// One octave of layer `layer` at `local_position`, projected on the three
+// planes with `plane_weights`. Inputs have mean 0.5 for colour and
+// roughness, so the factors returned have mean 1. The octave fades to its
+// mean between footprints of 0.1 and 0.5 of its own scan size: a filtering
+// choice, not a material property.
+fn detail_octave(
 #ifdef BINDLESS_SURFACE_DETAIL
     colours: u32, details: u32, scan_sampler: u32,
 #else
     colours: texture_2d_array<f32>, details: texture_2d_array<f32>,
     scan_sampler: sampler,
+#endif
+    phase: vec4f, cell: vec3i, plane_weights: vec3f,
+    local_position: vec3f, footprint: f32, layer: u32,
+) -> OctaveSample {
+    var result = OctaveSample(vec3f(1.0), 1.0, vec3f(0.0), 0.0);
+    let scale = phase.w;
+    if scale <= 0.0 { return result; }
+    let relative_width = footprint * scale;
+    let fade = 1.0 - smoothstep(0.1, 0.5, relative_width);
+    if fade < 0.0001 { return result; }
+#ifdef BINDLESS_SURFACE_DETAIL
+    let resolution = f32(textureDimensions(detail_textures[colours]).x);
+#else
+    let resolution = f32(textureDimensions(colours).x);
+#endif
+    let lod = max(0.0, log2(max(relative_width * resolution, 1.0)));
+    let p = local_position * scale + phase.xyz;
+    var c = vec3f(0.0);
+    var rough = 0.0;
+    var gradient = vec3f(0.0);
+    for (var axis = 0u; axis < 3u; axis++) {
+        if plane_weights[axis] == 0.0 { continue; }
+        var uv = p.yz;
+        var ij = cell.yz;
+        if axis == 1u { uv = p.zx; ij = cell.zx; }
+        if axis == 2u { uv = p.xy; ij = cell.xy; }
+        let taps = detail_plane(colours, details, scan_sampler, uv, ij, layer, lod);
+        c += taps[0].rgb * plane_weights[axis];
+        rough += taps[1].z * plane_weights[axis];
+        let xy = taps[1].xy * 2.0 - 1.0;
+        let slope = -xy / sqrt(max(1.0 - dot(xy, xy), 0.01));
+        var g = vec3f(0.0, slope.x, slope.y);
+        if axis == 1u { g = vec3f(slope.y, 0.0, slope.x); }
+        if axis == 2u { g = vec3f(slope.x, slope.y, 0.0); }
+        gradient += plane_weights[axis] * g;
+    }
+    result.colour = mix(vec3f(1.0), c * 2.0, fade);
+    result.roughness = mix(1.0, rough * 2.0, fade);
+    result.gradient = fade * gradient;
+    result.fade = fade;
+    return result;
+}
+
+// Inputs have mean 0.5 for colour and roughness; geometric coverage is given
+// by the application. Filter footprints are in metres, independent of tile LOD.
+// Each layer's fine and mesoscale octaves multiply as factors about their
+// means and add their gradients: the coarse octave shapes the fine one, and
+// a layer with its mesoscale disabled is the single-octave result.
+fn sample_surface_detail(
+#ifdef BINDLESS_SURFACE_DETAIL
+    colours: u32, details: u32, scan_sampler: u32,
+    meso_colours: u32, meso_details: u32,
+#else
+    colours: texture_2d_array<f32>, details: texture_2d_array<f32>,
+    scan_sampler: sampler,
+    meso_colours: texture_2d_array<f32>, meso_details: texture_2d_array<f32>,
 #endif
     coordinates: DetailCoordinates,
     local_position: vec3f, normal: vec3f, footprint: f32,
@@ -87,41 +161,17 @@ fn sample_surface_detail(
     var result = DetailSample(vec3f(1.0), 1.0, vec3f(0.0));
     for (var k = 0u; k < 8u; k++) {
         let weight = cover[k / 4u][k % 4u];
-        let scale = coordinates.phase[k].w;
-        let relative_width = footprint * scale;
-        let fade = 1.0 - smoothstep(0.1, 0.5, relative_width);
-        if weight * fade < 0.0001 { continue; }
-#ifdef BINDLESS_SURFACE_DETAIL
-        let resolution = f32(textureDimensions(detail_textures[colours]).x);
-#else
-        let resolution = f32(textureDimensions(colours).x);
-#endif
-        let lod = max(0.0, log2(max(relative_width * resolution, 1.0)));
-        let p = local_position * scale + coordinates.phase[k].xyz;
-        let cell = coordinates.cell[k].xyz;
-        var c = vec3f(0.0);
-        var rough = 0.0;
-        var gradient = vec3f(0.0);
-        for (var axis = 0u; axis < 3u; axis++) {
-            if plane_weights[axis] == 0.0 { continue; }
-            var uv = p.yz;
-            var ij = cell.yz;
-            if axis == 1u { uv = p.zx; ij = cell.zx; }
-            if axis == 2u { uv = p.xy; ij = cell.xy; }
-            let taps = detail_plane(colours, details, scan_sampler, uv, ij, k, lod);
-            c += taps[0].rgb * plane_weights[axis];
-            rough += taps[1].z * plane_weights[axis];
-            let xy = taps[1].xy * 2.0 - 1.0;
-            let slope = -xy / sqrt(max(1.0 - dot(xy, xy), 0.01));
-            var g = vec3f(0.0, slope.x, slope.y);
-            if axis == 1u { g = vec3f(slope.y, 0.0, slope.x); }
-            if axis == 2u { g = vec3f(slope.x, slope.y, 0.0); }
-            gradient += plane_weights[axis] * g;
-        }
-        let w = weight * fade;
-        result.colour += w * (c * 2.0 - vec3f(1.0));
-        result.roughness += w * (rough * 2.0 - 1.0);
-        result.gradient += w * gradient;
+        if weight < 0.0001 { continue; }
+        let fine = detail_octave(colours, details, scan_sampler,
+            coordinates.phase[k], coordinates.cell[k].xyz, plane_weights,
+            local_position, footprint, k);
+        let meso = detail_octave(meso_colours, meso_details, scan_sampler,
+            coordinates.meso_phase[k], coordinates.meso_cell[k].xyz, plane_weights,
+            local_position, footprint, k);
+        if fine.fade + meso.fade <= 0.0 { continue; }
+        result.colour += weight * (fine.colour * meso.colour - vec3f(1.0));
+        result.roughness += weight * (fine.roughness * meso.roughness - 1.0);
+        result.gradient += weight * (fine.gradient + meso.gradient);
     }
     return result;
 }

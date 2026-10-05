@@ -163,6 +163,8 @@ const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 struct SurfaceDetailParameters {
     coordinates: DetailCoordinates,
     textures: vec4u,
+    // Mesoscale colour (x) and detail (y) atlas indices.
+    meso: vec4u,
 }
 @group(0) @binding(23) var<storage> surface_details: array<SurfaceDetailParameters>;
 
@@ -477,6 +479,7 @@ fn resolve_triangle_data_full(instance_id: u32, triangle_id: u32, barycentrics: 
         // unlike raster derivatives there is no deterministic ray-cone filter.
         let sampled = sample_surface_detail(
             detail.textures.z, detail.textures.w, detail.textures.z,
+            detail.meso.x, detail.meso.y,
             detail.coordinates, p, n, 0.0,
             textureSampleLevel(textures[detail.textures.x], samplers[detail.textures.x], uv, 0.0),
             textureSampleLevel(textures[detail.textures.y], samplers[detail.textures.y], uv, 0.0));
