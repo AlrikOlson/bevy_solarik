@@ -1,5 +1,5 @@
 #import bevy_render::view::View
-#import bevy_solarik::atmosphere_model::{AtmosphereParams, ATM_PI, observer_position, atmosphere_boundary, integrate_atmosphere, integrate_view, sample_transmittance, sky_uv, star_radiance}
+#import bevy_solarik::atmosphere_model::{AtmosphereParams, ATM_PI, observer_position, atmosphere_boundary, integrate_atmosphere, integrate_view, sample_transmittance, sky_uv, star_radiance, disk_per_lux}
 
 @group(0) @binding(0) var<uniform> p: AtmosphereParams;
 @group(0) @binding(1) var filtering: sampler;
@@ -41,12 +41,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 fn disk_radiance(direction: vec3<f32>, source: vec4<f32>, radius: f32, pixel_angle: f32) -> vec3<f32> {
     let angle = atan2(length(cross(direction, source.xyz)), dot(direction, source.xyz));
-    let w = max(pixel_angle*0.5, 1e-6);
-    let coverage = 1.0-smoothstep(radius-w, radius+w, angle);
-    if coverage <= 0.0 || source.w <= 0.0 { return vec3(0.0); }
+    if source.w <= 0.0 { return vec3(0.0); }
     let attenuation = sample_transmittance(p, trans, filtering, observer_position(p), direction);
     // Projected solid angle gives E = integral L cos(theta) dOmega exactly.
-    return attenuation * coverage * source.w / (ATM_PI*sin(radius)*sin(radius));
+    return attenuation * source.w * disk_per_lux(angle,radius,pixel_angle);
 }
 
 @compute @workgroup_size(8, 8)
@@ -72,12 +70,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let result = integrate_view(p, observer_position(p), direction, distance,
             u32(p.observer.w)*2u, pixel_angle, trans, multiple, filtering, weather);
         var previous = textureLoad(output,id.xy).rgb;
-        if pixel_depth == 0.0 {
+        if pixel_depth == 0.0 && p.disks.z>0.5 {
             // Unattenuated source first, then the same cloud/air view transmittance.
-            let angle=atan2(length(cross(direction,p.sun.xyz)),dot(direction,p.sun.xyz));
-            let half_pixel=max(pixel_angle*0.5,1e-6);
-            let coverage=1.0-smoothstep(p.disks.x-half_pixel,p.disks.x+half_pixel,angle);
-            previous+=vec3(coverage*p.sun.w/(ATM_PI*pow(sin(p.disks.x),2.0))*view.exposure);
+            let sources=array<vec4<f32>,2>(p.sun,p.moon);
+            let colours=array<vec3<f32>,2>(p.sun_colour.rgb,p.moon_colour.rgb);
+            for(var i=0u;i<2u;i++) {
+                let source=sources[i]; let radius=p.disks[i];
+                let angle=atan2(length(cross(direction,source.xyz)),dot(direction,source.xyz));
+                previous+=colours[i]*source.w*disk_per_lux(angle,radius,pixel_angle)*view.exposure;
+            }
         }
         let color = previous*result.transmittance+result.radiance*view.exposure;
         textureStore(output,id.xy,vec4(clamp(color,vec3(0.0),vec3(65000.0)),1.0));
@@ -91,8 +92,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let pixel_angle = max(length(dx-direction), length(dy-direction));
         color += star_radiance(direction, pixel_angle) * p.observer.z
             * sample_transmittance(p, trans, filtering, observer_position(p), direction);
-        color += disk_radiance(direction, p.sun, p.disks.x, pixel_angle);
-        color += disk_radiance(direction, p.moon, p.disks.y, pixel_angle);
+        if p.disks.z>0.5 {
+            color += p.sun_colour.rgb*disk_radiance(direction, p.sun, p.disks.x, pixel_angle);
+            color += p.moon_colour.rgb*disk_radiance(direction, p.moon, p.disks.y, pixel_angle);
+        }
         color *= view.exposure;
     } else {
         let h = view.view_from_clip * vec4(uv*vec2(2.0,-2.0)+vec2(-1.0,1.0), pixel_depth, 1.0);

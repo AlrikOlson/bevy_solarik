@@ -64,8 +64,15 @@ pub struct AtmosphereState {
     pub sun_illuminance: f32,
     /// Actual apparent angular radius in radians, including observer distance.
     pub sun_angular_radius: f32,
+    /// Linear RGB spectral shape per unit photopic illuminance.
+    pub sun_colour: Vec3,
     pub moon_direction: Vec3,
     pub moon_illuminance: f32,
+    /// The secondary source can be another star rather than a moon.
+    pub moon_angular_radius: f32,
+    pub moon_colour: Vec3,
+    /// Disable when a separate physical source-disk pass supplies the background.
+    pub render_disks: bool,
     pub observer_height: f32,
     pub aerial_distance: f32,
     pub stars: f32,
@@ -79,8 +86,12 @@ impl Default for AtmosphereState {
             sun_direction: Vec3::Y,
             sun_illuminance: 110_000.0,
             sun_angular_radius: SUN_ANGULAR_RADIUS,
+            sun_colour: Vec3::ONE,
             moon_direction: Vec3::new(0.0, 0.66, -0.75).normalize(),
             moon_illuminance: 0.25,
+            moon_angular_radius: MOON_ANGULAR_RADIUS,
+            moon_colour: Vec3::ONE,
+            render_disks: true,
             observer_height: 2.0,
             aerial_distance: 2000.0,
             stars: 1.0,
@@ -92,6 +103,16 @@ impl Default for AtmosphereState {
 impl AtmosphereState {
     /// Reject invalid controls before either renderer consumes them.
     pub fn validate(&self) -> Result<(), &'static str> {
+        for colour in [self.sun_colour, self.moon_colour] {
+            if !colour.is_finite() || colour.min_element() < 0.0 || colour.max_element() > 16.0 {
+                return Err("source colour must be finite linear RGB in0..16");
+            }
+        }
+        if !self.moon_angular_radius.is_finite()
+            || !(1e-8..=0.1).contains(&self.moon_angular_radius)
+        {
+            return Err("secondary angular radius outside1e-8..0.1rad");
+        }
         if !self.sun_angular_radius.is_finite() || !(1e-6..=0.1).contains(&self.sun_angular_radius)
         {
             return Err("solar angular radius outside1e-6..0.1rad");
@@ -176,13 +197,13 @@ impl AtmosphereState {
     /// Normal-incidence RGB solar illuminance at the shared observer.
     #[must_use]
     pub fn sun_illuminance_rgb(&self) -> Vec3 {
-        self.transmittance_to_space(self.sun_direction) * self.sun_illuminance
+        self.transmittance_to_space(self.sun_direction) * self.sun_illuminance * self.sun_colour
     }
 
     /// Normal-incidence RGB lunar illuminance at the shared observer.
     #[must_use]
     pub fn moon_illuminance_rgb(&self) -> Vec3 {
-        self.transmittance_to_space(self.moon_direction) * self.moon_illuminance
+        self.transmittance_to_space(self.moon_direction) * self.moon_illuminance * self.moon_colour
     }
 
     pub(crate) fn uniform(&self) -> AtmosphereParams {
@@ -212,7 +233,14 @@ impl AtmosphereState {
             shell: Vec4::ZERO,
             occluder: Vec4::ZERO,
             cloud: Vec4::ZERO,
-            disks: Vec4::new(self.sun_angular_radius, MOON_ANGULAR_RADIUS, 0.0, 0.0),
+            disks: Vec4::new(
+                self.sun_angular_radius,
+                self.moon_angular_radius,
+                f32::from(self.render_disks),
+                0.0,
+            ),
+            sun_colour: self.sun_colour.extend(0.0),
+            moon_colour: self.moon_colour.extend(0.0),
         }
     }
 }
@@ -229,4 +257,6 @@ pub(crate) struct AtmosphereParams {
     occluder: Vec4,
     cloud: Vec4,
     disks: Vec4,
+    sun_colour: Vec4,
+    moon_colour: Vec4,
 }

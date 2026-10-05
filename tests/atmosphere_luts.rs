@@ -3,6 +3,116 @@ use bevy_math::{DVec3, Vec3};
 use bevy_solarik::atmosphere::AtmosphereState;
 use wgpu::util::DeviceExt;
 
+#[test]
+#[ignore = "Vulkan GPU; run serially without other builds or captures"]
+fn coloured_binary_transport_is_linear_in_each_source() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        let mut state = AtmosphereState {
+            sun_direction: Vec3::new(0.3, 0.8, 0.2).normalize(),
+            moon_direction: Vec3::new(-0.4, 0.5, 0.3).normalize(),
+            moon_illuminance: 0.0,
+            stars: 0.0,
+            ..Default::default()
+        };
+        let rays = [[0.0, 1.0, 0.0, 1e6], [0.6, 0.8, 0.0, 1e6]];
+        gpu.generate(&state);
+        let a = gpu.probe(&parameters(&state), &rays);
+        state.sun_illuminance = 0.0;
+        state.moon_illuminance = 30000.0;
+        gpu.generate(&state);
+        let b = gpu.probe(&parameters(&state), &rays);
+        state.sun_illuminance = 110000.0;
+        state.sun_colour = Vec3::new(1.7, 0.85, 0.28);
+        state.moon_colour = Vec3::new(0.5, 1.1, 1.5);
+        gpu.generate(&state);
+        let both = gpu.probe(&parameters(&state), &rays);
+        for ray in 0..rays.len() {
+            let expected = Vec3::from_slice(&a[ray * 2][..3]) * state.sun_colour
+                + Vec3::from_slice(&b[ray * 2][..3]) * state.moon_colour;
+            let actual = Vec3::from_slice(&both[ray * 2][..3]);
+            assert!(
+                ((actual - expected).abs() / expected.max(Vec3::splat(0.01))).max_element() < 0.002
+            );
+        }
+    });
+}
+
+#[test]
+#[ignore = "Vulkan GPU; run serially without other builds or captures"]
+fn binary_clouds_sum_both_coloured_sources() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        let state = AtmosphereState {
+            sun_direction: Vec3::Z,
+            moon_direction: Vec3::new(0.6, 0.0, 0.8),
+            moon_illuminance: 30000.0,
+            sun_colour: Vec3::new(1.7, 0.85, 0.28),
+            moon_colour: Vec3::new(0.5, 1.1, 1.5),
+            stars: 0.0,
+            ..Default::default()
+        };
+        let mut p = parameters(&state);
+        p[5] = [0.0, 0.0, 24000.0, 6360.0];
+        p[6] = [6460.0, 0.8, 0.5, 137.0];
+        p[8] = [2.0, 8.0, 0.0, 0.0];
+        gpu.generate_parameters(&p);
+        let rays = [[0.0, 0.0, -1.0, 1e6], [0.12, 0.0, -0.9927739, 1e6]];
+        let both = gpu.probe_view(&p, &rays);
+        p[3][3] = 0.0;
+        let a = gpu.probe_view(&p, &rays);
+        p[3][3] = 30000.0;
+        p[2][3] = 0.0;
+        let b = gpu.probe_view(&p, &rays);
+        for i in 0..rays.len() {
+            for c in 0..3 {
+                let expected = a[i * 2][c] + b[i * 2][c];
+                assert!(b[i * 2][c] > 0.0);
+                assert!((both[i * 2][c] - expected).abs() / expected.max(0.01) < 0.002);
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore = "Vulkan GPU; run serially without other builds or captures"]
+fn unresolved_and_resolved_disks_conserve_projected_flux() {
+    futures_lite::future::block_on(async {
+        let gpu = Luts::new().await;
+        let state = AtmosphereState::default();
+        gpu.generate(&state);
+        let mut rays = Vec::new();
+        let sizes = [1e-7_f64, 1e-5, 0.0003, 0.00465, 0.05, 0.1];
+        let pixel = 0.00077_f64;
+        for radius in sizes {
+            for i in 0..2048 {
+                rays.push([
+                    ((i as f64 + 0.5) / 2048.0 * (radius + pixel * 0.5)) as f32,
+                    radius as f32,
+                    pixel as f32,
+                    0.0,
+                ]);
+            }
+        }
+        let result = gpu.probe_with("AtmosphereTransport(vec3(disk_per_lux(d.x,d.y,d.z)+(p.sun.w+textureSampleLevel(trans,filtering,vec2(0.5),0.0).r+textureSampleLevel(multiple,filtering,vec2(0.5),0.0).r)*0.0),vec3(1.0))", &parameters(&state), &rays);
+        for (group, radius) in sizes.iter().enumerate() {
+            let step = (radius + pixel * 0.5) / 2048.0;
+            let integral = (0..2048)
+                .map(|i| {
+                    let angle = (i as f64 + 0.5) * step;
+                    f64::from(result[(group * 2048 + i) * 2][0])
+                        * angle.sin()
+                        * angle.cos()
+                        * step
+                        * 2.0
+                        * core::f64::consts::PI
+                })
+                .sum::<f64>();
+            assert!((integral - 1.0).abs() < 0.005, "radius{radius}: {integral}");
+        }
+    });
+}
+
 fn lut_source(definition: &str) -> String {
     let model = include_str!("../src/atmosphere/model.wgsl")
         .lines()
@@ -28,7 +138,7 @@ fn lut_source(definition: &str) -> String {
     format!("{model}\n{body}")
 }
 
-fn parameters(state: &AtmosphereState) -> [[f32; 4]; 10] {
+fn parameters(state: &AtmosphereState) -> [[f32; 4]; 12] {
     [
         [
             state.medium.rayleigh,
@@ -56,7 +166,14 @@ fn parameters(state: &AtmosphereState) -> [[f32; 4]; 10] {
         [0.0; 4],
         [0.0; 4],
         [0.0; 4],
-        [state.sun_angular_radius, 0.00452, 0.0, 0.0],
+        [
+            state.sun_angular_radius,
+            state.moon_angular_radius,
+            0.0,
+            0.0,
+        ],
+        state.sun_colour.extend(0.0).to_array(),
+        state.moon_colour.extend(0.0).to_array(),
     ]
 }
 
@@ -164,7 +281,7 @@ impl Luts {
         self.generate_parameters(&parameters(state));
     }
 
-    fn generate_parameters(&self, parameters: &[[f32; 4]; 10]) {
+    fn generate_parameters(&self, parameters: &[[f32; 4]; 12]) {
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -563,7 +680,7 @@ const VIEW_PROBE: &str = "integrate_view(p,observer_position(p),d.xyz,d.w,u32(p.
 
 impl Luts {
     /// Clear-air transport, as used by lookup fields.
-    fn probe(&self, params: &[[f32; 4]; 10], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    fn probe(&self, params: &[[f32; 4]; 12], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
         self.probe_with(
             "integrate_atmosphere(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering,false)",
             params,
@@ -572,14 +689,14 @@ impl Luts {
     }
 
     /// Planetary view transport including the cloud shell, as composited.
-    fn probe_view(&self, params: &[[f32; 4]; 10], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    fn probe_view(&self, params: &[[f32; 4]; 12], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
         self.probe_with(VIEW_PROBE, params, directions)
     }
 
     fn probe_with(
         &self,
         call: &str,
-        params: &[[f32; 4]; 10],
+        params: &[[f32; 4]; 12],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
         self.probe_program("", call, [0; 4], params, directions)
@@ -593,7 +710,7 @@ impl Luts {
         helpers: &str,
         call: &str,
         weather_texel: [u8; 4],
-        params: &[[f32; 4]; 10],
+        params: &[[f32; 4]; 12],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
         let model = include_str!("../src/atmosphere/model.wgsl")

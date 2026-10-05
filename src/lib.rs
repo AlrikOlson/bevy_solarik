@@ -18,6 +18,7 @@ pub mod point_sky;
 pub mod radiance_sky;
 pub mod realtime;
 pub mod scene;
+pub mod stellar_disks;
 pub mod surface_detail;
 
 /// The solarik prelude.

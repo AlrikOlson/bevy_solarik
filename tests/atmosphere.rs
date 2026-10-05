@@ -142,7 +142,14 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {{
                     [0.0; 4],
                     // Planet, shell, occluder and cloud: the local-ground mode.
                     [0.0; 4],
-                    [state.sun_angular_radius, 0.00452, 0.0, 0.0],
+                    [
+                        state.sun_angular_radius,
+                        state.moon_angular_radius,
+                        0.0,
+                        0.0,
+                    ],
+                    state.sun_colour.extend(0.0).to_array(),
+                    state.moon_colour.extend(0.0).to_array(),
                 ];
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,

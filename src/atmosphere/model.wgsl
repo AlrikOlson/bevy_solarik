@@ -20,9 +20,25 @@ struct AtmosphereParams {
     occluder: vec4<f32>, // body-local centre km, radius km
     cloud: vec4<f32>, // shell base km, shell top km, weather map enable, detail strength
     disks: vec4<f32>, // actual apparent sun/moon angular radii, reserved
+    sun_colour: vec4<f32>,
+    moon_colour: vec4<f32>,
 }
 
 fn ground_radius(p: AtmosphereParams) -> f32 { return select(GROUND_RADIUS, p.planet.w, p.planet.w > 0.0); }
+// Pixel reconstruction of a uniform disk. Normalize the cubic edge kernel's
+// radial integral, including unresolved disks; no angular-size exaggeration.
+// Small-angle integration error is O((radius+width)^2), below0.5% at0.1rad.
+fn disk_per_lux(angle:f32, radius:f32, pixel_angle:f32)->f32 {
+    let w=max(pixel_angle*0.5,1e-8);
+    let coverage=1.0-smoothstep(radius-w,radius+w,angle);
+    let lo=-min(radius/w,1.0);
+    let l2=lo*lo; let l3=l2*lo; let l4=l2*l2; let l5=l4*lo;
+    let f0=0.5*lo-0.375*l2+0.0625*l4;
+    let f1=0.25*l2-0.25*l3+0.05*l5;
+    let core=max(radius-w,0.0);
+    let integral=0.5*core*core+w*(radius*(0.1875-f0)+w*(0.05-f1));
+    return coverage/max(2.0*ATM_PI*integral,1e-30);
+}
 fn top_radius(p: AtmosphereParams) -> f32 { return select(TOP_RADIUS, p.shell.x, p.planet.w > 0.0); }
 
 // Negative exit identifies a miss. Stable enough for the validated <=1e6 km observer.
@@ -243,10 +259,13 @@ fn cloud_slab_transmission(mu_sun: f32, total: f32) -> f32 {
 // the cloud march: the covered share of the footprint is shaded and the rest
 // is not. One weather sample where the ray meets the cloud base.
 fn cloud_shade(p: AtmosphereParams, position: vec3<f32>, weather: texture_cube<f32>, filtering: sampler) -> f32 {
-    let exit = sphere_interval(position, p.sun.xyz, ground_radius(p)+p.cloud.x).y;
+    return cloud_shade_source(p,position,p.sun.xyz,weather,filtering);
+}
+fn cloud_shade_source(p: AtmosphereParams, position: vec3<f32>, light:vec3<f32>, weather: texture_cube<f32>, filtering: sampler) -> f32 {
+    let exit = sphere_interval(position, light, ground_radius(p)+p.cloud.x).y;
     if exit <= 0.0 { return 1.0; }
-    let crossing = position+p.sun.xyz*exit;
-    let mu = dot(normalize(crossing), p.sun.xyz);
+    let crossing = position+light*exit;
+    let mu = dot(normalize(crossing), light);
     // Below the horizon the planet shades the air, not the cloud.
     if mu <= 0.0 { return 1.0; }
     let w = cloud_weather(p, crossing, 0.0, weather, filtering);
@@ -399,9 +418,9 @@ struct AtmosphereTransport {
     transmittance: vec3<f32>,
 }
 
-// `sun_shade` is the share of sunlight that cloud above lets through.
+// Each component is the share of one source that cloud above lets through.
 fn local_inscattering(p: AtmosphereParams, position: vec3<f32>, direction: vec3<f32>, medium: MediumSample,
-    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler, sun_shade: f32) -> vec3<f32> {
+    trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler, source_shade: vec2<f32>) -> vec3<f32> {
     var result = vec3(0.0);
     let sources = array<vec4<f32>, 2>(p.sun, p.moon);
     for (var i = 0u; i < 2u; i++) {
@@ -411,8 +430,9 @@ fn local_inscattering(p: AtmosphereParams, position: vec3<f32>, direction: vec3<
         let phase = medium.rayleigh * phase_rayleigh(mu) + medium.mie * phase_mie(mu, p.medium.w);
         let direct = sample_transmittance(p, trans, filtering, position, source.xyz) * phase;
         let ms = sample_multiple(p, multi, filtering, position, source.xyz) * medium.scattering * p.ground.w;
-        result += source.w * (direct+ms) * source_visibility(p, position, source.xyz)
-            * select(1.0, sun_shade, i == 0u);
+        let colour=select(p.sun_colour.rgb,p.moon_colour.rgb,i==1u);
+        result += colour * source.w * (direct+ms) * source_visibility(p, position, source.xyz)
+            * source_shade[i];
     }
     return result;
 }
@@ -438,7 +458,7 @@ fn integrate_air(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t
         let dt = far-near;
         let position = origin+direction*((near+far)*0.5);
         let m = sample_medium(p, length(position)-ground_radius(p));
-        let source = local_inscattering(p, position, direction, m, trans, multi, filtering, 1.0);
+        let source = local_inscattering(p, position, direction, m, trans, multi, filtering, vec2(1.0));
         result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
         result.transmittance *= exp(-m.extinction*dt);
     }
@@ -457,7 +477,7 @@ fn integrate_air_below(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f
         let position = origin+direction*(t0+(f32(i)+0.5)*dt);
         let m = sample_medium(p, length(position)-ground_radius(p));
         let source = local_inscattering(p, position, direction, m, trans, multi, filtering,
-            cloud_shade(p, position, weather, filtering));
+            vec2(cloud_shade(p, position, weather, filtering),cloud_shade_source(p,position,p.moon.xyz,weather,filtering)));
         result.radiance += result.transmittance * source * segment_integral(m.extinction, dt);
         result.transmittance *= exp(-m.extinction*dt);
     }
@@ -497,7 +517,7 @@ fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>,
         let normal = position/radius;
         let h = radius-ground_radius(p);
         let m = sample_medium(p, h);
-        let source = local_inscattering(p, position, direction, m, trans, multi, filtering, 1.0);
+        let source = local_inscattering(p, position, direction, m, trans, multi, filtering, vec2(1.0));
         clear.radiance += clear.transmittance * source * segment_integral(m.extinction, dt);
         clear.transmittance *= exp(-m.extinction*dt);
         if opaque { continue; }
@@ -509,19 +529,24 @@ fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>,
         if cloud > 0.0 {
             covered += local.cover*cloud*dt;
             weight += cloud*dt;
-            let irradiance = sample_transmittance(p, trans, filtering, position, p.sun.xyz)
-                * source_visibility(p, position, p.sun.xyz)*p.sun.w;
+            for (var star=0u; star<2u; star++) {
+            let light=select(p.sun,p.moon,star==1u);
+            let colour=select(p.sun_colour.rgb,p.moon_colour.rgb,star==1u);
+            if light.w<=0.0 {continue;}
+            let irradiance = sample_transmittance(p, trans, filtering, position, light.xyz)
+                * source_visibility(p, position, light.xyz)*light.w*colour;
             if max(irradiance.x, max(irradiance.y, irradiance.z)) > 0.0 {
-                let sun_depth = cloud_sun_depth(p, position, p.sun.xyz, local, weather, filtering);
-                let single = phase_draine(dot(direction, p.sun.xyz))*exp(-sun_depth.x-sun_depth.y);
+                let sun_depth = cloud_sun_depth(p, position, light.xyz, local, weather, filtering);
+                let single = phase_draine(dot(direction, light.xyz))*exp(-sun_depth.x-sun_depth.y);
                 let thickness = local.top-p.cloud.x;
                 let column = p.shell.z*CLOUD_DRAINE_WEIGHT*local.density*thickness;
                 // Neighbouring cloud that shadows the direct beam also starves
                 // the diffuse field; applying its excess depth is a heuristic.
                 let diffuse = cloud_diffuse(cloud_profile_above((h-p.cloud.x)/thickness)*column,
-                    cloud_profile_above(0.0)*column, dot(normal, p.sun.xyz), dot(direction, normal),
+                    cloud_profile_above(0.0)*column, dot(normal, light.xyz), dot(direction, normal),
                     dot(p.ground.rgb, vec3(1.0/3.0)))*exp(-sun_depth.y);
                 cloudy_source += cloud*irradiance*(single+diffuse);
+            }
             }
             extinction += vec3(cloud);
         }
@@ -603,7 +628,8 @@ fn integrate_atmosphere(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<
             let source = sources[i];
             let direct = sample_transmittance(p, trans, filtering, normal*(ground_radius(p)+0.001), source.xyz)
                 * max(dot(normal, source.xyz), 0.0);
-            result.radiance += result.transmittance * p.ground.rgb * source.w * direct / ATM_PI;
+            let colour=select(p.sun_colour.rgb,p.moon_colour.rgb,i==1u);
+            result.radiance += result.transmittance * p.ground.rgb * colour * source.w * direct / ATM_PI;
         }
     }
     return result;
