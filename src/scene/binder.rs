@@ -130,11 +130,12 @@ pub fn prepare_raytracing_scene_bindings(
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
     sky_light: Res<SolarikSkyLight>,
-    (alpha_testing, ray_settings, planet, atmosphere): (
+    (alpha_testing, ray_settings, planet, atmosphere, rings): (
         Res<SolarikAlphaTesting>,
         Res<SolarikRaySettings>,
         Option<Res<crate::atmosphere::PlanetaryAtmosphere>>,
         Option<Res<crate::atmosphere::AtmosphereState>>,
+        Res<crate::rings::RingShadow>,
     ),
     render_device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
@@ -548,6 +549,8 @@ pub fn prepare_raytracing_scene_bindings(
         ),
     });
     sky_buffer.write_buffer(&render_device, &render_queue);
+    let mut ring_buffer = StorageBuffer::from(rings.0.clone());
+    ring_buffer.write_buffer(&render_device, &render_queue);
 
     if scan_textures.is_empty() {
         scan_textures
@@ -583,6 +586,7 @@ pub fn prepare_raytracing_scene_bindings(
             scan_textures.as_slice(),
             scan_samplers.as_slice(),
             detail_parameters.binding().unwrap(),
+            ring_buffer.binding().unwrap(),
         )),
     ));
 }
@@ -622,6 +626,7 @@ impl RaytracingSceneBindings {
                             .count(MAX_SCAN_ATLASES),
                         sampler(SamplerBindingType::Filtering).count(MAX_SCAN_ATLASES),
                         storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only::<crate::rings::RingData>(false),
                     ),
                 ),
             ),

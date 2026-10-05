@@ -3,6 +3,7 @@ enable wgpu_ray_query;
 #define_import_path bevy_solarik::scene_bindings
 
 #import bevy_solarik::collimated::collimated_weight
+#import bevy_solarik::ring_transport::ring_shadow
 #import bevy_solarik::detail_sampling::{DetailCoordinates, sample_surface_detail, detail_normal}
 #import bevy_solarik::light_medium::{LightMedium, medium_transmittance, cloud_transmission, MEDIUM_CLOUD_COLUMN}
 #import bevy_pbr::lighting::perceptualRoughnessToRoughness
@@ -178,7 +179,7 @@ fn sample_sky(direction: vec3<f32>) -> vec3<f32> {
 // through the planet's air: a low sun is dimmer and redder at the ground
 // than a high one. One when the scene has no planetary atmosphere.
 fn directional_light_transmittance(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    return medium_transmittance(sky_light.medium, origin, direction) * cloud_shadow(origin, direction);
+    return medium_transmittance(sky_light.medium, origin, direction) * cloud_shadow(origin, direction) * ring_shadow(origin, direction);
 }
 
 // Distance along `direction` at which a ray from `p`, inside a sphere of

@@ -17,6 +17,7 @@ pub mod pathtracer;
 pub mod point_sky;
 pub mod radiance_sky;
 pub mod realtime;
+pub mod rings;
 pub mod scene;
 pub mod stellar_disks;
 pub mod surface_detail;
