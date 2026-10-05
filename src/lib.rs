@@ -14,6 +14,8 @@ pub mod gaussian;
 pub mod lommel;
 pub mod optics;
 pub mod pathtracer;
+pub mod point_sky;
+pub mod radiance_sky;
 pub mod realtime;
 pub mod scene;
 pub mod surface_detail;
