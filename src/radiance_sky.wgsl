@@ -1,9 +1,10 @@
 #import bevy_render::view::View
-#import bevy_solarik::radiance_sky_sample::sample_sky
+#import bevy_solarik::radiance_sky_sample::{sample_sky, radiance_transform}
 @group(0) @binding(0) var<uniform> view:View;
 @group(0) @binding(1) var depth:texture_depth_2d;
 @group(0) @binding(2) var output:texture_storage_2d<rgba16float,read_write>;
 @group(0) @binding(3) var field:texture_2d<f32>;
+@group(0) @binding(4) var<uniform> layer:vec4<f32>;
 @compute @workgroup_size(8,8)
 fn main(@builtin(global_invocation_id) id:vec3<u32>) {
  let size=textureDimensions(output);
@@ -14,5 +15,5 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
  let local=view.view_from_clip*clip;
  let direction=normalize((view.world_from_view*vec4(local.xyz/local.w,0.0)).xyz);
  let previous=textureLoad(output,id.xy);
- textureStore(output,id.xy,vec4(previous.rgb+sample_sky(field,direction)*view.exposure,previous.a));
+ textureStore(output,id.xy,vec4(previous.rgb+radiance_transform(sample_sky(field,direction),layer)*view.exposure,previous.a));
 }

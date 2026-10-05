@@ -12,6 +12,19 @@ latitude runs from +Y at the top to -Y at the bottom. Manual bilinear sampling
 wraps longitude and clamps the poles. The shader reconstructs the world ray
 from the actual view matrices and multiplies by Bevy's view exposure once.
 
+`RadianceSkyLayers(Vec<RadianceLayer>)` adds independent fields on the same
+camera, with or without `RadianceSky`. `RadianceLayer::rgb(image)` preserves
+the original RGB contract. `RadianceLayer::scalar(image, rgb_per_unit)` reads
+the first channel (for example an R32Float emission-line measurement) and
+multiplies it by a finite nonnegative linear RGB cd/m² conversion vector.
+The caller owns the physical spectral conversion; the renderer applies no
+colour map, normalization, extinction or contrast curve. Each layer is added
+in a separate ordered dispatch with the same depth test and exposure, so
+overlap conserves the sum of input radiances below half-float saturation.
+The production sampling test also compares scalar conversion plus RGB addition
+against an independent CPU reference. Textures must contain finite nonnegative
+physical values and share the documented celestial orientation.
+
 `PointSky` takes an immutable shared array of `PhotometricPoint` and an observer
 position. All positions use the caller's same physical length unit. Position.w
 is illuminance in lux at one such unit. Colour.xyz is linear RGB normalized to

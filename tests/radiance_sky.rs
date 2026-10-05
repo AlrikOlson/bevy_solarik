@@ -27,7 +27,10 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
  if i==2u {b=0.0;}
  if i==3u {b=3.14159265359;}
  let d=vec3(sin(b)*cos(a),cos(b),-sin(b)*sin(a));
- output[i]=vec4(sample_sky(field,d),1.0);
+ let sampled=sample_sky(field,d);
+ let colour=vec3(0.5,2.0,0.25);
+ output[i]=vec4(sampled,1.0);
+ if i>=16u { output[i]=vec4(radiance_transform(sampled,vec4(colour,1.0))+radiance_transform(sampled,vec4(1.0,1.0,1.0,0.0)),1.0); }
 }
 "#;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -152,12 +155,12 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
         rx.recv().unwrap().unwrap();
         let bytes = read.slice(..).get_mapped_range();
         let actual = bytemuck::cast_slice::<u8, [f32; 4]>(&bytes);
-        for i in 0..32 {
+        for (i, value) in actual.iter().enumerate().take(32) {
             // Poles have arbitrary longitude; test finite radiance and the correct latitude.
             if i == 2 || i == 3 {
-                assert!(actual[i].iter().all(|v| v.is_finite()));
+                assert!(value.iter().all(|v| v.is_finite()));
                 let y = if i == 2 { 0.002 } else { 0.0026 };
-                assert!((actual[i][1] - y).abs() < 1e-8);
+                assert!((value[1] - y).abs() < 1e-8);
                 continue;
             }
             let (a, b) = if i == 0 {
@@ -167,29 +170,40 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
             } else {
                 (i as f64 * 0.731, 0.1 + (i % 10) as f64 * 0.31)
             };
-            let x = a.rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU * 8.0 - 0.5;
-            let y = b / std::f64::consts::PI * 4.0 - 0.5;
+            let x = a.rem_euclid(core::f64::consts::TAU) / core::f64::consts::TAU * 8.0 - 0.5;
+            let y = b / core::f64::consts::PI * 4.0 - 0.5;
             let ix = x.floor() as i32;
             let iy = y.floor() as i32;
             let fx = x - x.floor();
             let fy = y - y.floor();
-            for c in 0..3 {
+            for (c, channel) in value.iter().enumerate().take(3) {
                 let t = |dx: i32, dy: i32| {
                     f64::from(
                         texels[((iy + dy).clamp(0, 3) * 8 + (ix + dx).rem_euclid(8)) as usize][c],
                     )
                 };
-                let expected = (1. - fy) * ((1. - fx) * t(0, 0) + fx * t(1, 0))
+                let mut expected = (1. - fy) * ((1. - fx) * t(0, 0) + fx * t(1, 0))
                     + fy * ((1. - fx) * t(0, 1) + fx * t(1, 1));
+                if i >= 16 {
+                    let red = |dx: i32, dy: i32| {
+                        f64::from(
+                            texels[((iy + dy).clamp(0, 3) * 8 + (ix + dx).rem_euclid(8)) as usize]
+                                [0],
+                        )
+                    };
+                    let scalar = (1. - fy) * ((1. - fx) * red(0, 0) + fx * red(1, 0))
+                        + fy * ((1. - fx) * red(0, 1) + fx * red(1, 1));
+                    expected += scalar * [0.5, 2.0, 0.25][c];
+                }
                 assert!(
-                    (f64::from(actual[i][c]) - expected).abs() < 2e-8,
+                    (f64::from(*channel) - expected).abs() < 2e-8,
                     "{i}/{c} {} {expected}",
-                    actual[i][c]
+                    channel
                 );
             }
         }
-        for c in 0..3 {
-            assert!((actual[0][c] - actual[1][c]).abs() < 1e-8);
+        for (a, b) in actual[0].iter().zip(actual[1].iter()).take(3) {
+            assert!((a - b).abs() < 1e-8);
         }
     });
 }

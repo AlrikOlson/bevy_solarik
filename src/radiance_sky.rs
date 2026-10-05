@@ -9,6 +9,7 @@ use bevy_core_pipeline::{
 };
 use bevy_ecs::prelude::*;
 use bevy_image::Image;
+use bevy_math::{Vec3, Vec4};
 use bevy_render::{
     RenderApp, RenderStartup,
     diagnostic::RecordDiagnostics,
@@ -18,7 +19,7 @@ use bevy_render::{
         binding_types::{texture_2d, texture_depth_2d, texture_storage_2d, uniform_buffer},
         *,
     },
-    renderer::{RenderContext, RenderDevice, ViewQuery},
+    renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery},
     texture::GpuImage,
     view::{Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
 };
@@ -29,6 +30,32 @@ use bevy_shader::load_shader_library;
 #[derive(Component, Clone, ExtractComponent)]
 #[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct RadianceSky(pub Handle<Image>);
+/// Additive measured fields. RGB layers use cd/m²; monochromatic scalar fields
+/// carry their conversion to linear RGB cd/m² per input unit in `transform.xyz`.
+#[derive(Clone)]
+pub struct RadianceLayer {
+    pub image: Handle<Image>,
+    transform: Vec4,
+}
+impl RadianceLayer {
+    pub fn rgb(image: Handle<Image>) -> Self {
+        Self {
+            image,
+            transform: Vec4::new(1., 1., 1., 0.),
+        }
+    }
+    pub fn scalar(image: Handle<Image>, rgb_per_unit: Vec3) -> Self {
+        assert!(rgb_per_unit.is_finite() && rgb_per_unit.min_element() >= 0.);
+        Self {
+            image,
+            transform: rgb_per_unit.extend(1.),
+        }
+    }
+}
+/// Independent layers add to `RadianceSky`, if both components are present.
+#[derive(Component, Clone, ExtractComponent)]
+#[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
+pub struct RadianceSkyLayers(pub Vec<RadianceLayer>);
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RadianceBackground;
 pub struct RadianceSkyPlugin;
@@ -42,6 +69,7 @@ impl Plugin for RadianceSkyPlugin {
         load_shader_library!(app, "radiance_sky_sample.wgsl");
         embedded_asset!(app, "radiance_sky.wgsl");
         app.add_plugins(ExtractComponentPlugin::<RadianceSky>::default());
+        app.add_plugins(ExtractComponentPlugin::<RadianceSkyLayers>::default());
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.add_systems(RenderStartup, initialize).add_systems(
                 Core3d,
@@ -64,6 +92,7 @@ fn initialize(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pipel
                 texture_depth_2d(),
                 texture_storage_2d(TextureFormat::Rgba16Float, StorageTextureAccess::ReadWrite),
                 texture_2d(TextureSampleType::Float { filterable: false }),
+                uniform_buffer::<Vec4>(false),
             ),
         ),
     );
@@ -77,7 +106,8 @@ fn initialize(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pipel
 }
 fn compose(
     view: ViewQuery<(
-        &RadianceSky,
+        Option<&RadianceSky>,
+        Option<&RadianceSkyLayers>,
         &ViewTarget,
         &ViewPrepassTextures,
         &ViewUniformOffset,
@@ -85,47 +115,59 @@ fn compose(
     gpu: Option<Res<Gpu>>,
     cache: Res<PipelineCache>,
     device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
     uniforms: Res<ViewUniforms>,
     images: Res<RenderAssets<GpuImage>>,
     mut ctx: RenderContext,
 ) {
-    let (sky, target, prepass, offset) = view.into_inner();
+    let (sky, layers, target, prepass, offset) = view.into_inner();
     let Some(gpu) = gpu else {
         return;
     };
-    let (Some(pipeline), Some(depth), Some(view_binding), Some(image)) = (
+    let (Some(pipeline), Some(depth), Some(view_binding)) = (
         cache.get_compute_pipeline(gpu.pipeline),
         prepass.depth_view(),
         uniforms.uniforms.binding(),
-        images.get(&sky.0),
     ) else {
         return;
     };
-    let group = device.create_bind_group(
-        "radiance_sky",
-        &cache.get_bind_group_layout(&gpu.layout),
-        &BindGroupEntries::sequential((
-            view_binding,
-            depth,
-            target.main_texture_view(),
-            &image.texture_view,
-        )),
-    );
-    let diagnostics = ctx.diagnostic_recorder();
-    let diagnostics = diagnostics.as_deref();
-    let mut pass = ctx
-        .command_encoder()
-        .begin_compute_pass(&ComputePassDescriptor {
-            label: Some("radiance_sky"),
-            ..Default::default()
-        });
-    let span = diagnostics.time_span(&mut pass, "radiance_sky");
-    pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, &group, &[offset.offset]);
-    pass.dispatch_workgroups(
-        prepass.size.width.div_ceil(8),
-        prepass.size.height.div_ceil(8),
-        1,
-    );
-    span.end(&mut pass);
+    let base = sky.map(|s| RadianceLayer::rgb(s.0.clone()));
+    for layer in base
+        .iter()
+        .chain(layers.into_iter().flat_map(|l| l.0.iter()))
+    {
+        let Some(image) = images.get(&layer.image) else {
+            continue;
+        };
+        let mut transform = UniformBuffer::from(layer.transform);
+        transform.write_buffer(&device, &queue);
+        let group = device.create_bind_group(
+            "radiance_sky",
+            &cache.get_bind_group_layout(&gpu.layout),
+            &BindGroupEntries::sequential((
+                view_binding.clone(),
+                depth,
+                target.main_texture_view(),
+                &image.texture_view,
+                transform.binding().unwrap(),
+            )),
+        );
+        let diagnostics = ctx.diagnostic_recorder();
+        let diagnostics = diagnostics.as_deref();
+        let mut pass = ctx
+            .command_encoder()
+            .begin_compute_pass(&ComputePassDescriptor {
+                label: Some("radiance_sky"),
+                ..Default::default()
+            });
+        let span = diagnostics.time_span(&mut pass, "radiance_sky");
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &group, &[offset.offset]);
+        pass.dispatch_workgroups(
+            prepass.size.width.div_ceil(8),
+            prepass.size.height.div_ceil(8),
+            1,
+        );
+        span.end(&mut pass);
+    }
 }

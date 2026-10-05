@@ -1,4 +1,7 @@
 #define_import_path bevy_solarik::radiance_sky_sample
+fn radiance_transform(sample:vec3<f32>,layer:vec4<f32>)->vec3<f32> {
+ return select(sample,sample.rrr,layer.w>0.5)*layer.xyz;
+}
 // Manual bilinear interpolation: RGBA32Float need not support hardware filtering.
 fn sky_uv(direction:vec3<f32>)->vec2<f32> {
  return vec2(fract(atan2(-direction.z,direction.x)/6.28318530718+1.0),acos(clamp(direction.y,-1.0,1.0))/3.14159265359);
