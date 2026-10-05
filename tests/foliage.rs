@@ -34,6 +34,12 @@ fn foliage_gpu() {
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
+        let gaussian = include_str!("../src/gaussian_math.wgsl")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let production = format!("{gaussian}\n{production}");
         let source = format!(
             "{production}\n{math}\n{}",
             include_str!("foliage_fixture.wgsl")

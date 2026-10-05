@@ -1,3 +1,4 @@
+#import bevy_solarik::gaussian_math::gaussian_gbuffer
 #import bevy_solarik::detail_sampling::{DetailCoordinates, sample_surface_detail, detail_normal}
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -18,9 +19,16 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var cover_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var coverage1: texture_2d<f32>;
 
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var<uniform> gaussian_parameters: vec4<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(108) var gaussian_mask: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(109) var gaussian_sampler: sampler;
+
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOutput {
     var pbr = pbr_input_from_standard_material(in, front);
+    let weight = gaussian_parameters.z*textureSample(gaussian_mask, gaussian_sampler, in.uv).a;
+    pbr.material.reflectance = mix(pbr.material.reflectance, vec3(gaussian_parameters.x), weight);
+    pbr.material.perceptual_roughness = mix(pbr.material.perceptual_roughness, gaussian_parameters.y, weight);
     let local_from_world = get_local_from_world(in.instance_index);
     let world_from_local = get_world_from_local(in.instance_index);
     let p = (local_from_world * in.world_position).xyz;
@@ -32,10 +40,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) front: bool) -> FragmentOut
         textureSample(coverage1, cover_sampler, in.uv));
     pbr.material.base_color = alpha_discard(pbr.material, pbr.material.base_color);
     pbr.material.base_color = vec4f(clamp(pbr.material.base_color.rgb * detail.colour, vec3f(0.0), vec3f(1.0)), pbr.material.base_color.a);
-    pbr.material.perceptual_roughness = clamp(pbr.material.perceptual_roughness * detail.roughness, 0.02, 1.0);
+    pbr.material.perceptual_roughness = clamp(pbr.material.perceptual_roughness * mix(detail.roughness, 1.0, weight), 0.02, 1.0);
     pbr.N = normalize((world_from_local * vec4f(detail_normal(n, detail.gradient), 0.0)).xyz);
 #ifdef PREPASS_PIPELINE
-    return deferred_output(in, pbr);
+    var out = deferred_output(in, pbr);
+    out.deferred = gaussian_gbuffer(out.deferred, weight);
+    return out;
 #else
     var out: FragmentOutput;
     out.color = main_pass_post_lighting_processing(pbr, apply_pbr_lighting(pbr));

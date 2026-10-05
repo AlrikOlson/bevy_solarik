@@ -3,7 +3,7 @@
 const PI: f32 = 3.141592653589793;
 const MIRROR_ROUGHNESS_THRESHOLD: f32 = 0.001;
 const GRAZING: f32 = 0.02;
-struct ResolvedMaterial { base_color: vec3<f32>, emissive: vec3<f32>, reflectance: f32, perceptual_roughness: f32, roughness: f32, metallic: f32, diffuse_transmission: f32 }
+struct ResolvedMaterial { base_color: vec3<f32>, emissive: vec3<f32>, reflectance: f32, perceptual_roughness: f32, roughness: f32, metallic: f32, diffuse_transmission: f32, gaussian_weight: f32 }
 @group(0) @binding(0) var<storage, read_write> output: array<vec4<f32>>;
 fn luminance(v: vec3<f32>) -> f32 { return dot(v, vec3(0.2126, 0.7152, 0.0722)); }
 fn calculate_F0(c:vec3<f32>, m:f32, r:vec3<f32>)->vec3<f32>{return mix(0.16*r*r,c,m);}
@@ -40,13 +40,13 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
     let wo=vec3(0.0,0.0,1.0);
     let n=sample_sphere(&rng);
     let wi=sample_sphere(&rng);
-    let m=ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(0.0),0.5,1.0,1.0,0.0,0.0);
+    let m=ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(0.0),0.5,1.0,1.0,0.0,0.0,0.0);
     let cosine=dot(n,wo);
     let mirrored=select(n,n-2.0*cosine*wo,cosine<0.0);
     let s=evaluate_and_sample_brdf(wo,n,m,&rng);
     let up=vec3(0.0,0.0,1.0);
     let grazing=vec3(sqrt(1.0-GRAZING*GRAZING),0.0,GRAZING);
-    let smooth_material=ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(0.0),0.5,0.0,0.0,0.0,0.0);
+    let smooth_material=ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(0.0),0.5,0.0,0.0,0.0,0.0,0.0);
     output[id.x*4u+3u]=vec4(evaluate_diffuse_brdf(grazing,up,up,m).g,evaluate_diffuse_brdf(grazing,up,up,smooth_material).g,0.0,0.0);
     output[id.x*4u]=vec4(evaluate_diffuse_brdf(wo,wi,n,m),evaluate_brdf_pdf(wo,wi,n,m));
     output[id.x*4u+1u]=vec4(evaluate_diffuse_brdf(wo,wi,mirrored,m),cosine);

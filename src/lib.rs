@@ -9,6 +9,8 @@
 extern crate alloc;
 
 pub mod atmosphere;
+pub mod depth_probe;
+pub mod gaussian;
 pub mod pathtracer;
 pub mod realtime;
 pub mod scene;

@@ -12,7 +12,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
 #import bevy_solarik::presample_light_tiles::unpack_resolved_light_sample
 #import bevy_solarik::sampling::{LightSample, ResolvedLightSample, NULL_LIGHT_ID, calculate_resolved_light_contribution, resolve_and_calculate_light_contribution, resolve_light_sample, trace_light_transmission, balance_heuristic}
-#import bevy_solarik::scene_bindings::{light_sources, previous_frame_light_id_translations, LIGHT_NOT_PRESENT_THIS_FRAME, RAY_T_MIN}
+#import bevy_solarik::scene_bindings::{light_sources, previous_frame_light_id_translations, LIGHT_NOT_PRESENT_THIS_FRAME, RAY_T_MIN, offset_surface_ray}
 #import bevy_solarik::specular_gi::SPECULAR_GI_FOR_DI_ROUGHNESS_THRESHOLD
 #import bevy_solarik::realtime_bindings::{view_output, light_tile_samples, light_tile_resolved_samples, di_reservoirs_a, di_reservoirs_b, gbuffer, depth_buffer, motion_vectors, previous_gbuffer, previous_depth_buffer, view, previous_view, constants, ResolvedLightSamplePacked}
 
@@ -84,7 +84,7 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 fn shade_di_reservoir(result: ReservoirMergeResult, world_position: vec3<f32>, world_normal: vec3<f32>) -> vec3<f32> {
     if !reservoir_valid(result.merged_reservoir) { return vec3(0.0); }
-    let transmission = trace_light_transmission(world_position + world_normal * RAY_T_MIN,
+    let transmission = trace_light_transmission(offset_surface_ray(world_position, world_normal),
         result.selected_light_world_position);
     return result.selected_sample_radiance * result.merged_reservoir.unbiased_contribution_weight * transmission.rgb;
 }

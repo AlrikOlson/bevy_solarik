@@ -1,6 +1,7 @@
 enable wgpu_ray_query;
 
 #define_import_path bevy_solarik::brdf
+#import bevy_solarik::gaussian_math::{gaussian_specular, dielectric_ior, dielectric_fresnel}
 
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
 #import bevy_pbr::lighting::{D_GGX, V_SmithGGXCorrelated, specular_multiscatter}
@@ -100,9 +101,14 @@ fn evaluate_diffuse_brdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32>
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
     // Light the specular layer reflects on the way in or out never reaches
     // the diffuse base.
-    let layering = (1.0 - specular_albedo(F0, abs(NdotL), material.perceptual_roughness))
+    var layering = (1.0 - specular_albedo(F0, abs(NdotL), material.perceptual_roughness))
         * (1.0 - specular_albedo(F0, NdotV, material.perceptual_roughness));
 
+    if material.gaussian_weight > 0.0 {
+        let ior = dielectric_ior(material.reflectance);
+        let transmission = (1.0-dielectric_fresnel(abs(NdotL),ior))*(1.0-dielectric_fresnel(NdotV,ior));
+        layering = mix(layering, vec3(transmission), material.gaussian_weight);
+    }
     let side_weight = select(1.0 - material.diffuse_transmission, material.diffuse_transmission, NdotL < 0.0);
     return diffuse_color * layering * abs(NdotL) * side_weight;
 }
@@ -131,7 +137,10 @@ fn evaluate_specular_brdf(wo: vec3<f32>, wi: vec3<f32>, shading_normal: vec3<f32
     let D = D_GGX(material.roughness, NdotH);
     let Vs = V_SmithGGXCorrelated(material.roughness, NdotV, NdotL);
     let F_ab = F_AB(material.perceptual_roughness, NdotV);
-    return specular_multiscatter(D, Vs, F, F0, F_ab, 1.0) * NdotL;
+    let ggx = specular_multiscatter(D, Vs, F, F0, F_ab, 1.0) * NdotL;
+    if material.gaussian_weight <= 0.0 { return ggx; }
+    let gaussian = gaussian_specular(material.roughness, dielectric_ior(material.reflectance), NdotV, NdotL, NdotH, LdotH);
+    return mix(ggx, vec3(gaussian), material.gaussian_weight);
 }
 
 fn fresnel(f0: vec3<f32>, LdotH: f32) -> vec3<f32> {

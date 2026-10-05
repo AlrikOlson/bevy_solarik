@@ -41,6 +41,7 @@ impl Plugin for RaytracingScenePlugin {
         if !app.is_plugin_added::<collimated::CollimatedEmissionPlugin>() {
             app.add_plugins(collimated::CollimatedEmissionPlugin);
         }
+        app.add_plugins(crate::gaussian::GaussianDielectricPlugin);
         load_shader_library!(app, "brdf.wgsl");
         load_shader_library!(app, "light_medium.wgsl");
         load_shader_library!(app, "thin_glass.wgsl");

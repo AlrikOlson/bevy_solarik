@@ -33,6 +33,12 @@ fn run_probe() -> Vec<[f32; 4]> {
             "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
             "return select(vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0)), vec2(0.5, 0.05), perceptual_roughness > 0.5);"
         );
+        let gaussian = include_str!("../src/gaussian_math.wgsl")
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let production = format!("{gaussian}\n{production}");
         let source = format!("{production}\n{}", include_str!("view_facing_fixture.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production BRDF, view-facing normals"),

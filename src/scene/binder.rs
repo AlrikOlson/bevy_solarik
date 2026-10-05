@@ -5,6 +5,7 @@ use super::{
     extract::StandardMaterialAssets,
     light_sampling::{build_alias_table, local_flux, luminance},
 };
+use crate::gaussian::GaussianRayMaterials;
 use crate::surface_detail::{DetailedRayMaterials, GpuSurfaceDetail};
 use bevy_asset::{AssetId, Handle};
 use bevy_color::{ColorToComponents, LinearRgba};
@@ -119,7 +120,11 @@ pub fn prepare_raytracing_scene_bindings(
     mesh_allocator: Res<MeshAllocator>,
     mut blas_manager: ResMut<BlasManager>,
     material_assets: Res<StandardMaterialAssets>,
-    (collimated, detailed): (Res<CollimatedMaterials>, Res<DetailedRayMaterials>),
+    (collimated, detailed, gaussian): (
+        Res<CollimatedMaterials>,
+        Res<DetailedRayMaterials>,
+        Res<GaussianRayMaterials>,
+    ),
     texture_assets: Res<RenderAssets<GpuImage>>,
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
@@ -234,6 +239,14 @@ pub fn prepare_raytracing_scene_bindings(
             continue;
         };
 
+        let mut gaussian_parameters = Vec4::ZERO;
+        if let Some(extension) = gaussian.0.get(asset_id) {
+            let Some(mask) = process_texture(&Some(extension.mask.clone())) else {
+                continue;
+            };
+            gaussian_parameters = extension.parameters;
+            gaussian_parameters.w = mask as f32;
+        }
         let mut detail = GpuSurfaceDetail {
             textures: UVec4::splat(TEXTURE_MAP_NONE),
             ..Default::default()
@@ -280,6 +293,7 @@ pub fn prepare_raytracing_scene_bindings(
             flags: alpha.flags,
             base_color_alpha: LinearRgba::from(material.base_color).alpha,
             reflectance: material.reflectance,
+            gaussian: gaussian_parameters,
             emission_cone: collimated
                 .0
                 .get(asset_id)
@@ -685,6 +699,7 @@ struct GpuMaterial {
     base_color_alpha: f32,
     reflectance: f32,
     emission_cone: Vec4,
+    gaussian: Vec4,
 }
 
 /// `Material.flags` bits, mirrored in `raytracing_scene_bindings.wgsl`.
@@ -990,7 +1005,7 @@ mod tests {
             material.alpha_mode = mode;
             assert_eq!(material_alpha(&material).flags >> 16, 0);
         }
-        assert_eq!(GpuMaterial::min_size().get(), 80);
+        assert_eq!(GpuMaterial::min_size().get(), 96);
     }
 
     #[test]

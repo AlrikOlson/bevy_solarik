@@ -72,6 +72,11 @@ pub struct SurfaceDetail {
     pub coverage0: Handle<Image>,
     #[texture(106)]
     pub coverage1: Handle<Image>,
+    #[uniform(107)]
+    pub gaussian_parameters: Vec4,
+    #[texture(108)]
+    #[sampler(109)]
+    pub gaussian_mask: Option<Handle<Image>>,
 }
 
 impl MaterialExtension for SurfaceDetail {

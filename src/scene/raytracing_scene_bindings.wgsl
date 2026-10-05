@@ -60,6 +60,7 @@ struct Material {
     base_color_alpha: f32,
     reflectance: f32,
     emission_cone: vec4<f32>,
+    gaussian: vec4<f32>,
 }
 
 // Mirrored in binder.rs. Exactly one of OPAQUE / ALPHA_MASK / ALPHA_BLEND.
@@ -219,6 +220,17 @@ fn cloud_shadow(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
 const RAY_T_MIN = 0.001f;
 const RAY_T_MAX = 100000.0f;
 
+// Raster positions are reconstructed with f32 matrix products/division. A
+// fixed millimetre vanishes at planetary magnitudes. Eight f32 epsilons provide an allowance for
+// local reconstruction arithmetic with rigid camera-relative transforms;
+// this is a conservative numerical policy, not a general sheared-instance bound.
+// Only the visibility origin moves; the BRDF and physical surface do not.
+fn offset_surface_ray(position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let magnitude = max(max(abs(position.x), abs(position.y)), abs(position.z));
+    let distance = max(RAY_T_MIN, magnitude * 0.00000095367431640625);
+    return position + normal * distance;
+}
+
 // RAY_T_MAX retains the historical default for external shader compatibility.
 fn ray_max_distance() -> f32 { return sky_light.ray_max_distance; }
 
@@ -311,6 +323,7 @@ struct ResolvedMaterial {
     metallic: f32,
     diffuse_transmission: f32,
     emission_cone: vec4<f32>,
+    gaussian_weight: f32,
 }
 
 fn emitted_radiance(material: ResolvedMaterial, outgoing: vec3<f32>) -> vec3<f32> {
@@ -362,6 +375,12 @@ fn resolve_material(material: Material, uv: vec2<f32>) -> ResolvedMaterial {
         m.metallic *= metallic_roughness.b;
     }
 
+    m.gaussian_weight = 0.0;
+    if material.gaussian.z > 0.0 {
+        m.gaussian_weight = sample_texture_alpha(u32(material.gaussian.w), uv);
+        m.reflectance = mix(m.reflectance, material.gaussian.x, m.gaussian_weight);
+        m.perceptual_roughness = mix(m.perceptual_roughness, material.gaussian.y, m.gaussian_weight);
+    }
     m.roughness = m.perceptual_roughness * m.perceptual_roughness;
 
     return m;
@@ -459,7 +478,7 @@ fn resolve_triangle_data_full(instance_id: u32, triangle_id: u32, barycentrics: 
             textureSampleLevel(textures[detail.textures.x], samplers[detail.textures.x], uv, 0.0),
             textureSampleLevel(textures[detail.textures.y], samplers[detail.textures.y], uv, 0.0));
         resolved_material.base_color = clamp(resolved_material.base_color * sampled.colour, vec3f(0.0), vec3f(1.0));
-        resolved_material.perceptual_roughness = clamp(resolved_material.perceptual_roughness * sampled.roughness, 0.02, 1.0);
+        resolved_material.perceptual_roughness = clamp(resolved_material.perceptual_roughness * mix(sampled.roughness, 1.0, resolved_material.gaussian_weight), 0.02, 1.0);
         resolved_material.roughness = resolved_material.perceptual_roughness * resolved_material.perceptual_roughness;
         world_normal = normalize(rotation * detail_normal(n, sampled.gradient));
     }

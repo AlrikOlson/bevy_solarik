@@ -3,7 +3,7 @@
 // lobe; full Bevy shader composition is exercised by scene captures.
 const PI: f32 = 3.141592653589793;
 const MIRROR_ROUGHNESS_THRESHOLD: f32 = 0.001;
-struct ResolvedMaterial { base_color: vec3<f32>, emissive: vec3<f32>, reflectance: f32, perceptual_roughness: f32, roughness: f32, metallic: f32, diffuse_transmission: f32 }
+struct ResolvedMaterial { base_color: vec3<f32>, emissive: vec3<f32>, reflectance: f32, perceptual_roughness: f32, roughness: f32, metallic: f32, diffuse_transmission: f32, gaussian_weight: f32 }
 @group(0) @binding(0) var<storage> inputs: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> output: array<vec4<f32>>;
 @group(0) @binding(2) var brdf_dfg_lut: texture_2d<f32>;
@@ -30,7 +30,7 @@ fn sample_cosine_hemisphere(n:vec3<f32>,r:ptr<function,u32>)->vec3<f32>{
 fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
     var rng = id.x * 747796405u + 2891336453u;
     let n=vec3(0.0,0.0,1.0);
-    let m=ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(0.0),0.0,1.0,1.0,0.0,inputs[0].x);
+    let m=ResolvedMaterial(vec3(0.2,0.5,0.8),vec3(0.0),0.0,1.0,1.0,0.0,inputs[0].x,0.0);
     let s=evaluate_and_sample_brdf(n,n,m,&rng);
     let valid = foliage_depth_matches(vec3(0.0),vec3(0.0,0.0,0.001),n,n,10.0)
         && !foliage_depth_matches(vec3(0.0),vec3(0.0,0.0,0.02),n,n,10.0)
