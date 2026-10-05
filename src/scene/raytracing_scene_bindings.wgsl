@@ -3,6 +3,7 @@ enable wgpu_ray_query;
 #define_import_path bevy_solarik::scene_bindings
 
 #import bevy_solarik::collimated::collimated_weight
+#import bevy_solarik::detail_sampling::{DetailCoordinates, sample_surface_detail, detail_normal}
 #import bevy_solarik::light_medium::{LightMedium, medium_transmittance, cloud_transmission, MEDIUM_CLOUD_COLUMN}
 #import bevy_pbr::lighting::perceptualRoughnessToRoughness
 #import bevy_pbr::pbr_functions::calculate_tbn_mikktspace
@@ -156,6 +157,12 @@ const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 // cloud-top height as a fraction of the cloud layer, B extinction scale.
 @group(0) @binding(19) var weather_texture: texture_cube<f32>;
 @group(0) @binding(20) var weather_sampler: sampler;
+
+struct SurfaceDetailParameters {
+    coordinates: DetailCoordinates,
+    textures: vec4u,
+}
+@group(0) @binding(23) var<storage> surface_details: array<SurfaceDetailParameters>;
 
 // Radiance arriving from the sky along `direction` (world space, pointing
 // away from the surface), for a ray that left the scene. Black when the
@@ -438,6 +445,24 @@ fn resolve_triangle_data_full(instance_id: u32, triangle_id: u32, barycentrics: 
     let triangle_area = length(cross(triangle_edge0, triangle_edge1)) / 2.0;
 
     var resolved_material = resolve_material(material, uv);
+    let detail = surface_details[material_id];
+    if detail.textures.x != TEXTURE_MAP_NONE {
+        let rotation = mat3x3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
+        let p = mat3x3(vertices[0].position, vertices[1].position, vertices[2].position) * barycentrics;
+        let n = normalize(transpose(rotation) * world_normal);
+        // Rays evaluate the same continuous material at a path sample. Pixel
+        // jitter and Monte Carlo path accumulation integrate its footprint;
+        // unlike raster derivatives there is no deterministic ray-cone filter.
+        let sampled = sample_surface_detail(
+            detail.textures.z, detail.textures.w, detail.textures.z,
+            detail.coordinates, p, n, 0.0,
+            textureSampleLevel(textures[detail.textures.x], samplers[detail.textures.x], uv, 0.0),
+            textureSampleLevel(textures[detail.textures.y], samplers[detail.textures.y], uv, 0.0));
+        resolved_material.base_color = clamp(resolved_material.base_color * sampled.colour, vec3f(0.0), vec3f(1.0));
+        resolved_material.perceptual_roughness = clamp(resolved_material.perceptual_roughness * sampled.roughness, 0.02, 1.0);
+        resolved_material.roughness = resolved_material.perceptual_roughness * resolved_material.perceptual_roughness;
+        world_normal = normalize(rotation * detail_normal(n, sampled.gradient));
+    }
     // An exit aperture emits from the face toward its optical axis only.
     if material.emission_cone.w > 0.0 && dot(cross(triangle_edge0, triangle_edge1), material.emission_cone.xyz) <= 0.0 {
         resolved_material.emissive = vec3(0.0);

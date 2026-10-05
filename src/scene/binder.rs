@@ -5,6 +5,7 @@ use super::{
     extract::StandardMaterialAssets,
     light_sampling::{build_alias_table, local_flux, luminance},
 };
+use crate::surface_detail::{DetailedRayMaterials, GpuSurfaceDetail};
 use bevy_asset::{AssetId, Handle};
 use bevy_color::{ColorToComponents, LinearRgba};
 use bevy_ecs::{
@@ -14,7 +15,7 @@ use bevy_ecs::{
 };
 use bevy_image::Image;
 use bevy_material::AlphaMode;
-use bevy_math::{Mat4, Vec3, Vec4, ops::cos};
+use bevy_math::{Mat4, UVec4, Vec3, Vec4, ops::cos};
 use bevy_mesh::Mesh;
 use bevy_pbr::{
     DfgLut, ExtractedDirectionalLight, ExtractedPointLight, MeshMaterial3d,
@@ -42,6 +43,9 @@ use core::{
 
 const MAX_MESH_SLAB_COUNT: NonZeroU32 = NonZeroU32::new(500).unwrap();
 const MAX_TEXTURE_COUNT: NonZeroU32 = NonZeroU32::new(5_000).unwrap();
+// Shared scan atlases, not one texture per mesh. Keep sampler descriptors
+// bounded independently of the much larger per-material 2D texture table.
+const MAX_SCAN_ATLASES: NonZeroU32 = NonZeroU32::new(64).unwrap();
 
 const TEXTURE_MAP_NONE: u32 = u32::MAX;
 const LIGHT_NOT_PRESENT_THIS_FRAME: u32 = u32::MAX;
@@ -115,7 +119,7 @@ pub fn prepare_raytracing_scene_bindings(
     mesh_allocator: Res<MeshAllocator>,
     mut blas_manager: ResMut<BlasManager>,
     material_assets: Res<StandardMaterialAssets>,
-    collimated: Res<CollimatedMaterials>,
+    (collimated, detailed): (Res<CollimatedMaterials>, Res<DetailedRayMaterials>),
     texture_assets: Res<RenderAssets<GpuImage>>,
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
@@ -165,6 +169,9 @@ pub fn prepare_raytracing_scene_bindings(
     let mut textures = CachedBindingArray::new();
     let mut samplers = Vec::new();
     let mut materials = StorageBufferList::<GpuMaterial>::default();
+    let mut detail_parameters = StorageBufferList::<GpuSurfaceDetail>::default();
+    let mut scan_textures = CachedBindingArray::new();
+    let mut scan_samplers = Vec::new();
     let mut tlas = render_device
         .wgpu_device()
         .create_tlas(&CreateTlasDescriptor {
@@ -227,6 +234,37 @@ pub fn prepare_raytracing_scene_bindings(
             continue;
         };
 
+        let mut detail = GpuSurfaceDetail {
+            textures: UVec4::splat(TEXTURE_MAP_NONE),
+            ..Default::default()
+        };
+        if let Some(extension) = detailed.0.get(asset_id) {
+            let (Some(cover0), Some(cover1), Some(colour), Some(normal)) = (
+                process_texture(&Some(extension.coverage0.clone())),
+                process_texture(&Some(extension.coverage1.clone())),
+                texture_assets.get(&extension.colour),
+                texture_assets.get(&extension.detail),
+            ) else {
+                continue;
+            };
+            let mut scan_ids = [0; 2];
+            for (slot, (image, id)) in [
+                (colour, extension.colour.id()),
+                (normal, extension.detail.id()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (index, new) = scan_textures.push_if_absent(image.texture_view.deref(), id);
+                if new {
+                    scan_samplers.push(image.sampler.deref());
+                }
+                scan_ids[slot] = index;
+            }
+            detail.coordinates = extension.coordinates.clone();
+            detail.textures = UVec4::new(cover0, cover1, scan_ids[0], scan_ids[1]);
+        }
+        detail_parameters.get_mut().push(detail);
         let alpha = material_alpha(material);
         materials.get_mut().push(GpuMaterial {
             normal_map_texture_id,
@@ -435,6 +473,7 @@ pub fn prepare_raytracing_scene_bindings(
     }
 
     materials.write_buffer(&render_device, &render_queue);
+    detail_parameters.write_buffer(&render_device, &render_queue);
     transforms.write_buffer(&render_device, &render_queue);
     previous_frame_transforms.write_buffer(&render_device, &render_queue);
     geometry_ids.write_buffer(&render_device, &render_queue);
@@ -495,6 +534,12 @@ pub fn prepare_raytracing_scene_bindings(
     });
     sky_buffer.write_buffer(&render_device, &render_queue);
 
+    if scan_textures.is_empty() {
+        scan_textures
+            .vec
+            .push(fallback_texture.d2_array.texture_view.deref());
+        scan_samplers.push(fallback_texture.d2_array.sampler.deref());
+    }
     raytracing_scene_bindings.bind_group = Some(render_device.create_bind_group(
         "raytracing_scene_bind_group",
         &pipeline_cache.get_bind_group_layout(&raytracing_scene_bindings.bind_group_layout),
@@ -520,6 +565,9 @@ pub fn prepare_raytracing_scene_bindings(
             sky_buffer.binding().unwrap(),
             weather_view,
             weather_sampler,
+            scan_textures.as_slice(),
+            scan_samplers.as_slice(),
+            detail_parameters.binding().unwrap(),
         )),
     ));
 }
@@ -555,6 +603,10 @@ impl RaytracingSceneBindings {
                         storage_buffer_read_only::<GpuSkyLight>(false),
                         texture_cube(TextureSampleType::Float { filterable: true }),
                         sampler(SamplerBindingType::Filtering),
+                        texture_2d_array(TextureSampleType::Float { filterable: true })
+                            .count(MAX_SCAN_ATLASES),
+                        sampler(SamplerBindingType::Filtering).count(MAX_SCAN_ATLASES),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),

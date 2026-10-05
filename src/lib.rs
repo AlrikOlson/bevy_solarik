@@ -12,6 +12,7 @@ pub mod atmosphere;
 pub mod pathtracer;
 pub mod realtime;
 pub mod scene;
+pub mod surface_detail;
 
 /// The solarik prelude.
 ///

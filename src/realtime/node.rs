@@ -670,6 +670,7 @@ pub fn init_solari_lighting_pipelines(
             WORLD_CACHE_SIZE as u32,
         )];
         shader_defs.extend_from_slice(&extra_shader_defs);
+        shader_defs.push("BINDLESS_SURFACE_DETAIL".into());
 
         pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some(label.into()),

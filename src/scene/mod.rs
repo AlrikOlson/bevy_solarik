@@ -35,6 +35,9 @@ pub struct RaytracingScenePlugin;
 
 impl Plugin for RaytracingScenePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<crate::surface_detail::SurfaceDetailPlugin>() {
+            app.add_plugins(crate::surface_detail::SurfaceDetailPlugin);
+        }
         if !app.is_plugin_added::<collimated::CollimatedEmissionPlugin>() {
             app.add_plugins(collimated::CollimatedEmissionPlugin);
         }
