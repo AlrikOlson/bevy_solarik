@@ -39,15 +39,36 @@ struct OctaveSample {
 }
 
 fn detail_hash(p: vec2i, layer: u32) -> vec2f {
-    var h = bitcast<vec2u>(p) * vec2u(1597334677u, 3812015801u);
-    h = (h ^ h.yx ^ vec2u(layer * 2246822519u)) * 3266489917u;
-    h = h ^ (h >> vec2u(16u));
-    return vec2f(h >> vec2u(8u)) * (1.0 / 16777216.0);
+    // PCG3D: Jarzynski & Olano 2020, section 6.1. Sequential mixing
+    // matters: symmetric h ^ h.yx collapses both translation lanes.
+    var h = vec3u(bitcast<vec2u>(p), layer) * 1664525u + 1013904223u;
+    h.x += h.y * h.z; h.y += h.z * h.x; h.z += h.x * h.y;
+    h ^= h >> vec3u(16u);
+    h.x += h.y * h.z; h.y += h.z * h.x; h.z += h.x * h.y;
+    return vec2f(h.xy >> vec2u(8u)) * (1.0 / 16777216.0);
+}
+
+fn detail_rotate(p: vec2f, turn: u32) -> vec2f {
+    switch turn {
+        case 1u: { return vec2f(-p.y, p.x); }
+        case 2u: { return -p; }
+        case 3u: { return vec2f(p.y, -p.x); }
+        default: { return p; }
+    }
+}
+
+fn detail_patch_turn(cell: vec2i, layer: u32) -> u32 {
+    // Grass and forest-floor microstructure has no prescribed orientation.
+    // Keep bedded rock and the other directional scan layers unchanged.
+    if layer != 5u && layer != 6u { return 0u; }
+    return u32(detail_hash(cell, layer + 64u).x * 4.0);
 }
 
 // Three translated scan patches on a triangular lattice. Translations keep
 // the scan's measured length and slope; random placement is a stationary
 // microstructure approximation, not a simulation of erosion or deposition.
+// Vegetation patches additionally take quarter turns, with normals transformed
+// back by the inverse rotation. Integer turns preserve seamless repeat edges.
 // Squared barycentric weights make the patch derivative vanish on borders.
 fn detail_plane(
 #ifdef BINDLESS_SURFACE_DETAIL
@@ -71,14 +92,18 @@ fn detail_plane(
     var c = vec4f(0.0);
     var d = vec4f(0.0);
     for (var j = 0u; j < 3u; j++) {
-        let uv = f + detail_hash(cell + base + offsets[j], layer);
+        let lattice = cell + base + offsets[j];
+        let turn = detail_patch_turn(lattice, layer);
+        let uv = detail_rotate(f, turn) + detail_hash(lattice, layer);
 #ifdef BINDLESS_SURFACE_DETAIL
         c += weights[j] * textureSampleLevel(detail_textures[colours], detail_samplers[scan_sampler], uv, layer, lod);
-        d += weights[j] * textureSampleLevel(detail_textures[details], detail_samplers[scan_sampler], uv, layer, lod);
+        var detail = textureSampleLevel(detail_textures[details], detail_samplers[scan_sampler], uv, layer, lod);
 #else
         c += weights[j] * textureSampleLevel(colours, scan_sampler, uv, layer, lod);
-        d += weights[j] * textureSampleLevel(details, scan_sampler, uv, layer, lod);
+        var detail = textureSampleLevel(details, scan_sampler, uv, layer, lod);
 #endif
+        detail = vec4f(detail_rotate(detail.xy * 2.0 - 1.0, (4u-turn)%4u) * 0.5 + 0.5, detail.zw);
+        d += weights[j] * detail;
     }
     return array<vec4f, 2>(c, d);
 }
