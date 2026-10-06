@@ -71,6 +71,16 @@ but its reverse appearance agreement is 97.5023%, below the unchanged 98%
 acceptance requirement. This opt-in capability remains experimental; neither
 full foliage appearance nor production residency/wind is accepted here.
 
+Hardware visibility rasterization now rejects back-facing fragments before
+alpha testing and atomic depth writes, including its shadow variants. This
+matches the existing software rasterizer's winding rule. Material cull flags
+do not configure the shared visibility pipeline; without this rejection,
+explicit opposed plant surfaces can compete at equal depth and select an
+opposite material normal. Same-release native forest and grassland captures
+pass their unchanged 0.01 restored-view RGB bound at 0.002703 and 0.002606;
+standard rebase/camera-cut calibration also passes. These are bounded live
+placement checks, not full foliage streaming, wind or residency acceptance.
+
 The owning workspace's `cargo fmt --all` also formats the vendored Rust files
 with its toolchain's default layout. Additional Rust source differences from
 the archive are that formatter output; they are retained under the workspace's

@@ -60,7 +60,10 @@ fn vertex(@builtin(instance_index) instance_index: u32, @builtin(vertex_index) v
 }
 
 @fragment
-fn fragment(vertex_output: VertexOutput) {
+fn fragment(vertex_output: VertexOutput, @builtin(front_facing) front_facing: bool) {
+    // Match software visibility rasterization: opposed surfaces must not
+    // compete at identical depth and select the back-facing material normal.
+    if !front_facing { discard; }
     if !meshlet_cutout_visible(vertex_output.instance_id, vertex_output.uv) { discard; }
     let depth = bitcast<u32>(vertex_output.position.z);
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
