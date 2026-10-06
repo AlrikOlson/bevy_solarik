@@ -12,9 +12,10 @@
         get_meshlet_vertex_position,
         get_meshlet_vertex_normal,
         get_meshlet_vertex_uv,
+        get_meshlet_vertex_tangent,
     },
     mesh_view_bindings::view,
-    mesh_functions::mesh_position_local_to_world,
+    mesh_functions::{mesh_position_local_to_world, sign_determinant_model_3x3m},
     mesh_types::Mesh,
     view_transformations::{position_world_to_clip, frag_coord_to_ndc},
 }
@@ -158,7 +159,14 @@ fn resolve_vertex_output(frag_coord: vec4<f32>) -> VertexOutput {
     let ddx_uv = mat3x2(vertex_0.uv, vertex_1.uv, vertex_2.uv) * partial_derivatives.ddx;
     let ddy_uv = mat3x2(vertex_0.uv, vertex_1.uv, vertex_2.uv) * partial_derivatives.ddy;
 
-    let world_tangent = calculate_world_tangent(world_normal, ddx_world_position, ddy_world_position, ddx_uv, ddy_uv);
+    var world_tangent = calculate_world_tangent(world_normal, ddx_world_position, ddy_world_position, ddx_uv, ddy_uv);
+    if vertex_0.tangent.w != 0.0 {
+        // MikkTSpace transforms at vertices, then interpolates without fragment normalization.
+        let tangent_0 = tangent_local_to_world(vertex_0.tangent, world_from_local, instance_uniform.flags);
+        let tangent_1 = tangent_local_to_world(vertex_1.tangent, world_from_local, instance_uniform.flags);
+        let tangent_2 = tangent_local_to_world(vertex_2.tangent, world_from_local, instance_uniform.flags);
+        world_tangent = mat3x4(tangent_0, tangent_1, tangent_2) * partial_derivatives.barycentrics;
+    }
 
 #ifdef PREPASS_FRAGMENT
 #ifdef MOTION_VECTOR_PREPASS
@@ -194,6 +202,7 @@ struct MeshletVertex {
     position: vec3<f32>,
     normal: vec3<f32>,
     uv: vec2<f32>,
+    tangent: vec4<f32>,
 }
 
 fn load_vertex(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> MeshletVertex {
@@ -201,7 +210,16 @@ fn load_vertex(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> MeshletVertex
         get_meshlet_vertex_position(meshlet, vertex_id),
         get_meshlet_vertex_normal(meshlet, vertex_id),
         get_meshlet_vertex_uv(meshlet, vertex_id),
+        get_meshlet_vertex_tangent(meshlet, vertex_id),
     );
+}
+
+fn tangent_local_to_world(tangent: vec4<f32>, world_from_local: mat4x4<f32>, flags: u32) -> vec4<f32> {
+    var direction = tangent.xyz;
+    if any(direction != vec3<f32>(0.0)) {
+        direction = normalize(mat3x3(world_from_local[0].xyz, world_from_local[1].xyz, world_from_local[2].xyz) * direction);
+    }
+    return vec4(direction, tangent.w * sign_determinant_model_3x3m(flags));
 }
 
 fn normal_local_to_world(vertex_normal: vec3<f32>, instance_uniform: ptr<function, Mesh>) -> vec3<f32> {

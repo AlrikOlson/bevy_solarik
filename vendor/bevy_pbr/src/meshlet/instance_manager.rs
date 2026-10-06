@@ -1,3 +1,4 @@
+use super::{MeshletCutoutAtlas, MeshletVisibilityCutout, cutout::metadata};
 use super::{MeshletMesh, MeshletMesh3d, meshlet_mesh_manager::MeshletMeshManager};
 use crate::DUMMY_MESH_MATERIAL;
 use crate::{
@@ -13,7 +14,9 @@ use bevy_ecs::{
     resource::Resource,
     system::{Local, Query, Res, ResMut, SystemState},
 };
+use bevy_image::Image;
 use bevy_light::{NotShadowCaster, NotShadowReceiver};
+use bevy_math::Vec4;
 use bevy_platform::collections::{HashMap, HashSet};
 use bevy_render::{MainWorld, render_resource::StorageBuffer, sync_world::MainEntity};
 use bevy_transform::components::GlobalTransform;
@@ -38,6 +41,7 @@ pub struct InstanceManager {
     pub instance_material_ids: StorageBuffer<Vec<u32>>,
     /// Per-instance index to the root node of the instance's BVH.
     pub instance_bvh_root_nodes: StorageBuffer<Vec<u32>>,
+    pub instance_cutouts: StorageBuffer<Vec<Vec4>>,
     /// Per-view per-instance visibility bit. Used for [`RenderLayers`] and [`NotShadowCaster`] support.
     pub view_instance_visibility: EntityHashMap<StorageBuffer<Vec<u32>>>,
 
@@ -77,6 +81,7 @@ impl InstanceManager {
                 buffer
             },
             view_instance_visibility: EntityHashMap::default(),
+            instance_cutouts: StorageBuffer::default(),
 
             next_material_id: 0,
             material_id_lookup: HashMap::default(),
@@ -97,6 +102,7 @@ impl InstanceManager {
         render_material_bindings: &RenderMaterialBindings,
         not_shadow_receiver: bool,
         not_shadow_caster: bool,
+        cutout: Vec4,
     ) {
         // Build a MeshUniform for the instance
         let transform = transform.affine();
@@ -146,6 +152,7 @@ impl InstanceManager {
         self.instance_aabbs.get_mut().push(aabb);
         self.instance_material_ids.get_mut().push(0);
         self.instance_bvh_root_nodes.get_mut().push(root_bvh_node);
+        self.instance_cutouts.get_mut().push(cutout);
 
         self.scene_instance_count += 1;
         self.max_bvh_depth = self.max_bvh_depth.max(bvh_depth);
@@ -175,6 +182,7 @@ impl InstanceManager {
         self.instance_aabbs.get_mut().clear();
         self.instance_material_ids.get_mut().clear();
         self.instance_bvh_root_nodes.get_mut().clear();
+        self.instance_cutouts.get_mut().clear();
         self.view_instance_visibility
             .retain(|view_entity, _| entities.contains(*view_entity));
         self.view_instance_visibility
@@ -205,10 +213,13 @@ pub fn extract_meshlet_mesh_entities(
                     Option<&RenderLayers>,
                     Has<NotShadowReceiver>,
                     Has<NotShadowCaster>,
+                    Option<&MeshletVisibilityCutout>,
                 )>,
                 Res<AssetServer>,
                 ResMut<Assets<MeshletMesh>>,
                 MessageReader<AssetEvent<MeshletMesh>>,
+                Res<MeshletCutoutAtlas>,
+                Res<Assets<Image>>,
             )>,
         >,
     >,
@@ -219,7 +230,7 @@ pub fn extract_meshlet_mesh_entities(
         *system_state = Some(SystemState::new(&mut main_world));
     }
     let system_state = system_state.as_mut().unwrap();
-    let (instances_query, asset_server, mut assets, mut asset_events) =
+    let (instances_query, asset_server, mut assets, mut asset_events, atlas, images) =
         system_state.get_mut(&mut main_world).unwrap();
 
     // Reset per-frame data
@@ -242,8 +253,12 @@ pub fn extract_meshlet_mesh_entities(
         render_layers,
         not_shadow_receiver,
         not_shadow_caster,
+        cutout,
     ) in &instances_query
     {
+        let Some(cutout) = metadata(cutout, &atlas, &images) else {
+            continue;
+        };
         // Skip instances with an unloaded MeshletMesh asset
         // TODO: This is a semi-expensive check
         if asset_server.is_managed(meshlet_mesh.id())
@@ -269,6 +284,7 @@ pub fn extract_meshlet_mesh_entities(
             &render_material_bindings,
             not_shadow_receiver,
             not_shadow_caster,
+            cutout,
         );
     }
 }

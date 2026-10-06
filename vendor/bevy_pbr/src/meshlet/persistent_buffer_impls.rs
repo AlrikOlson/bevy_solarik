@@ -2,7 +2,7 @@ use crate::meshlet::asset::{BvhNode, MeshletCullData};
 
 use super::{asset::Meshlet, persistent_buffer::PersistentGpuBufferable};
 use alloc::sync::Arc;
-use bevy_math::Vec2;
+use bevy_math::{Vec2, Vec4};
 use bevy_render::render_resource::BufferAddress;
 use wgpu_types::WriteOnly;
 
@@ -138,6 +138,23 @@ impl PersistentGpuBufferable for Arc<[Vec2]> {
 
     fn size_in_bytes(&self) -> usize {
         self.len() * size_of::<Vec2>()
+    }
+
+    fn write_bytes_le(
+        &self,
+        _: Self::Metadata,
+        mut buffer_slice: WriteOnly<[u8]>,
+        _: BufferAddress,
+    ) {
+        buffer_slice.copy_from_slice(bytemuck::cast_slice(self));
+    }
+}
+
+impl PersistentGpuBufferable for Arc<[Vec4]> {
+    type Metadata = ();
+
+    fn size_in_bytes(&self) -> usize {
+        self.len() * size_of::<Vec4>()
     }
 
     fn write_bytes_le(

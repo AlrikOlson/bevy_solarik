@@ -201,6 +201,21 @@ var<immediate> constants: Constants;
 @group(0) @binding(7) var meshlet_visibility_buffer: texture_storage_2d<r32uint, atomic>;
 #endif
 @group(0) @binding(8) var<uniform> view: View;
+@group(0) @binding(9) var<storage, read> meshlet_vertex_uvs: array<vec2<f32>>;
+@group(0) @binding(10) var<storage, read> meshlet_instance_cutouts: array<vec4<f32>>;
+@group(0) @binding(11) var meshlet_cutout_atlas: texture_2d_array<f32>;
+@group(0) @binding(12) var meshlet_cutout_sampler: sampler;
+
+fn get_meshlet_vertex_uv(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> vec2<f32> {
+    return meshlet_vertex_uvs[(*meshlet).start_vertex_attribute_id + vertex_id];
+}
+
+fn meshlet_cutout_visible(instance_id: u32, uv: vec2<f32>) -> bool {
+    let cutout = meshlet_instance_cutouts[instance_id];
+    if cutout.x == -1.0 { return true; }
+    if cutout.x < 0.0 || u32(cutout.x) >= textureNumLayers(meshlet_cutout_atlas) { return false; }
+    return textureSampleLevel(meshlet_cutout_atlas, meshlet_cutout_sampler, uv, i32(cutout.x), 0.0).a >= cutout.y;
+}
 
 // TODO: Load only twice, instead of 3x in cases where you load 3 indices per thread?
 fn get_meshlet_vertex_id(index_id: u32) -> u32 {
@@ -254,6 +269,7 @@ fn get_meshlet_vertex_position(meshlet: ptr<function, Meshlet>, vertex_id: u32) 
 @group(2) @binding(6) var<storage, read> meshlet_vertex_uvs: array<vec2<f32>>; // Many per meshlet
 @group(2) @binding(7) var<storage, read> meshlet_instance_uniforms: array<Mesh>; // Per entity instance
 @group(2) @binding(8) var meshlet_scene_depth: texture_depth_2d;
+@group(2) @binding(9) var<storage, read> meshlet_vertex_tangents: array<vec4<f32>>;
 
 // TODO: Load only twice, instead of 3x in cases where you load 3 indices per thread?
 fn get_meshlet_vertex_id(index_id: u32) -> u32 {
@@ -299,6 +315,10 @@ fn get_meshlet_vertex_position(meshlet: ptr<function, Meshlet>, vertex_id: u32) 
 fn get_meshlet_vertex_normal(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> vec3<f32> {
     let packed_normal = meshlet_vertex_normals[(*meshlet).start_vertex_attribute_id + vertex_id];
     return octahedral_decode_signed(unpack2x16snorm(packed_normal));
+}
+
+fn get_meshlet_vertex_tangent(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> vec4<f32> {
+    return meshlet_vertex_tangents[(*meshlet).start_vertex_attribute_id + vertex_id];
 }
 
 fn get_meshlet_vertex_uv(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> vec2<f32> {

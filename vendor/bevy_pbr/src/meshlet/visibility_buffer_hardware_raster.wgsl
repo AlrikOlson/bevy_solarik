@@ -11,6 +11,8 @@
         get_meshlet_triangle_count,
         get_meshlet_vertex_id,
         get_meshlet_vertex_position,
+        get_meshlet_vertex_uv,
+        meshlet_cutout_visible,
     },
     mesh_functions::mesh_position_local_to_world,
 }
@@ -21,6 +23,8 @@ var<immediate> meshlet_raster_cluster_rightmost_slot: u32;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) @interpolate(flat) instance_id: u32,
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
     @location(0) @interpolate(flat) packed_ids: u32,
 #endif
@@ -47,6 +51,8 @@ fn vertex(@builtin(instance_index) instance_index: u32, @builtin(vertex_index) v
 
     return VertexOutput(
         clip_position,
+        get_meshlet_vertex_uv(&meshlet, vertex_id),
+        instanced_offset.instance_id,
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
         (cluster_id << 7u) | triangle_id,
 #endif
@@ -55,6 +61,7 @@ fn vertex(@builtin(instance_index) instance_index: u32, @builtin(vertex_index) v
 
 @fragment
 fn fragment(vertex_output: VertexOutput) {
+    if !meshlet_cutout_visible(vertex_output.instance_id, vertex_output.uv) { discard; }
     let depth = bitcast<u32>(vertex_output.position.z);
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
     let visibility = (u64(depth) << 32u) | u64(vertex_output.packed_ids);
@@ -67,6 +74,8 @@ fn fragment(vertex_output: VertexOutput) {
 fn dummy_vertex() -> VertexOutput {
     return VertexOutput(
         vec4(divide(0.0, 0.0)), // NaN vertex position
+        vec2(0.0),
+        0u,
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
         0u,
 #endif

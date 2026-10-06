@@ -3,7 +3,7 @@ use crate::meshlet::asset::{MeshletAabb, MeshletAabbErrorOffset, MeshletCullData
 use super::asset::{BvhNode, Meshlet, MeshletBoundingSphere, MeshletMesh};
 use alloc::borrow::Cow;
 use bevy_math::{
-    IVec3, Isometry3d, Vec2, Vec3, Vec3A, Vec3Swizzles,
+    IVec3, Isometry3d, Vec2, Vec3, Vec3A, Vec3Swizzles, Vec4,
     bounding::{Aabb3d, BoundingSphere, BoundingVolume},
     ops::log2,
 };
@@ -36,6 +36,9 @@ pub const MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR: u8 = 4;
 
 const CENTIMETERS_PER_METER: f32 = 100.0;
 
+#[path = "tangent_data.rs"]
+mod tangent_data;
+
 impl MeshletMesh {
     /// Process a [`Mesh`] to generate a [`MeshletMesh`].
     ///
@@ -67,6 +70,17 @@ impl MeshletMesh {
     pub fn from_mesh(
         mesh: &Mesh,
         vertex_position_quantization_factor: u8,
+    ) -> Result<Self, MeshToMeshletMeshConversionError> {
+        let tangents = tangent_data::source_tangents(mesh)?;
+        let mut geometry = mesh.clone();
+        geometry.remove_attribute(Mesh::ATTRIBUTE_TANGENT);
+        Self::from_geometry(&geometry, vertex_position_quantization_factor, tangents)
+    }
+
+    fn from_geometry(
+        mesh: &Mesh,
+        vertex_position_quantization_factor: u8,
+        source_tangents: Option<&[[f32; 4]]>,
     ) -> Result<Self, MeshToMeshletMeshConversionError> {
         let s = debug_span!("build meshlet mesh");
         let _e = s.enter();
@@ -210,8 +224,12 @@ impl MeshletMesh {
         let mut vertex_positions = BitVec::<u32, Lsb0>::new();
         let mut vertex_normals = Vec::new();
         let mut vertex_uvs = Vec::new();
+        let mut vertex_tangents = Vec::new();
         let mut bevy_meshlets = Vec::with_capacity(meshlets.len());
         for (i, meshlet) in meshlets.meshlets.iter().enumerate() {
+            vertex_tangents.extend(meshlets.get(i).vertices.iter().map(|id| {
+                source_tangents.map_or(Vec4::ZERO, |values| Vec4::from_array(values[*id as usize]))
+            }));
             build_and_compress_per_meshlet_vertex_data(
                 meshlet,
                 meshlets.get(i).vertices,
@@ -230,6 +248,7 @@ impl MeshletMesh {
             vertex_positions: vertex_positions.into_vec().into(),
             vertex_normals: vertex_normals.into(),
             vertex_uvs: vertex_uvs.into(),
+            vertex_tangents: vertex_tangents.into(),
             indices: meshlets.triangles.into(),
             bvh: bvh.into(),
             meshlets: bevy_meshlets.into(),
@@ -1151,6 +1170,10 @@ fn pack2x16snorm(v: Vec2) -> u32 {
 /// An error produced by [`MeshletMesh::from_mesh`].
 #[derive(Error, Debug)]
 pub enum MeshToMeshletMeshConversionError {
+    #[error(
+        "Mesh TANGENT must match vertex count with finite unit-or-zero xyz and handedness +/-1"
+    )]
+    InvalidVertexTangents,
     #[error("Mesh primitive topology is not TriangleList")]
     WrongMeshPrimitiveTopology,
     #[error("Mesh vertex attributes are not {{POSITION, NORMAL, UV_0}}: {0:?}")]

@@ -4,7 +4,7 @@ use bevy_asset::{
     io::{Reader, Writer},
     saver::{AssetSaver, SavedAsset},
 };
-use bevy_math::{Vec2, Vec3};
+use bevy_math::{Vec2, Vec3, Vec4};
 use bevy_reflect::TypePath;
 use bevy_render::render_resource::ShaderType;
 use bevy_tasks::block_on;
@@ -17,7 +17,7 @@ use thiserror::Error;
 const MESHLET_MESH_ASSET_MAGIC: u64 = 1717551717668;
 
 /// The current version of the [`MeshletMesh`] asset format.
-pub const MESHLET_MESH_ASSET_VERSION: u64 = 3;
+pub const MESHLET_MESH_ASSET_VERSION: u64 = 4;
 
 /// A mesh that has been pre-processed into multiple small clusters of triangles called meshlets.
 ///
@@ -28,8 +28,8 @@ pub const MESHLET_MESH_ASSET_VERSION: u64 = 3;
 /// There are restrictions on the [`Material`](`crate::Material`) functionality that can be used with this type of mesh.
 /// * Materials have no control over the vertex shader or vertex attributes.
 /// * Materials must be opaque. Transparent, alpha masked, and transmissive materials are not supported.
-/// * Do not use normal maps baked from higher-poly geometry. Use the high-poly geometry directly and skip the normal map.
-///   * If additional detail is needed, a smaller tiling normal map not baked from a mesh is ok.
+/// * Baked normal maps require authored vertex TANGENT data. Without it, the legacy derivative
+///   tangent reconstruction supports only suitable tiling detail normal maps.
 /// * Material shaders must not use builtin functions that automatically calculate derivatives <https://gpuweb.github.io/gpuweb/wgsl/#derivatives>.
 ///   * Performing manual arithmetic on texture coordinates (UVs) is forbidden. Use the chain-rule version of arithmetic functions instead (TODO: not yet implemented).
 /// * Limited control over [`bevy_render::render_resource::RenderPipelineDescriptor`] attributes.
@@ -45,6 +45,8 @@ pub struct MeshletMesh {
     pub(crate) vertex_normals: Arc<[u32]>,
     /// Uncompressed vertex texture coordinates for meshlet vertices.
     pub(crate) vertex_uvs: Arc<[Vec2]>,
+    /// Authored `MikkTSpace` tangents; zero values retain legacy derivative reconstruction.
+    pub(crate) vertex_tangents: Arc<[Vec4]>,
     /// Triangle indices for meshlets.
     pub(crate) indices: Arc<[u8]>,
     /// The BVH8 used for culling and LOD selection of the meshlets. The root is at index 0.
@@ -76,11 +78,19 @@ impl MeshletMesh {
         self.vertex_positions.len() * size_of::<u32>()
             + self.vertex_normals.len() * size_of::<u32>()
             + self.vertex_uvs.len() * size_of::<Vec2>()
+            + self.vertex_tangents.len() * size_of::<Vec4>()
             + self.indices.len() * size_of::<u8>()
             + self.bvh.len() * size_of::<BvhNode>()
             + self.meshlets.len() * size_of::<Meshlet>()
             + self.meshlet_cull_data.len() * size_of::<MeshletCullData>()
     }
+}
+
+pub(super) fn valid_authored_tangent(tangent: Vec4) -> bool {
+    let length = tangent.truncate().length_squared();
+    tangent.is_finite()
+        && matches!(tangent.w, -1.0 | 1.0)
+        && (length == 0.0 || (length - 1.0).abs() <= 0.001)
 }
 
 /// A single BVH8 node in the BVH used for culling and LOD selection of a [`MeshletMesh`].
@@ -204,6 +214,7 @@ impl AssetSaver for MeshletMeshSaver {
         write_slice(&asset.vertex_positions, &mut writer)?;
         write_slice(&asset.vertex_normals, &mut writer)?;
         write_slice(&asset.vertex_uvs, &mut writer)?;
+        write_slice(&asset.vertex_tangents, &mut writer)?;
         write_slice(&asset.indices, &mut writer)?;
         write_slice(&asset.bvh, &mut writer)?;
         write_slice(&asset.meshlets, &mut writer)?;
@@ -237,7 +248,7 @@ impl AssetLoader for MeshletMeshLoader {
 
         // Load and check asset version
         let version = async_read_u64(reader).await?;
-        if version != MESHLET_MESH_ASSET_VERSION {
+        if version != 3 && version != MESHLET_MESH_ASSET_VERSION {
             return Err(MeshletMeshSaveOrLoadError::WrongVersion { found: version });
         }
 
@@ -252,7 +263,8 @@ impl AssetLoader for MeshletMeshLoader {
         let reader = &mut FrameDecoder::new(AsyncReadSyncAdapter(reader));
         let vertex_positions = read_slice(reader)?;
         let vertex_normals = read_slice(reader)?;
-        let vertex_uvs = read_slice(reader)?;
+        let vertex_uvs: Arc<[Vec2]> = read_slice(reader)?;
+        let vertex_tangents = read_vertex_tangents(reader, version, vertex_uvs.len())?;
         let indices = read_slice(reader)?;
         let bvh = read_slice(reader)?;
         let meshlets = read_slice(reader)?;
@@ -262,6 +274,7 @@ impl AssetLoader for MeshletMeshLoader {
             vertex_positions,
             vertex_normals,
             vertex_uvs,
+            vertex_tangents,
             indices,
             bvh,
             meshlets,
@@ -278,6 +291,8 @@ impl AssetLoader for MeshletMeshLoader {
 
 #[derive(Error, Debug)]
 pub enum MeshletMeshSaveOrLoadError {
+    #[error("meshlet vertex tangent payload is invalid")]
+    InvalidVertexTangents,
     #[error("file was not a MeshletMesh asset")]
     WrongFileType,
     #[error("expected asset version {MESHLET_MESH_ASSET_VERSION} but found version {found}")]
@@ -319,6 +334,28 @@ fn read_slice<T: Pod>(reader: &mut dyn Read) -> Result<Arc<[T]>, std::io::Error>
     Ok(data)
 }
 
+fn read_vertex_tangents(
+    reader: &mut dyn Read,
+    version: u64,
+    count: usize,
+) -> Result<Arc<[Vec4]>, MeshletMeshSaveOrLoadError> {
+    if version == 3 {
+        return Ok(vec![Vec4::ZERO; count].into());
+    }
+    if read_u64(reader)? != count as u64 {
+        return Err(MeshletMeshSaveOrLoadError::InvalidVertexTangents);
+    }
+    let mut values: Arc<[Vec4]> = vec![Vec4::ZERO; count].into();
+    reader.read_exact(bytemuck::cast_slice_mut(Arc::get_mut(&mut values).unwrap()))?;
+    if values
+        .iter()
+        .any(|t| *t != Vec4::ZERO && !valid_authored_tangent(*t))
+    {
+        return Err(MeshletMeshSaveOrLoadError::InvalidVertexTangents);
+    }
+    Ok(values)
+}
+
 // TODO: Use async for everything and get rid of this adapter
 struct AsyncWriteSyncAdapter<'a>(&'a mut Writer);
 
@@ -340,3 +377,7 @@ impl Read for AsyncReadSyncAdapter<'_> {
         block_on(self.0.read(buf))
     }
 }
+
+#[cfg(test)]
+#[path = "tangent_asset_tests.rs"]
+mod tangent_asset_tests;

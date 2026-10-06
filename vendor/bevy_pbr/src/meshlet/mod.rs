@@ -1,6 +1,7 @@
 //! Render high-poly 3d meshes using an efficient GPU-driven method. See [`MeshletPlugin`] and [`MeshletMesh`] for details.
 
 mod asset;
+mod cutout;
 #[cfg(feature = "meshlet_processor")]
 mod from_mesh;
 mod instance_manager;
@@ -23,6 +24,7 @@ pub(crate) use self::{
 pub use self::asset::{
     MESHLET_MESH_ASSET_VERSION, MeshletMesh, MeshletMeshLoader, MeshletMeshSaver,
 };
+pub use self::cutout::{MeshletCutoutAtlas, MeshletVisibilityCutout};
 #[cfg(feature = "meshlet_processor")]
 pub use self::from_mesh::{
     MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR, MeshToMeshletMeshConversionError,
@@ -68,6 +70,7 @@ use bevy_ecs::{
 use bevy_reflect::{Reflect, std_traits::ReflectDefault};
 use bevy_render::{
     ExtractSchedule, Render, RenderApp, RenderStartup, RenderSystems,
+    extract_resource::ExtractResourcePlugin,
     renderer::RenderDevice,
     settings::WgpuFeatures,
     view::{Msaa, prepare_view_targets},
@@ -153,7 +156,9 @@ impl Plugin for MeshletPlugin {
         embedded_asset!(app, "remap_1d_to_2d_dispatch.wgsl");
         embedded_asset!(app, "fill_counts.wgsl");
 
-        app.init_asset::<MeshletMesh>()
+        app.init_resource::<MeshletCutoutAtlas>()
+            .add_plugins(ExtractResourcePlugin::<MeshletCutoutAtlas>::default())
+            .init_asset::<MeshletMesh>()
             .register_asset_loader(MeshletMeshLoader);
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

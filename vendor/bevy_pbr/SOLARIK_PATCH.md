@@ -51,6 +51,26 @@ BVH nodes, including the root. Downstream bounded fixtures use it together
 with all-LOD meshlet counts for conservative admission before publishing
 instances. The accessor does not add GPU overflow handling or prove a budget.
 
+The opt-in `MeshletCutoutAtlas` and `MeshletVisibilityCutout` path rejects
+single-mip RGBA alpha before visibility-buffer atomic writes in both hardware
+and software rasterizers, including shadow views. Hardware interpolates UVs
+perspectively; software interpolates UV/w and 1/w. UV transforms must be baked.
+The atlas is bounded to 64 layers, 4096 pixels per dimension and 256 MiB.
+Invalid or unloaded CPU inputs suppress cutout instances; missing/invalid GPU
+atlases suppress their pixels. Opaque instances retain their existing path.
+Raster material shading remains opaque, so callers must supply corresponding
+alpha-tested ray and ordinary control materials independently. This does not
+enable arbitrary Bevy MASK materials, mip chains, transmission or production
+streaming. Native hardware/software/shadow acceptance is still required.
+
+Meshlet asset format v4 stores authored MikkTSpace tangents through all LODs
+and GPU resolve. The loader also accepts v3 with the legacy zero-tangent
+fallback; malformed v4 tangent counts, values and handedness are rejected.
+CPU checks, tests and lint pass. The original-alpha grass native probe runs,
+but its reverse appearance agreement is 97.5023%, below the unchanged 98%
+acceptance requirement. This opt-in capability remains experimental; neither
+full foliage appearance nor production residency/wind is accepted here.
+
 The owning workspace's `cargo fmt --all` also formats the vendored Rust files
 with its toolchain's default layout. Additional Rust source differences from
 the archive are that formatter output; they are retained under the workspace's

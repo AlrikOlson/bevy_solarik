@@ -1,3 +1,4 @@
+use super::{MeshletCutoutAtlas, cutout::valid_atlas};
 use super::{instance_manager::InstanceManager, meshlet_mesh_manager::MeshletMeshManager};
 use crate::ShadowView;
 use bevy_camera::{Camera3d, visibility::RenderLayers};
@@ -14,6 +15,10 @@ use bevy_ecs::{
 };
 use bevy_image::ToExtents;
 use bevy_math::{UVec2, Vec4Swizzles};
+use bevy_render::{
+    render_asset::RenderAssets,
+    texture::{FallbackImage, GpuImage},
+};
 use bevy_render::{
     render_resource::*,
     renderer::{RenderDevice, RenderQueue},
@@ -344,6 +349,10 @@ impl ResourceManager {
                         storage_buffer_read_only_sized(false, None),
                         texture_storage_2d(TextureFormat::R64Uint, StorageTextureAccess::Atomic),
                         uniform_buffer::<ViewUniform>(true),
+                        storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
+                        texture_2d_array(TextureSampleType::Float { filterable: true }),
+                        sampler(SamplerBindingType::Filtering),
                     ),
                 ),
             ),
@@ -361,6 +370,10 @@ impl ResourceManager {
                         storage_buffer_read_only_sized(false, None),
                         texture_storage_2d(TextureFormat::R32Uint, StorageTextureAccess::Atomic),
                         uniform_buffer::<ViewUniform>(true),
+                        storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
+                        texture_2d_array(TextureSampleType::Float { filterable: true }),
+                        sampler(SamplerBindingType::Filtering),
                     ),
                 ),
             ),
@@ -403,6 +416,7 @@ impl ResourceManager {
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
                         texture_depth_2d(),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -519,12 +533,28 @@ pub fn prepare_meshlet_per_frame_resources(
     render_queue: Res<RenderQueue>,
     render_device: Res<RenderDevice>,
     mut commands: Commands,
+    cutout_atlas: Res<MeshletCutoutAtlas>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
 ) {
     if instance_manager.scene_instance_count == 0 {
         return;
     }
 
     let instance_manager = instance_manager.as_mut();
+    if gpu_images
+        .get(&cutout_atlas.0)
+        .filter(|image| gpu_cutout_ready(image))
+        .is_none()
+    {
+        for cutout in instance_manager.instance_cutouts.get_mut() {
+            if cutout.x >= 0.0 {
+                cutout.x = -2.0;
+            }
+        }
+    }
+    instance_manager
+        .instance_cutouts
+        .write_buffer(&render_device, &render_queue);
 
     // TODO: Move this and the submit to a separate system and remove pub from the fields
     instance_manager
@@ -803,6 +833,9 @@ pub fn prepare_meshlet_view_bind_groups(
     render_device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
     mut commands: Commands,
+    cutout_atlas: Res<MeshletCutoutAtlas>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
+    fallback_image: Res<FallbackImage>,
 ) {
     let (Some(view_uniforms), Some(previous_view_uniforms)) = (
         view_uniforms.uniforms.binding(),
@@ -812,6 +845,10 @@ pub fn prepare_meshlet_view_bind_groups(
     };
 
     // TODO: Some of these bind groups can be reused across multiple views
+    let cutout_image = gpu_images
+        .get(&cutout_atlas.0)
+        .filter(|image| gpu_cutout_ready(image))
+        .unwrap_or(&fallback_image.d2_array);
     for (view_entity, view_resources, view_depth) in &views {
         let clear_visibility_buffer = render_device.create_bind_group(
             "meshlet_clear_visibility_buffer_bind_group",
@@ -1103,6 +1140,10 @@ pub fn prepare_meshlet_view_bind_groups(
                     .as_entire_binding(),
                 &view_resources.visibility_buffer.default_view,
                 view_uniforms.clone(),
+                meshlet_mesh_manager.vertex_uvs.binding(),
+                instance_manager.instance_cutouts.binding().unwrap(),
+                &cutout_image.texture_view,
+                &cutout_image.sampler,
             )),
         );
 
@@ -1151,6 +1192,7 @@ pub fn prepare_meshlet_view_bind_groups(
                     meshlet_mesh_manager.vertex_uvs.binding(),
                     instance_manager.instance_uniforms.binding().unwrap(),
                     scene_depth.view(),
+                    meshlet_mesh_manager.vertex_tangents.binding(),
                 )),
             )
         });
@@ -1234,4 +1276,14 @@ pub fn prepare_meshlet_view_bind_groups(
             fill_counts,
         });
     }
+}
+
+fn gpu_cutout_ready(image: &GpuImage) -> bool {
+    let desc = &image.texture_descriptor;
+    let Some(view) = &image.texture_view_descriptor else {
+        return false;
+    };
+    valid_atlas(desc.size, desc.format, desc.mip_level_count, view.dimension)
+        && view.base_array_layer == 0
+        && view.array_layer_count.is_none()
 }

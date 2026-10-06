@@ -13,6 +13,8 @@
         get_meshlet_triangle_count,
         get_meshlet_vertex_id,
         get_meshlet_vertex_position,
+        get_meshlet_vertex_uv,
+        meshlet_cutout_visible,
     },
     mesh_functions::mesh_position_local_to_world,
     view_transformations::ndc_to_uv,
@@ -24,6 +26,7 @@
 // TODO: Fixed-point math and top-left rule
 
 var<workgroup> viewport_vertices: array<vec3f, 256>;
+var<workgroup> perspective_uvs: array<vec3f, 256>;
 
 @compute
 @workgroup_size(128, 1, 1) // 128 threads per workgroup, 1-2 vertices per thread, 1 triangle per thread, 1 cluster per workgroup
@@ -62,6 +65,7 @@ fn rasterize_cluster(
 
             // Write vertex to workgroup shared memory
             viewport_vertices[vertex_id] = vec3(viewport_position_xy, ndc_position.z);
+            perspective_uvs[vertex_id] = vec3(get_meshlet_vertex_uv(&meshlet, vertex_id), 1.0) / clip_position.w;
         }
     }
     workgroupBarrier();
@@ -75,6 +79,9 @@ fn rasterize_cluster(
     let vertex_1 = viewport_vertices[vertex_ids[1]];
     let vertex_2 = viewport_vertices[vertex_ids[0]];
     let packed_ids = (cluster_id << 7u) | triangle_id;
+    let uv_0 = perspective_uvs[vertex_ids[2]];
+    let uv_1 = perspective_uvs[vertex_ids[1]];
+    let uv_2 = perspective_uvs[vertex_ids[0]];
 
     // Backface culling
     let triangle_double_area = edge_function(vertex_0.xy, vertex_1.xy, vertex_2.xy);
@@ -130,7 +137,7 @@ fn rasterize_cluster(
             for (var x = x0; x <= x1; x += 1.0) {
                 // Check if point at pixel is within triangle (TODO: this shouldn't be needed, but there's bugs without it)
                 if min3(w[0], w[1], w[2]) >= 0.0 {
-                    write_visibility_buffer_pixel(x, y, z, packed_ids);
+                    write_visibility_buffer_pixel(x, y, z, packed_ids, instanced_offset.instance_id, w, uv_0, uv_1, uv_2);
                 }
 
                 // Increment triangle equations along the X-axis
@@ -151,7 +158,7 @@ fn rasterize_cluster(
             for (var x = min_x; x <= max_x; x += 1.0) {
                 // Check if point at pixel is within triangle
                 if min3(w[0], w[1], w[2]) >= 0.0 {
-                    write_visibility_buffer_pixel(x, y, z, packed_ids);
+                    write_visibility_buffer_pixel(x, y, z, packed_ids, instanced_offset.instance_id, w, uv_0, uv_1, uv_2);
                 }
 
                 // Increment triangle equations along the X-axis
@@ -166,7 +173,9 @@ fn rasterize_cluster(
     }
 }
 
-fn write_visibility_buffer_pixel(x: f32, y: f32, z: f32, packed_ids: u32) {
+fn write_visibility_buffer_pixel(x: f32, y: f32, z: f32, packed_ids: u32, instance_id: u32, w: vec3f, uv_0: vec3f, uv_1: vec3f, uv_2: vec3f) {
+    let weighted_uv = w.x * uv_0 + w.y * uv_1 + w.z * uv_2;
+    if !meshlet_cutout_visible(instance_id, weighted_uv.xy / weighted_uv.z) { return; }
     let depth = bitcast<u32>(z);
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
     let visibility = (u64(depth) << 32u) | u64(packed_ids);
