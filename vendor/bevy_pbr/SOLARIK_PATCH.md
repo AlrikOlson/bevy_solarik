@@ -33,6 +33,19 @@ image average alone masked this defect. Acceptance requires at least 98% of
 ordinary red-box pixels to remain red in VG, with a valid control area of at
 least 1% of the image, in addition to the full-image and rebase comparisons.
 
+The processor's `from_mesh.rs` rounds signed positions to the nearest integer
+before fixed-point conversion. Upstream's addition of 0.5 followed by truncation
+shifted negative grid-aligned vertices one cell toward zero, diverging from
+shared ray geometry and exceeding the documented half-cell quantization error.
+Two tests decode the actual packed vertex bitstream and verify signed-grid
+identity and the half-cell bound. Processor-enabled owning gates cover this path.
+
+`asset.rs` exposes read-only `meshlet_count` and `storage_bytes` accessors for
+generated prototype measurements. They count all stored LODs and packed geometry
+and culling payloads; they do not estimate GPU allocation capacity or residency.
+These measurements distinguish payload growth from cluster slot pressure in
+downstream native fixtures without exposing mutable private buffers.
+
 The owning workspace's `cargo fmt --all` also formats the vendored Rust files
 with its toolchain's default layout. Additional Rust source differences from
 the archive are that formatter output; they are retained under the workspace's

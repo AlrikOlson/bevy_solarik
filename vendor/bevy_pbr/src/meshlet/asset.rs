@@ -60,6 +60,24 @@ pub struct MeshletMesh {
     pub(crate) bvh_depth: u32,
 }
 
+impl MeshletMesh {
+    /// Number of stored meshlets across all generated LODs.
+    pub fn meshlet_count(&self) -> usize {
+        self.meshlets.len()
+    }
+
+    /// Packed geometry and culling payload bytes, excluding GPU allocation capacity.
+    pub fn storage_bytes(&self) -> usize {
+        self.vertex_positions.len() * size_of::<u32>()
+            + self.vertex_normals.len() * size_of::<u32>()
+            + self.vertex_uvs.len() * size_of::<Vec2>()
+            + self.indices.len() * size_of::<u8>()
+            + self.bvh.len() * size_of::<BvhNode>()
+            + self.meshlets.len() * size_of::<Meshlet>()
+            + self.meshlet_cull_data.len() * size_of::<MeshletCullData>()
+    }
+}
+
 /// A single BVH8 node in the BVH used for culling and LOD selection of a [`MeshletMesh`].
 #[derive(Copy, Clone, Default, Pod, Zeroable)]
 #[repr(C)]

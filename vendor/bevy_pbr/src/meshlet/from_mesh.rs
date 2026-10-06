@@ -615,7 +615,7 @@ fn build_and_compress_per_meshlet_vertex_data(
         vertex_normals.push(pack2x16snorm(octahedral_encode(normal)));
 
         // Quantize position to a fixed-point IVec3
-        let quantized_position = (position * quantization_factor + 0.5).as_ivec3();
+        let quantized_position = (position * quantization_factor).round().as_ivec3();
         quantized_positions[i] = quantized_position;
 
         // Compute per X/Y/Z-channel quantized position min/max for this meshlet
@@ -661,6 +661,83 @@ fn build_and_compress_per_meshlet_vertex_data(
         min_vertex_position_channel_y: min_quantized_position_channels.y as f32,
         min_vertex_position_channel_z: min_quantized_position_channels.z as f32,
     });
+}
+
+#[cfg(test)]
+mod quantization_tests {
+    use super::*;
+
+    fn compressed_positions(source: &[[f32; 3]]) -> Vec<Vec3> {
+        let vertices: Vec<[f32; 8]> = source
+            .iter()
+            .map(|p| [p[0], p[1], p[2], 0.0, 1.0, 0.0, 0.0, 0.0])
+            .collect();
+        let ids: Vec<u32> = (0..source.len() as u32).collect();
+        let meshlet = meshopt_Meshlet {
+            vertex_offset: 0,
+            triangle_offset: 0,
+            vertex_count: source.len() as u32,
+            triangle_count: 1,
+        };
+        let mut positions = BitVec::<u32, Lsb0>::new();
+        let mut meshlets = Vec::new();
+        build_and_compress_per_meshlet_vertex_data(
+            &meshlet,
+            &ids,
+            bytemuck::cast_slice(&vertices),
+            32,
+            &mut positions,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut meshlets,
+            4,
+        );
+        decode_positions(&positions, &meshlets[0])
+    }
+
+    fn decode_positions(bits: &BitVec<u32, Lsb0>, meshlet: &Meshlet) -> Vec<Vec3> {
+        let widths = [
+            meshlet.bits_per_vertex_position_channel_x,
+            meshlet.bits_per_vertex_position_channel_y,
+            meshlet.bits_per_vertex_position_channel_z,
+        ];
+        let minimum = [
+            meshlet.min_vertex_position_channel_x,
+            meshlet.min_vertex_position_channel_y,
+            meshlet.min_vertex_position_channel_z,
+        ];
+        let mut cursor = meshlet.start_vertex_position_bit as usize;
+        (0..=meshlet.vertex_count_minus_one)
+            .map(|_| {
+                let mut point = [0.0; 3];
+                for channel in 0..3 {
+                    let width = widths[channel] as usize;
+                    let value = bits[cursor..cursor + width]
+                        .iter()
+                        .by_vals()
+                        .enumerate()
+                        .fold(0u32, |value, (bit, set)| value | (u32::from(set) << bit));
+                    cursor += width;
+                    point[channel] = (minimum[channel] + value as f32) / 1600.0;
+                }
+                Vec3::from_array(point)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn packed_signed_grid_vertices_match_shared_ray_coordinates() {
+        let source = [[-0.0025, 0.0, 0.01], [0.00125, -0.00125, 0.0], [0.0; 3]];
+        assert_eq!(compressed_positions(&source), source.map(Vec3::from_array));
+    }
+
+    #[test]
+    fn packed_signed_positions_stay_within_half_a_grid_cell() {
+        let source = [[-0.0028, -0.0008, 0.0011], [0.0017, 0.0, -0.0021], [0.0; 3]];
+        for (decoded, expected) in compressed_positions(&source).into_iter().zip(source) {
+            assert!((decoded - Vec3::from_array(expected)).abs().max_element() <= 0.0003126);
+        }
+    }
 }
 
 fn merge_spheres(a: BoundingSphere, b: BoundingSphere) -> BoundingSphere {
