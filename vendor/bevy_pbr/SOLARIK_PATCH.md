@@ -46,6 +46,11 @@ and culling payloads; they do not estimate GPU allocation capacity or residency.
 These measurements distinguish payload growth from cluster slot pressure in
 downstream native fixtures without exposing mutable private buffers.
 
+`MeshletMesh::bvh_node_count()` also exposes the immutable number of stored
+BVH nodes, including the root. Downstream bounded fixtures use it together
+with all-LOD meshlet counts for conservative admission before publishing
+instances. The accessor does not add GPU overflow handling or prove a budget.
+
 The owning workspace's `cargo fmt --all` also formats the vendored Rust files
 with its toolchain's default layout. Additional Rust source differences from
 the archive are that formatter output; they are retained under the workspace's

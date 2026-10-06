@@ -66,6 +66,11 @@ impl MeshletMesh {
         self.meshlets.len()
     }
 
+    /// Number of stored BVH nodes, including the root, across all generated LODs.
+    pub fn bvh_node_count(&self) -> usize {
+        self.bvh.len()
+    }
+
     /// Packed geometry and culling payload bytes, excluding GPU allocation capacity.
     pub fn storage_bytes(&self) -> usize {
         self.vertex_positions.len() * size_of::<u32>()
