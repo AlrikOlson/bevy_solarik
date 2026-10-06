@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "vendor/bevy_render"]
+members = [".", "vendor/bevy_render", "vendor/bevy_pbr"]
 resolver = "3"
 
 [package]
@@ -28,6 +28,7 @@ force_disable_dlss = ["bevy_anti_alias/force_disable_dlss"]
 
 [patch.crates-io]
 bevy_render = { path = "vendor/bevy_render" }
+bevy_pbr = { path = "vendor/bevy_pbr" }
 
 [dev-dependencies]
 wgpu = { version = "29", default-features = false, features = ["std", "vulkan", "wgsl"] }
