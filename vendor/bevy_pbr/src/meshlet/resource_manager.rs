@@ -216,6 +216,7 @@ impl ResourceManager {
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -238,6 +239,7 @@ impl ResourceManager {
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -943,6 +945,7 @@ pub fn prepare_meshlet_view_bind_groups(
                     .second_bvh_cull_dispatch_front
                     .as_entire_binding(),
                 view_resources.second_bvh_cull_queue.as_entire_binding(),
+                meshlet_mesh_manager.meshlet_cull_data.binding(),
             )),
         );
 
@@ -980,6 +983,7 @@ pub fn prepare_meshlet_view_bind_groups(
                     .second_bvh_cull_dispatch_front
                     .as_entire_binding(),
                 view_resources.second_bvh_cull_queue.as_entire_binding(),
+                meshlet_mesh_manager.meshlet_cull_data.binding(),
             )),
         );
 
@@ -1012,6 +1016,7 @@ pub fn prepare_meshlet_view_bind_groups(
                     .back_meshlet_cull_dispatch
                     .as_entire_binding(),
                 view_resources.meshlet_cull_queue.as_entire_binding(),
+                meshlet_mesh_manager.meshlet_cull_data.binding(),
             )),
         );
 
@@ -1044,6 +1049,7 @@ pub fn prepare_meshlet_view_bind_groups(
                     .back_meshlet_cull_dispatch
                     .as_entire_binding(),
                 view_resources.meshlet_cull_queue.as_entire_binding(),
+                meshlet_mesh_manager.meshlet_cull_data.binding(),
             )),
         );
 

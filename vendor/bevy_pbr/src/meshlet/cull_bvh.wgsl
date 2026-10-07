@@ -5,6 +5,7 @@
     get_aabb_child_offset,
     constants,
     meshlet_bvh_nodes,
+    meshlet_cull_data,
     meshlet_bvh_cull_count_read,
     meshlet_bvh_cull_count_write,
     meshlet_bvh_cull_dispatch,
@@ -65,14 +66,7 @@ fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
                 atomicAdd(&meshlet_second_pass_bvh_dispatch.x, 1u);
             }
         } else {
-            let base = atomicAdd(&meshlet_meshlet_cull_count_late, child_count);
-            let start = constants.rightmost_slot - base;
-            for (var i = start; i > start - child_count; i--) {
-                meshlet_meshlet_cull_queue[i] = value;
-                value.offset += 1u;
-            }
-            let req = (base + child_count + 127u) >> 7u;
-            atomicMax(&meshlet_meshlet_cull_dispatch_late.x, req);
+            queue_meshlets(value, child_count, true);
         }
 #endif
         return;
@@ -88,23 +82,38 @@ fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
         }
     } else {
 #ifdef MESHLET_FIRST_CULLING_PASS
-        let base = atomicAdd(&meshlet_meshlet_cull_count_early, child_count);
-        let end = base + child_count;
-        for (var i = base; i < end; i++) {
-            meshlet_meshlet_cull_queue[i] = value;
-            value.offset += 1u;
-        }
-        let req = (end + 127u) >> 7u;
-        atomicMax(&meshlet_meshlet_cull_dispatch_early.x, req);
+        queue_meshlets(value, child_count, false);
 #else
-        let base = atomicAdd(&meshlet_meshlet_cull_count_late, child_count);
-        let start = constants.rightmost_slot - base;
-        for (var i = start; i > start - child_count; i--) {
-            meshlet_meshlet_cull_queue[i] = value;
-            value.offset += 1u;
-        }
-        let req = (base + child_count + 127u) >> 7u;
-        atomicMax(&meshlet_meshlet_cull_dispatch_late.x, req);
+        queue_meshlets(value, child_count, true);
 #endif
+    }
+}
+
+// Apply the same own-error predicate as cull_clusters before reserving slots.
+// 255 denotes an internal node, so a leaf has at most 254 children.
+fn queue_meshlets(value: InstancedOffset, child_count: u32, late: bool) {
+    var selected: array<u32, 254>;
+    var count = 0u;
+    for (var child = 0u; child < child_count; child++) {
+        let offset = value.offset + child;
+        let data = meshlet_cull_data[offset];
+        var aabb = data.aabb;
+        if lod_error_is_imperceptible(data.lod_group_sphere, get_aabb_error(&aabb), value.instance_id) {
+            selected[count] = offset;
+            count += 1u;
+        }
+    }
+    if count == 0u { return; }
+    var base: u32;
+    if late {
+        base = atomicAdd(&meshlet_meshlet_cull_count_late, count);
+        atomicMax(&meshlet_meshlet_cull_dispatch_late.x, (base + count + 127u) >> 7u);
+    } else {
+        base = atomicAdd(&meshlet_meshlet_cull_count_early, count);
+        atomicMax(&meshlet_meshlet_cull_dispatch_early.x, (base + count + 127u) >> 7u);
+    }
+    for (var child = 0u; child < count; child++) {
+        let slot = select(base + child, constants.rightmost_slot - base - child, late);
+        meshlet_meshlet_cull_queue[slot] = InstancedOffset(value.instance_id, selected[child]);
     }
 }

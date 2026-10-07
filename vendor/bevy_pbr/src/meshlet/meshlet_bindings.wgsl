@@ -150,6 +150,9 @@ var<immediate> constants: Constants;
 @group(0) @binding(14) var<storage, read_write> meshlet_second_pass_bvh_count: atomic<u32>;
 @group(0) @binding(15) var<storage, read_write> meshlet_second_pass_bvh_dispatch: DispatchIndirectArgs;
 @group(0) @binding(16) var<storage, read_write> meshlet_second_pass_bvh_queue: array<InstancedOffset>;
+@group(0) @binding(17) var<storage, read> meshlet_cull_data: array<MeshletCullData>;
+#else
+@group(0) @binding(14) var<storage, read> meshlet_cull_data: array<MeshletCullData>;
 #endif
 #endif
 
