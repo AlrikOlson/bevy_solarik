@@ -13,7 +13,7 @@
 edition = "2024"
 name = "bevy_pbr"
 version = "0.19.1"
-build = false
+build = "build.rs"
 autolib = false
 autobins = false
 autoexamples = false
@@ -55,6 +55,7 @@ meshlet = [
 ]
 meshlet_processor = [
     "meshlet",
+    "dep:blake3",
     "dep:meshopt",
     "dep:metis",
     "dep:itertools",
@@ -156,6 +157,16 @@ version = "0.19.1"
 [dependencies.bitflags]
 version = "2.3"
 features = ["bytemuck"]
+
+[dependencies.blake3]
+version = "=1.8.7"
+optional = true
+
+[build-dependencies.blake3]
+version = "=1.8.7"
+
+[build-dependencies.cc]
+version = "=1.6.0"
 
 [dependencies.bitvec]
 version = "1"

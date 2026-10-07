@@ -571,7 +571,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetMaterialBindGroup<I> 
 pub struct RenderMaterialInstances {
     /// Maps from each entity in the main world to the
     /// [`RenderMaterialInstance`] associated with it.
-    pub instances: MainEntityHashMap<RenderMaterialInstance>,
+    pub instances: MaterialInstanceMap,
     /// A monotonically-increasing counter, which we use to sweep
     /// [`RenderMaterialInstances::instances`] when the entities and/or required
     /// components are removed.

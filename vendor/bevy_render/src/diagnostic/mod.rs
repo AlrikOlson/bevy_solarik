@@ -2,6 +2,13 @@
 //!
 //! For more info, see [`RenderDiagnosticsPlugin`].
 
+mod cpu_profile;
+mod span_stack;
+pub use cpu_profile::{
+    CpuProfileGuard, CpuProfileSample, profile_enabled, profile_scope, profile_value,
+    take_cpu_profile,
+};
+
 mod erased_render_asset_diagnostic_plugin;
 pub(crate) mod internal;
 mod mesh_allocator_diagnostic_plugin;

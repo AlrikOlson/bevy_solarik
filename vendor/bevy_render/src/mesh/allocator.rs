@@ -248,6 +248,12 @@ pub fn allocate_and_free_meshes(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
+    if extracted_meshes.extracted.is_empty()
+        && extracted_meshes.removed.is_empty()
+        && extracted_meshes.modified.is_empty()
+    {
+        return;
+    }
     // Process removed or modified meshes.
     mesh_allocator.free_meshes(&extracted_meshes);
 

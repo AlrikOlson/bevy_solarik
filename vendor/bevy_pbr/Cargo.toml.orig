@@ -2,6 +2,7 @@
 name = "bevy_pbr"
 version = "0.19.1"
 edition = "2024"
+build = "build.rs"
 description = "Adds PBR rendering to Bevy Engine"
 homepage = "https://bevy.org"
 repository = "https://github.com/bevyengine/bevy"
@@ -30,6 +31,7 @@ meshlet = ["dep:lz4_flex", "dep:range-alloc"]
 # Enables processing meshes into meshlet meshes
 meshlet_processor = [
   "meshlet",
+  "dep:blake3",
   "dep:meshopt",
   "dep:metis",
   "dep:itertools",
@@ -74,6 +76,7 @@ fixedbitset = "0.5"
 thiserror = { version = "2", default-features = false }
 derive_more = { version = "2", default-features = false, features = ["from"] }
 # meshlet
+blake3 = { version = "=1.8.7", optional = true }
 lz4_flex = { version = "0.13", default-features = false, features = [
   "frame",
 ], optional = true }
@@ -95,6 +98,10 @@ wgpu-types = "29.0.3"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+blake3 = "=1.8.7"
+cc = "=1.6.0"
 
 [package.metadata.docs.rs]
 rustdoc-args = [

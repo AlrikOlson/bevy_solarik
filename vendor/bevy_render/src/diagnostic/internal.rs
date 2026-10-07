@@ -397,13 +397,10 @@ impl FrameData {
     fn close_span(&mut self) -> &mut SpanRecord {
         let thread_id = thread::current().id();
 
-        let iter = self.open_spans.iter();
-        let (index, _) = iter
-            .enumerate()
-            .rfind(|(_, v)| v.thread_id == thread_id)
-            .unwrap();
-
-        let span = self.open_spans.swap_remove(index);
+        let span = super::span_stack::remove_last_matching(&mut self.open_spans, |span| {
+            span.thread_id == thread_id
+        })
+        .expect("closing an open diagnostic span on its originating thread");
         self.closed_spans.push(span);
         self.closed_spans.last_mut().unwrap()
     }
@@ -597,6 +594,38 @@ impl FrameData {
             .collect::<Vec<u64>>();
 
         let mut diagnostics = Vec::new();
+
+        if super::profile_enabled() {
+            let mut intervals: Vec<_> = self
+                .closed_spans
+                .iter()
+                .filter_map(|span| {
+                    let begin = *timestamps.get(span.begin_timestamp_index? as usize)?;
+                    let end = *timestamps.get(span.end_timestamp_index? as usize)?;
+                    (begin > 0 && end >= begin).then_some((begin, end))
+                })
+                .collect();
+            intervals.sort_unstable();
+            if let Some(&(first, _)) = intervals.first() {
+                let last = intervals.iter().map(|v| v.1).max().unwrap();
+                let mut end = first;
+                let mut active = 0u64;
+                for (begin, finish) in intervals {
+                    active += finish.saturating_sub(end.max(begin));
+                    end = end.max(finish);
+                }
+                for (name, ticks) in [
+                    ("frame_gpu_envelope", last - first),
+                    ("frame_gpu_recorded_active", active),
+                ] {
+                    diagnostics.push(RenderDiagnostic {
+                        path: DiagnosticPath::from_components(["render", name, "elapsed_gpu"]),
+                        suffix: "ms",
+                        value: ticks as f64 * timestamp_period_ns as f64 / 1e6,
+                    });
+                }
+            }
+        }
 
         for span in &self.closed_spans {
             if let (Some(begin), Some(end)) = (span.begin_instant, span.end_instant) {

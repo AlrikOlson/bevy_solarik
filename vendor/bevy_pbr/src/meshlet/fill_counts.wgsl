@@ -25,10 +25,13 @@ struct DrawIndirectArgs {
 fn fill_counts() {
 #ifdef MESHLET_2D_DISPATCH
     meshlet_previous_raster_counts[0] += meshlet_software_raster_cluster_count;
+    meshlet_software_raster_cluster_count = 0u;
 #else
     meshlet_previous_raster_counts[0] += meshlet_software_raster_indirect_args.x;
 #endif
     meshlet_software_raster_indirect_args.x = 0;
+    meshlet_software_raster_indirect_args.y = 1u;
+    meshlet_software_raster_indirect_args.z = 1u;
 
     meshlet_previous_raster_counts[1] += meshlet_hardware_raster_indirect_args.instance_count;
     meshlet_hardware_raster_indirect_args.instance_count = 0;

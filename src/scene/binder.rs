@@ -10,13 +10,14 @@ use crate::surface_detail::{DetailedRayMaterials, GpuSurfaceDetail};
 use bevy_asset::{AssetId, Handle};
 use bevy_color::{ColorToComponents, LinearRgba};
 use bevy_ecs::{
+    change_detection::DetectChanges,
     entity::{Entity, EntityHashMap},
     resource::Resource,
-    system::{Query, Res, ResMut},
+    system::{Local, Query, Res, ResMut},
 };
 use bevy_image::Image;
 use bevy_material::AlphaMode;
-use bevy_math::{Mat4, UVec4, Vec3, Vec4, ops::cos};
+use bevy_math::{Affine3A, Mat4, UVec4, Vec3, Vec4, ops::cos};
 use bevy_mesh::Mesh;
 use bevy_pbr::{
     DfgLut, ExtractedDirectionalLight, ExtractedPointLight, MeshMaterial3d,
@@ -103,9 +104,39 @@ pub struct RaytracingSceneBindings {
     /// Whether this frame's TLAS contains explicitly transmissive foliage.
     pub(crate) has_foliage: bool,
     previous_frame_light_entities: Vec<Entity>,
+    settle_light_history: bool,
 }
 
-pub fn prepare_raytracing_scene_bindings(
+#[derive(Default)]
+pub(crate) struct SceneCache {
+    inputs: Option<SceneInputs>,
+}
+#[derive(PartialEq)]
+struct RayInstanceInput {
+    entity: Entity,
+    mesh: AssetId<Mesh>,
+    material: AssetId<StandardMaterial>,
+    transform: Affine3A,
+    previous: Affine3A,
+}
+#[derive(PartialEq)]
+struct SceneInputs {
+    instances: Vec<RayInstanceInput>,
+    directional: Vec<(Entity, GpuDirectionalLight)>,
+    local: Vec<(Entity, GpuLocalLight)>,
+    sky: Option<AssetId<Image>>,
+    sky_intensity: f32,
+    ray_max: f32,
+    ray_min: f32,
+    alpha_testing: bool,
+    medium: GpuLightMedium,
+    weather: Option<AssetId<Image>>,
+    dfg: AssetId<Image>,
+    rings: crate::rings::RingData,
+    blas_generation: u64,
+}
+
+pub(crate) fn prepare_raytracing_scene_bindings(
     instances_query: Query<(
         Entity,
         &RaytracingMesh3d,
@@ -137,11 +168,86 @@ pub fn prepare_raytracing_scene_bindings(
         Option<Res<crate::atmosphere::AtmosphereState>>,
         Res<crate::rings::RingShadow>,
     ),
-    render_device: Res<RenderDevice>,
+    (render_device, diagnostics, mut scene_cache): (
+        Res<RenderDevice>,
+        Option<Res<bevy_render::diagnostic::DiagnosticsRecorder>>,
+        Local<SceneCache>,
+    ),
     pipeline_cache: Res<PipelineCache>,
     render_queue: Res<RenderQueue>,
     mut raytracing_scene_bindings: ResMut<RaytracingSceneBindings>,
 ) {
+    let _cpu_profile = bevy_render::diagnostic::profile_scope("scene.prepare");
+    bevy_render::diagnostic::profile_value(
+        "scene.ray_instances",
+        instances_query.iter().len() as f64,
+        "count",
+    );
+    let weather = planet
+        .as_deref()
+        .filter(|p| p.cloud_coverage > 0.0)
+        .and_then(|p| p.weather.as_ref());
+    let inputs = SceneInputs {
+        instances: instances_query
+            .iter()
+            .map(
+                |(entity, mesh, material, transform, previous)| RayInstanceInput {
+                    entity,
+                    mesh: mesh.id(),
+                    material: material.id(),
+                    transform: transform.affine(),
+                    previous: previous.map_or(transform.affine(), |t| t.0),
+                },
+            )
+            .collect(),
+        directional: directional_lights_query
+            .iter()
+            .map(|(entity, light)| (entity, GpuDirectionalLight::new(light)))
+            .collect(),
+        local: local_lights_query
+            .iter()
+            .map(|(entity, light)| (entity, GpuLocalLight::new(light)))
+            .collect(),
+        sky: sky_light.image.as_ref().map(Handle::id),
+        sky_intensity: sky_light.intensity,
+        ray_max: ray_settings.max_distance(),
+        ray_min: ray_settings.relative_min_distance(),
+        alpha_testing: alpha_testing.0,
+        medium: GpuLightMedium::new(
+            planet.as_deref(),
+            atmosphere.as_deref(),
+            weather
+                .and_then(|image| texture_assets.get(image.id()))
+                .is_some(),
+        ),
+        weather: weather.map(Handle::id),
+        dfg: dfg_lut.texture.id(),
+        rings: rings.0.clone(),
+        blas_generation: blas_manager.generation,
+    };
+    let resources_changed = mesh_allocator.is_changed()
+        || material_assets.is_changed()
+        || collimated.is_changed()
+        || detailed.is_changed()
+        || gaussian.is_changed()
+        || lommel.is_changed()
+        || texture_assets.is_changed()
+        || fallback_texture.is_changed();
+    let reused = !resources_changed
+        && !raytracing_scene_bindings.settle_light_history
+        && scene_cache.inputs.as_ref() == Some(&inputs)
+        && raytracing_scene_bindings.bind_group.is_some();
+    bevy_render::diagnostic::profile_value("scene.reused", f64::from(reused), "count");
+    bevy_render::diagnostic::profile_value(
+        "scene.dependencies_changed",
+        f64::from(resources_changed),
+        "count",
+    );
+    if reused {
+        return;
+    }
+    scene_cache.inputs = Some(inputs);
+    raytracing_scene_bindings.settle_light_history = false;
     raytracing_scene_bindings.bind_group = None;
     raytracing_scene_bindings.glass_entities.clear();
     raytracing_scene_bindings.has_foliage = false;
@@ -474,6 +580,8 @@ pub fn prepare_raytracing_scene_bindings(
             .push(entity);
     }
 
+    raytracing_scene_bindings.settle_light_history =
+        previous_frame_light_entities != raytracing_scene_bindings.previous_frame_light_entities;
     for previous_frame_light_entity in previous_frame_light_entities {
         let current_frame_index = this_frame_entity_to_light_id
             .get(&previous_frame_light_entity)
@@ -501,6 +609,7 @@ pub fn prepare_raytracing_scene_bindings(
         }
     }
 
+    let upload_profile = bevy_render::diagnostic::profile_scope("scene.upload");
     materials.write_buffer(&render_device, &render_queue);
     detail_parameters.write_buffer(&render_device, &render_queue);
     transforms.write_buffer(&render_device, &render_queue);
@@ -511,11 +620,16 @@ pub fn prepare_raytracing_scene_bindings(
     directional_lights.write_buffer(&render_device, &render_queue);
     local_lights.write_buffer(&render_device, &render_queue);
     previous_frame_light_id_translations.write_buffer(&render_device, &render_queue);
+    drop(upload_profile);
 
     let mut command_encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("build_tlas_command_encoder"),
     });
+    use bevy_render::diagnostic::RecordDiagnostics;
+    let diagnostics = diagnostics.as_deref();
+    let span = diagnostics.time_span(&mut command_encoder, "scene/tlas_build");
     command_encoder.build_acceleration_structures(&[], [&tlas]);
+    span.end(&mut command_encoder);
     render_queue.submit([command_encoder.finish()]);
 
     let (dfg_view, dfg_sampler) = texture_assets
@@ -644,6 +758,7 @@ impl RaytracingSceneBindings {
                 ),
             ),
             previous_frame_light_entities: Vec::new(),
+            settle_light_history: false,
             glass_entities: HashSet::default(),
             has_foliage: false,
         }
@@ -882,7 +997,7 @@ impl GpuLocalLight {
     }
 }
 
-#[derive(ShaderType, Default)]
+#[derive(ShaderType, Default, PartialEq)]
 struct GpuDirectionalLight {
     direction_to_light: Vec3,
     cos_theta_max: f32,

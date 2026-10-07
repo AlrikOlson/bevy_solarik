@@ -92,14 +92,16 @@ fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
 // Apply the same own-error predicate as cull_clusters before reserving slots.
 // 255 denotes an internal node, so a leaf has at most 254 children.
 fn queue_meshlets(value: InstancedOffset, child_count: u32, late: bool) {
-    var selected: array<u32, 254>;
+    // At most 254 children: eight eligibility words preserve ascending offsets
+    // without a dynamically indexed kilobyte of private scratch per invocation.
+    var selected: array<u32, 8>;
     var count = 0u;
     for (var child = 0u; child < child_count; child++) {
         let offset = value.offset + child;
         let data = meshlet_cull_data[offset];
         var aabb = data.aabb;
         if lod_error_is_imperceptible(data.lod_group_sphere, get_aabb_error(&aabb), value.instance_id) {
-            selected[count] = offset;
+            selected[child >> 5u] |= 1u << (child & 31u);
             count += 1u;
         }
     }
@@ -112,8 +114,15 @@ fn queue_meshlets(value: InstancedOffset, child_count: u32, late: bool) {
         base = atomicAdd(&meshlet_meshlet_cull_count_early, count);
         atomicMax(&meshlet_meshlet_cull_dispatch_early.x, (base + count + 127u) >> 7u);
     }
-    for (var child = 0u; child < count; child++) {
-        let slot = select(base + child, constants.rightmost_slot - base - child, late);
-        meshlet_meshlet_cull_queue[slot] = InstancedOffset(value.instance_id, selected[child]);
+    var written = 0u;
+    for (var word = 0u; word < 8u; word++) {
+        var bits = selected[word];
+        while bits != 0u {
+            let child = (word << 5u) + firstTrailingBit(bits);
+            let slot = select(base + written, constants.rightmost_slot - base - written, late);
+            meshlet_meshlet_cull_queue[slot] = InstancedOffset(value.instance_id, value.offset + child);
+            written += 1u;
+            bits &= bits - 1u;
+        }
     }
 }

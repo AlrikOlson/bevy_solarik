@@ -22,7 +22,7 @@ use bevy_render::{
     view::{Msaa, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
 };
 use bevy_shader::load_shader_library;
-#[derive(Clone, Default, ShaderType)]
+#[derive(Clone, Default, PartialEq, ShaderType)]
 pub struct RingParameters {
     /// xyz centre relative to render origin (shadow) or camera (view); w half thickness, m.
     pub centre: Vec4,
@@ -39,7 +39,7 @@ pub struct RingParameters {
     /// x radial sample spacing; z enables ring-on-surface shadows.
     pub profile: Vec4,
 }
-#[derive(Clone, ShaderType)]
+#[derive(Clone, PartialEq, ShaderType)]
 pub struct RingData {
     pub p: RingParameters,
     /// Normal optical depth, particle albedo, HG g, unused; uniform radial bins.

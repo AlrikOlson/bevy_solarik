@@ -190,6 +190,41 @@ pub fn meshlet_visibility_buffer_raster(
             downsample_depth_second_pipeline,
         );
     ctx.command_encoder().pop_debug_group();
+    if bevy_render::diagnostic::profile_enabled() {
+        for (name, buffer, offset) in [
+            (
+                "meshlet/raster_software",
+                &resource_manager.visibility_buffer_raster_cluster_prev_counts,
+                0,
+            ),
+            (
+                "meshlet/raster_hardware",
+                &resource_manager.visibility_buffer_raster_cluster_prev_counts,
+                4,
+            ),
+            (
+                "meshlet/candidates_early",
+                &meshlet_view_resources.front_meshlet_cull_count,
+                0,
+            ),
+            (
+                "meshlet/candidates_late",
+                &meshlet_view_resources.back_meshlet_cull_count,
+                0,
+            ),
+            (
+                "meshlet/occluded_instances",
+                &meshlet_view_resources.second_pass_count,
+                0,
+            ),
+        ] {
+            diagnostics.record_u32(
+                ctx.command_encoder(),
+                &buffer.slice(offset..offset + 4),
+                name,
+            );
+        }
+    }
     time_span.end(ctx.command_encoder());
 
     for (
@@ -346,6 +381,11 @@ fn first_cull(
     first_meshlet_cull_pipeline: &ComputePipeline,
     remap_1d_to_2d_pipeline: Option<&ComputePipeline>,
 ) {
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics
+        .as_deref()
+        .filter(|_| bevy_render::diagnostic::profile_enabled());
+    let span = diagnostics.time_span(ctx.command_encoder(), "early_instance_cull");
     let workgroups = meshlet_view_resources.scene_instance_count.div_ceil(128);
     cull_pass(
         "meshlet_first_instance_cull",
@@ -357,11 +397,23 @@ fn first_cull(
         &[meshlet_view_resources.scene_instance_count],
     )
     .dispatch_workgroups(workgroups, 1, 1);
+    span.end(ctx.command_encoder());
+    let span = diagnostics.time_span(ctx.command_encoder(), "early_bvh_cull");
 
     ctx.command_encoder()
         .push_debug_group("meshlet_first_bvh_cull");
     let mut ping = true;
-    for _ in 0..meshlet_view_resources.max_bvh_depth {
+    for depth in 0..meshlet_view_resources.max_bvh_depth {
+        let count = if ping {
+            &meshlet_view_resources.first_bvh_cull_count_front
+        } else {
+            &meshlet_view_resources.first_bvh_cull_count_back
+        };
+        diagnostics.record_u32(
+            ctx.command_encoder(),
+            &count.slice(0..4),
+            format!("meshlet/first/bvh_level_{depth}"),
+        );
         cull_pass(
             "meshlet_first_bvh_cull_dispatch",
             ctx,
@@ -404,6 +456,8 @@ fn first_cull(
         ping = !ping;
     }
     ctx.command_encoder().pop_debug_group();
+    span.end(ctx.command_encoder());
+    let span = diagnostics.time_span(ctx.command_encoder(), "first_cluster_cull");
 
     let mut pass = cull_pass(
         "meshlet_first_meshlet_cull",
@@ -420,6 +474,7 @@ fn first_cull(
         remap_1d_to_2d_pipeline,
         meshlet_view_bind_groups.remap_1d_to_2d_dispatch.as_ref(),
     );
+    span.end(ctx.command_encoder());
 }
 
 fn second_cull(
@@ -433,6 +488,11 @@ fn second_cull(
     second_meshlet_cull_pipeline: &ComputePipeline,
     remap_1d_to_2d_pipeline: Option<&ComputePipeline>,
 ) {
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics
+        .as_deref()
+        .filter(|_| bevy_render::diagnostic::profile_enabled());
+    let span = diagnostics.time_span(ctx.command_encoder(), "late_instance_cull");
     cull_pass(
         "meshlet_second_instance_cull",
         ctx,
@@ -443,11 +503,23 @@ fn second_cull(
         &[meshlet_view_resources.scene_instance_count],
     )
     .dispatch_workgroups_indirect(&meshlet_view_resources.second_pass_dispatch, 0);
+    span.end(ctx.command_encoder());
+    let span = diagnostics.time_span(ctx.command_encoder(), "late_bvh_cull");
 
     ctx.command_encoder()
         .push_debug_group("meshlet_second_bvh_cull");
     let mut ping = true;
-    for _ in 0..meshlet_view_resources.max_bvh_depth {
+    for depth in 0..meshlet_view_resources.max_bvh_depth {
+        let count = if ping {
+            &meshlet_view_resources.second_bvh_cull_count_front
+        } else {
+            &meshlet_view_resources.second_bvh_cull_count_back
+        };
+        diagnostics.record_u32(
+            ctx.command_encoder(),
+            &count.slice(0..4),
+            format!("meshlet/second/bvh_level_{depth}"),
+        );
         cull_pass(
             "meshlet_second_bvh_cull_dispatch",
             ctx,
@@ -472,6 +544,8 @@ fn second_cull(
         ping = !ping;
     }
     ctx.command_encoder().pop_debug_group();
+    span.end(ctx.command_encoder());
+    let span = diagnostics.time_span(ctx.command_encoder(), "second_cluster_cull");
 
     let mut pass = cull_pass(
         "meshlet_second_meshlet_cull",
@@ -488,6 +562,7 @@ fn second_cull(
         remap_1d_to_2d_pipeline,
         meshlet_view_bind_groups.remap_1d_to_2d_dispatch.as_ref(),
     );
+    span.end(ctx.command_encoder());
 }
 
 fn cull_pass<'a>(
@@ -540,6 +615,10 @@ fn raster_pass(
     camera: Option<&ExtractedCamera>,
     raster_cluster_rightmost_slot: u32,
 ) {
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics
+        .as_deref()
+        .filter(|_| bevy_render::diagnostic::profile_enabled());
     let mut software_pass = ctx
         .command_encoder()
         .begin_compute_pass(&ComputePassDescriptor {
@@ -550,6 +629,14 @@ fn raster_pass(
             }),
             timestamp_writes: None,
         });
+    let span = diagnostics.pass_span(
+        &mut software_pass,
+        if first_pass {
+            "early_software_raster"
+        } else {
+            "late_software_raster"
+        },
+    );
     software_pass.set_pipeline(visibility_buffer_software_raster_pipeline);
     software_pass.set_bind_group(
         0,
@@ -557,6 +644,7 @@ fn raster_pass(
         &[view_offset.offset],
     );
     software_pass.dispatch_workgroups_indirect(visibility_buffer_software_raster_indirect_args, 0);
+    span.end(&mut software_pass);
     drop(software_pass);
 
     let mut hardware_pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
@@ -582,6 +670,14 @@ fn raster_pass(
     if let Some(viewport) = camera.and_then(|camera| camera.viewport.as_ref()) {
         hardware_pass.set_camera_viewport(viewport);
     }
+    let span = diagnostics.pass_span(
+        &mut hardware_pass,
+        if first_pass {
+            "early_hardware_raster"
+        } else {
+            "late_hardware_raster"
+        },
+    );
     hardware_pass.set_render_pipeline(visibility_buffer_hardware_raster_pipeline);
     hardware_pass.set_immediates(0, &raster_cluster_rightmost_slot.to_le_bytes());
     hardware_pass.set_bind_group(
@@ -590,6 +686,7 @@ fn raster_pass(
         &[view_offset.offset],
     );
     hardware_pass.draw_indirect(visibility_buffer_hardware_raster_indirect_args, 0);
+    span.end(&mut hardware_pass);
     drop(hardware_pass);
 
     let mut fill_counts_pass = ctx

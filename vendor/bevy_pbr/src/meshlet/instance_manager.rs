@@ -5,9 +5,10 @@ use crate::{
     MaterialBindingId, MeshFlags, MeshTransforms, MeshUniform, PreviousGlobalTransform,
     RenderMaterialBindings, RenderMaterialInstances, meshlet::asset::MeshletAabb,
 };
-use bevy_asset::{AssetEvent, AssetServer, Assets, UntypedAssetId};
+use bevy_asset::{AssetEvent, AssetId, AssetServer, Assets, UntypedAssetId};
 use bevy_camera::visibility::RenderLayers;
 use bevy_ecs::{
+    change_detection::DetectChanges,
     entity::{Entities, Entity, EntityHashMap},
     message::MessageReader,
     query::Has,
@@ -16,11 +17,71 @@ use bevy_ecs::{
 };
 use bevy_image::Image;
 use bevy_light::{NotShadowCaster, NotShadowReceiver};
-use bevy_math::Vec4;
+use bevy_math::{Affine3A, Vec4};
 use bevy_platform::collections::{HashMap, HashSet};
 use bevy_render::{MainWorld, render_resource::StorageBuffer, sync_world::MainEntity};
 use bevy_transform::components::GlobalTransform;
 use core::ops::DerefMut;
+
+/// Persistent raw scene receipt, including temporarily suppressed instances.
+/// A warm frame compares these values without resolving materials, cloning
+/// layers, validating shared alpha images, or constructing another scene vector.
+#[derive(Clone, PartialEq)]
+pub(crate) struct InstanceInput {
+    entity: Entity,
+    mesh: AssetId<MeshletMesh>,
+    transform: Affine3A,
+    previous: Affine3A,
+    layers: RenderLayers,
+    not_shadow_receiver: bool,
+    not_shadow_caster: bool,
+    cutout: Option<(u32, u32)>,
+    double_sided: bool,
+}
+
+type InstanceRow<'a> = (
+    Entity,
+    &'a MeshletMesh3d,
+    &'a GlobalTransform,
+    Option<&'a PreviousGlobalTransform>,
+    Option<&'a RenderLayers>,
+    bool,
+    bool,
+    Option<&'a MeshletVisibilityCutout>,
+    bool,
+);
+
+impl InstanceInput {
+    fn from_row(row: InstanceRow<'_>) -> Self {
+        let (entity, mesh, transform, previous, layers, receiver, caster, cutout, double_sided) =
+            row;
+        Self {
+            entity,
+            mesh: mesh.id(),
+            transform: transform.affine(),
+            previous: previous.map_or(transform.affine(), |t| t.0),
+            layers: layers.cloned().unwrap_or_default(),
+            not_shadow_receiver: receiver,
+            not_shadow_caster: caster,
+            cutout: cutout.map(|c| (c.layer, c.cutoff.to_bits())),
+            double_sided,
+        }
+    }
+
+    fn matches(&self, row: InstanceRow<'_>) -> bool {
+        let (entity, mesh, transform, previous, layers, receiver, caster, cutout, double_sided) =
+            row;
+        self.entity == entity
+            && self.mesh == mesh.id()
+            && self.transform == transform.affine()
+            && self.previous == previous.map_or(transform.affine(), |t| t.0)
+            && self.layers == *layers.unwrap_or_default()
+            && self.not_shadow_receiver == receiver
+            && self.not_shadow_caster == caster
+            && self.cutout == cutout.map(|c| (c.layer, c.cutoff.to_bits()))
+            && self.double_sided == double_sided
+    }
+}
 
 /// Manages data for each entity with a [`MeshletMesh`].
 #[derive(Resource)]
@@ -44,6 +105,16 @@ pub struct InstanceManager {
     pub instance_cutouts: StorageBuffer<Vec<Vec4>>,
     /// Per-view per-instance visibility bit. Used for [`RenderLayers`] and [`NotShadowCaster`] support.
     pub view_instance_visibility: EntityHashMap<StorageBuffer<Vec<u32>>>,
+
+    inputs: Vec<InstanceInput>,
+    material_receipt: (u64, u64),
+    binding_slots: HashMap<UntypedAssetId, u32>,
+    pending_geometry: bool,
+    instance_material_assets: Vec<UntypedAssetId>,
+    /// Persistent instance buffers only need publication after exact scene changes.
+    pub instance_upload_dirty: bool,
+    pub rebuild_next_extract: bool,
+    material_mapping_dirty: bool,
 
     /// Next material ID available.
     next_material_id: u32,
@@ -83,6 +154,14 @@ impl InstanceManager {
             view_instance_visibility: EntityHashMap::default(),
             instance_cutouts: StorageBuffer::default(),
 
+            inputs: Vec::new(),
+            material_receipt: (0, 0),
+            binding_slots: HashMap::default(),
+            pending_geometry: false,
+            instance_material_assets: Vec::new(),
+            instance_upload_dirty: true,
+            rebuild_next_extract: false,
+            material_mapping_dirty: true,
             next_material_id: 0,
             material_id_lookup: HashMap::default(),
             material_ids_present_in_scene: HashSet::default(),
@@ -151,6 +230,7 @@ impl InstanceManager {
         self.instance_uniforms.get_mut().push(mesh_uniform);
         self.instance_aabbs.get_mut().push(aabb);
         self.instance_material_ids.get_mut().push(0);
+        self.instance_material_assets.push(mesh_material);
         self.instance_bvh_root_nodes.get_mut().push(root_bvh_node);
         self.instance_cutouts.get_mut().push(cutout);
 
@@ -164,7 +244,11 @@ impl InstanceManager {
             .material_id_lookup
             .entry(material_asset_id)
             .or_insert_with(|| {
-                self.next_material_id += 1;
+                self.material_mapping_dirty = true;
+                self.next_material_id = self
+                    .next_material_id
+                    .checked_add(1)
+                    .expect("meshlet material ID capacity");
                 self.next_material_id
             })
     }
@@ -178,6 +262,8 @@ impl InstanceManager {
         self.max_bvh_depth = 0;
 
         self.instances.clear();
+        self.instance_material_assets.clear();
+        self.instance_upload_dirty = true;
         self.instance_uniforms.get_mut().clear();
         self.instance_aabbs.get_mut().clear();
         self.instance_material_ids.get_mut().clear();
@@ -189,8 +275,6 @@ impl InstanceManager {
             .values_mut()
             .for_each(|b| b.get_mut().clear());
 
-        self.next_material_id = 0;
-        self.material_id_lookup.clear();
         self.material_ids_present_in_scene.clear();
     }
 }
@@ -226,6 +310,7 @@ pub fn extract_meshlet_mesh_entities(
     >,
     render_entities: &Entities,
 ) {
+    let _cpu_profile = bevy_render::diagnostic::profile_scope("meshlet.extract");
     // Get instances query
     if system_state.is_none() {
         *system_state = Some(SystemState::new(&mut main_world));
@@ -234,18 +319,55 @@ pub fn extract_meshlet_mesh_entities(
     let (instances_query, asset_server, mut assets, mut asset_events, atlas, images) =
         system_state.get_mut(&mut main_world).unwrap();
 
-    // Reset per-frame data
-    instance_manager.reset(render_entities);
+    // View layer/shadow bits are cheap and depend on this frame's views.
+    // Instance transforms/geometry/material buffers persist across camera motion.
+    instance_manager
+        .view_instance_visibility
+        .retain(|entity, _| render_entities.contains(*entity));
+    for buffer in instance_manager.view_instance_visibility.values_mut() {
+        buffer.get_mut().clear();
+    }
+    let mut force_rebuild = instance_manager.rebuild_next_extract
+        || instance_manager.pending_geometry
+        || atlas.is_changed()
+        || images.is_changed()
+        || instance_manager.material_receipt != mesh_material_ids.instances.receipt()
+        || !binding_slots_match(&instance_manager.binding_slots, &render_material_bindings);
+    instance_manager.rebuild_next_extract = false;
 
     // Free GPU buffer space for any modified or dropped MeshletMesh assets
     for asset_event in asset_events.read() {
-        if let AssetEvent::Unused { id } | AssetEvent::Modified { id } = asset_event {
+        if let AssetEvent::Unused { id }
+        | AssetEvent::Modified { id }
+        | AssetEvent::Removed { id } = asset_event
+        {
             meshlet_mesh_manager.remove(id);
+            force_rebuild = true;
         }
     }
 
+    let unchanged =
+        !force_rebuild && inputs_match(&instance_manager.inputs, instances_query.iter());
+    bevy_render::diagnostic::profile_value("meshlet.scene_reused", f64::from(unchanged), "count");
+    if unchanged {
+        return;
+    }
+    instance_manager.reset(render_entities);
+    instance_manager.inputs.clear();
+    instance_manager.material_receipt = mesh_material_ids.instances.receipt();
+    instance_manager.binding_slots.clear();
+    instance_manager.binding_slots.extend(
+        render_material_bindings
+            .iter()
+            .map(|(&id, binding)| (id, binding.slot.0)),
+    );
+    instance_manager.pending_geometry = false;
+    let mut mesh_metadata: HashMap<AssetId<MeshletMesh>, Option<(u32, MeshletAabb, u32)>> =
+        HashMap::default();
+    // Shared alpha metadata is validated once per exact source layer/cutoff/sidedness.
+    let mut alpha_metadata: HashMap<(Option<(u32, u32)>, bool), Option<Vec4>> = HashMap::default();
+
     // Iterate over every instance
-    // TODO: Switch to change events to not upload every instance every frame.
     for (
         instance,
         meshlet_mesh,
@@ -258,23 +380,44 @@ pub fn extract_meshlet_mesh_entities(
         double_sided,
     ) in &instances_query
     {
-        let Some(mut cutout) = metadata(cutout, &atlas, &images) else {
+        let input = InstanceInput::from_row((
+            instance,
+            meshlet_mesh,
+            transform,
+            previous_transform,
+            render_layers,
+            not_shadow_receiver,
+            not_shadow_caster,
+            cutout,
+            double_sided,
+        ));
+        let alpha = *alpha_metadata
+            .entry((input.cutout, double_sided))
+            .or_insert_with(|| {
+                metadata(cutout, &atlas, &images).map(|mut value| {
+                    value.z = f32::from(double_sided);
+                    value
+                })
+            });
+        instance_manager.inputs.push(input);
+        let Some(cutout) = alpha else {
             continue;
         };
-        cutout.z = f32::from(double_sided);
-        // Skip instances with an unloaded MeshletMesh asset
-        // TODO: This is a semi-expensive check
-        if asset_server.is_managed(meshlet_mesh.id())
-            && !asset_server.is_loaded_with_dependencies(meshlet_mesh.id())
-        {
+        // Resolve shared geometry and asset readiness once per prototype rather
+        // than once for every leaf/part instance in the forest.
+        let mesh_info = mesh_metadata.entry(meshlet_mesh.id()).or_insert_with(|| {
+            if asset_server.is_managed(meshlet_mesh.id())
+                && !asset_server.is_loaded_with_dependencies(meshlet_mesh.id())
+            {
+                return None;
+            }
+            Some(meshlet_mesh_manager.queue_upload_if_needed(meshlet_mesh.id(), &mut assets))
+        });
+        let Some((root_bvh_node, _, _)) = *mesh_info else {
+            instance_manager.pending_geometry = true;
             continue;
-        }
-
-        // Upload the instance's MeshletMesh asset data if not done already done
-        let (root_bvh_node, aabb, bvh_depth) =
-            meshlet_mesh_manager.queue_upload_if_needed(meshlet_mesh.id(), &mut assets);
-
-        // Add the instance's data to the instance manager
+        };
+        let (_, aabb, bvh_depth) = mesh_info.unwrap();
         instance_manager.add_instance(
             instance.into(),
             root_bvh_node,
@@ -292,24 +435,52 @@ pub fn extract_meshlet_mesh_entities(
     }
 }
 
+fn binding_slots_match(
+    slots: &HashMap<UntypedAssetId, u32>,
+    bindings: &RenderMaterialBindings,
+) -> bool {
+    slots.len() == bindings.len()
+        && bindings
+            .iter()
+            .all(|(id, binding)| slots.get(id) == Some(&binding.slot.0))
+}
+
+fn inputs_match<'a>(inputs: &[InstanceInput], rows: impl Iterator<Item = InstanceRow<'a>>) -> bool {
+    let mut previous = inputs.iter();
+    rows.into_iter()
+        .all(|row| previous.next().is_some_and(|input| input.matches(row)))
+        && previous.next().is_none()
+}
+
+#[cfg(test)]
+#[path = "instance_manager_tests.rs"]
+mod tests;
+
 /// For each entity in the scene, record what material ID its material was assigned in the `prepare_material_meshlet_meshes` systems,
 /// and note that the material is used by at least one entity in the scene.
-pub fn queue_material_meshlet_meshes(
-    mut instance_manager: ResMut<InstanceManager>,
-    render_material_instances: Res<RenderMaterialInstances>,
-) {
+pub fn queue_material_meshlet_meshes(mut instance_manager: ResMut<InstanceManager>) {
+    let _cpu_profile = bevy_render::diagnostic::profile_scope("meshlet.queue_material");
     let instance_manager = instance_manager.deref_mut();
 
-    for (i, (instance, _, _)) in instance_manager.instances.iter().enumerate() {
-        if let Some(material_instance) = render_material_instances.instances.get(instance)
-            && let Some(material_id) = instance_manager
-                .material_id_lookup
-                .get(&material_instance.asset_id)
-        {
+    if !instance_manager.instance_upload_dirty && !instance_manager.material_mapping_dirty {
+        return;
+    }
+    instance_manager.material_ids_present_in_scene.clear();
+    for (i, asset_id) in instance_manager.instance_material_assets.iter().enumerate() {
+        let material_id = instance_manager
+            .material_id_lookup
+            .get(asset_id)
+            .copied()
+            .unwrap_or(0);
+        if material_id != 0 {
             instance_manager
                 .material_ids_present_in_scene
-                .insert(*material_id);
-            instance_manager.instance_material_ids.get_mut()[i] = *material_id;
+                .insert(material_id);
+        }
+        if instance_manager.instance_material_ids.get()[i] != material_id {
+            instance_manager.instance_material_ids.get_mut()[i] = material_id;
+            instance_manager.instance_upload_dirty = true;
         }
     }
+    instance_manager.material_mapping_dirty = false;
 }

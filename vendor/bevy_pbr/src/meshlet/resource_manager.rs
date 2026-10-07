@@ -93,7 +93,7 @@ impl ResourceManager {
                 &BufferDescriptor {
                     label: Some("meshlet_visibility_buffer_raster_cluster_prev_counts"),
                     size: size_of::<u32>() as u64 * 2,
-                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 },
             ),
@@ -539,6 +539,12 @@ pub fn prepare_meshlet_per_frame_resources(
     cutout_atlas: Res<MeshletCutoutAtlas>,
     gpu_images: Res<RenderAssets<GpuImage>>,
 ) {
+    let _cpu_profile = bevy_render::diagnostic::profile_scope("meshlet.prepare_upload");
+    bevy_render::diagnostic::profile_value(
+        "meshlet.scene_instances",
+        instance_manager.scene_instance_count as f64,
+        "count",
+    );
     if instance_manager.scene_instance_count == 0 {
         return;
     }
@@ -549,29 +555,38 @@ pub fn prepare_meshlet_per_frame_resources(
         .filter(|image| gpu_cutout_ready(image))
         .is_none()
     {
+        instance_manager.rebuild_next_extract = true;
+        instance_manager.instance_upload_dirty = true;
         for cutout in instance_manager.instance_cutouts.get_mut() {
             if cutout.x >= 0.0 {
                 cutout.x = -2.0;
             }
         }
     }
-    instance_manager
-        .instance_cutouts
-        .write_buffer(&render_device, &render_queue);
+    if instance_manager.instance_upload_dirty {
+        instance_manager
+            .instance_cutouts
+            .write_buffer(&render_device, &render_queue);
 
-    // TODO: Move this and the submit to a separate system and remove pub from the fields
-    instance_manager
-        .instance_uniforms
-        .write_buffer(&render_device, &render_queue);
-    instance_manager
-        .instance_aabbs
-        .write_buffer(&render_device, &render_queue);
-    instance_manager
-        .instance_material_ids
-        .write_buffer(&render_device, &render_queue);
-    instance_manager
-        .instance_bvh_root_nodes
-        .write_buffer(&render_device, &render_queue);
+        // TODO: Move this and the submit to a separate system and remove pub from the fields
+        instance_manager
+            .instance_uniforms
+            .write_buffer(&render_device, &render_queue);
+        instance_manager
+            .instance_aabbs
+            .write_buffer(&render_device, &render_queue);
+        instance_manager
+            .instance_material_ids
+            .write_buffer(&render_device, &render_queue);
+        instance_manager
+            .instance_bvh_root_nodes
+            .write_buffer(&render_device, &render_queue);
+
+        instance_manager.instance_upload_dirty = false;
+        bevy_render::diagnostic::profile_value("meshlet.instance_uploads", 1.0, "count");
+    } else {
+        bevy_render::diagnostic::profile_value("meshlet.instance_uploads", 0.0, "count");
+    }
 
     let needed_buffer_size = 4 * instance_manager.scene_instance_count as u64;
     let second_pass_candidates = match &mut resource_manager.second_pass_candidates {
@@ -657,7 +672,7 @@ pub fn prepare_meshlet_per_frame_resources(
         let second_pass_count = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("meshlet_second_pass_count"),
             contents: bytemuck::bytes_of(&0u32),
-            usage: BufferUsages::STORAGE,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         });
         let second_pass_dispatch = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("meshlet_second_pass_dispatch"),
@@ -669,7 +684,7 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_first_bvh_cull_count_front"),
                 contents: bytemuck::bytes_of(&0u32),
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             });
         let first_bvh_cull_dispatch_front =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -681,7 +696,7 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_first_bvh_cull_count_back"),
                 contents: bytemuck::bytes_of(&0u32),
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             });
         let first_bvh_cull_dispatch_back =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -694,7 +709,7 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_second_bvh_cull_count_front"),
                 contents: bytemuck::bytes_of(&0u32),
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             });
         let second_bvh_cull_dispatch_front =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -706,7 +721,7 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_second_bvh_cull_count_back"),
                 contents: bytemuck::bytes_of(&0u32),
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             });
         let second_bvh_cull_dispatch_back =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -719,7 +734,7 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_front_meshlet_cull_count"),
                 contents: bytemuck::bytes_of(&0u32),
-                usage: BufferUsages::STORAGE,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             });
         let front_meshlet_cull_dispatch =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -731,7 +746,7 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_back_meshlet_cull_count"),
                 contents: bytemuck::bytes_of(&0u32),
-                usage: BufferUsages::STORAGE,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             });
         let back_meshlet_cull_dispatch =
             render_device.create_buffer_with_data(&BufferInitDescriptor {

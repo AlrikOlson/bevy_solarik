@@ -24,6 +24,7 @@ const MAX_COMPACTION_VERTICES_PER_FRAME: u32 = 400_000;
 
 #[derive(Resource, Default)]
 pub struct BlasManager {
+    pub(crate) generation: u64,
     blas: HashMap<AssetId<Mesh>, Blas>,
     triangle_edges: HashMap<AssetId<Mesh>, Vec<[Vec3; 2]>>,
     compaction_queue: VecDeque<(AssetId<Mesh>, u32, bool)>,
@@ -51,6 +52,7 @@ impl BlasManager {
     pub fn set_non_opaque_meshes(&mut self, meshes: HashSet<AssetId<Mesh>>) {
         for mesh in self.opacity.require(meshes) {
             if self.blas.remove(&mesh).is_some() {
+                self.generation = self.generation.wrapping_add(1);
                 self.rebuild_queue.push(mesh);
             }
         }
@@ -102,14 +104,18 @@ pub fn prepare_raytracing_blas(
     mesh_allocator: Res<MeshAllocator>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
+    diagnostics: Option<Res<bevy_render::diagnostic::DiagnosticsRecorder>>,
 ) {
+    let _cpu_profile = bevy_render::diagnostic::profile_scope("scene.blas_prepare");
     // Delete BLAS for deleted or modified meshes
     for asset_id in extracted_meshes
         .removed
         .iter()
         .chain(extracted_meshes.modified.iter())
     {
-        blas_manager.blas.remove(asset_id);
+        if blas_manager.blas.remove(asset_id).is_some() {
+            blas_manager.generation = blas_manager.generation.wrapping_add(1);
+        }
         blas_manager.triangle_edges.remove(asset_id);
         blas_manager.opacity.forget(asset_id);
     }
@@ -160,6 +166,7 @@ pub fn prepare_raytracing_blas(
             );
 
             blas_manager.blas.insert(asset_id, blas);
+            blas_manager.generation = blas_manager.generation.wrapping_add(1);
             blas_manager.opacity.record_built(asset_id, non_opaque);
             blas_manager
                 .compaction_queue
@@ -193,7 +200,11 @@ pub fn prepare_raytracing_blas(
     let mut command_encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("build_blas_command_encoder"),
     });
+    use bevy_render::diagnostic::RecordDiagnostics;
+    let diagnostics = diagnostics.as_deref();
+    let span = diagnostics.time_span(&mut command_encoder, "scene/blas_build");
     command_encoder.build_acceleration_structures(&build_entries, &[]);
+    span.end(&mut command_encoder);
     render_queue.submit([command_encoder.finish()]);
 }
 
@@ -225,6 +236,7 @@ pub fn compact_raytracing_blas(
         if blas.ready_for_compaction() {
             let compacted_blas = render_queue.compact_blas(blas);
             blas_manager.blas.insert(mesh, compacted_blas);
+            blas_manager.generation = blas_manager.generation.wrapping_add(1);
 
             vertices_compacted += vertex_count;
             continue;

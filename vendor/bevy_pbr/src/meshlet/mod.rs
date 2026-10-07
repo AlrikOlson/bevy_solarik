@@ -3,6 +3,8 @@
 mod asset;
 mod cutout;
 #[cfg(feature = "meshlet_processor")]
+mod derived_cache;
+#[cfg(feature = "meshlet_processor")]
 mod from_mesh;
 mod instance_manager;
 mod material_pipeline_prepare;
