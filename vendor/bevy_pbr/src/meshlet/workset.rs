@@ -13,6 +13,51 @@ pub struct MeshletWorkset {
 }
 
 impl MeshletMesh {
+    /// CPU diagnostic of the one-pixel leaf selection, without frustum or
+    /// occlusion rejection. This is not a conservative admission bound.
+    pub fn diagnostic_lod_meshlets(
+        &self,
+        world_from_mesh: Mat4,
+        camera: bevy_math::Vec3,
+        focal_pixels: f32,
+        near_plane: f32,
+    ) -> usize {
+        let scale = world_from_mesh
+            .x_axis
+            .truncate()
+            .length()
+            .max(world_from_mesh.y_axis.truncate().length())
+            .max(world_from_mesh.z_axis.truncate().length());
+        let imperceptible = |sphere: super::asset::MeshletBoundingSphere, error: f32| {
+            let centre = world_from_mesh.transform_point3(sphere.center);
+            let distance = (camera.distance(centre) - sphere.radius * scale).max(near_plane);
+            error * scale * focal_pixels / distance < 1.0
+        };
+        self.bvh
+            .iter()
+            .map(|node| {
+                (0..8)
+                    .filter_map(|i| {
+                        let count = node.child_counts[i];
+                        if count == 0
+                            || count == u8::MAX
+                            || imperceptible(node.lod_bounds[i], node.aabbs[i].error)
+                        {
+                            return None;
+                        }
+                        let start = node.aabbs[i].child_offset as usize;
+                        Some(
+                            self.meshlet_cull_data[start..start + count as usize]
+                                .iter()
+                                .filter(|c| imperceptible(c.lod_group_sphere, c.aabb.error))
+                                .count(),
+                        )
+                    })
+                    .sum::<usize>()
+            })
+            .sum()
+    }
+
     /// Bound candidates after early own-LOD rejection for a known scale range.
     /// The near plane is required because the shader clamps perspective distance.
     pub fn workset_profile_range(
@@ -337,6 +382,9 @@ mod tests {
     fn interval_bound_covers_both_passes_across_scale_direction_motion_and_near_plane() {
         let mesh = interval_mesh();
         for near in [0.01_f64, 1000.0] {
+            let normalized = mesh
+                .workset_profile_range(Mat4::IDENTITY, 1.0, 1.0, 1000.0, near / 0.85)
+                .unwrap();
             let p = mesh
                 .workset_profile_range(Mat4::IDENTITY, 0.85, 1.15, 1000.0, near)
                 .unwrap();
@@ -358,6 +406,12 @@ mod tests {
                         }
                         assert!(
                             p.slots_in_range((distance - 2.5).max(0.0), distance + 2.5) >= writes
+                        );
+                        assert!(
+                            normalized.slots_in_range(
+                                (distance - 2.5).max(0.0) / scale,
+                                (distance + 2.5) / scale
+                            ) >= writes
                         );
                     }
                 }

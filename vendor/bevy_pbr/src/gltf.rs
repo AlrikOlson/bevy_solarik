@@ -11,7 +11,8 @@ use bevy_ecs::prelude::*;
 
 use bevy_asset::LoadContext;
 
-pub(crate) fn add_gltf(app: &mut App) {
+/// Register the production glTF material adapter without GPU rendering plugins.
+pub fn add_gltf(app: &mut App) {
     #[cfg(target_family = "wasm")]
     bevy_tasks::block_on(async {
         app.world_mut()

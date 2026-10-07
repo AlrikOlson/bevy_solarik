@@ -41,6 +41,8 @@ pub use contact_shadows::{
     ContactShadows, ContactShadowsBuffer, ContactShadowsPlugin, ContactShadowsUniform,
     ViewContactShadowsUniformOffset,
 };
+#[cfg(feature = "bevy_gltf")]
+pub use gltf::add_gltf as register_gltf_standard_materials;
 pub mod decal;
 pub mod deferred;
 pub mod diagnostic;
