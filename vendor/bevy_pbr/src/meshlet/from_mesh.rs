@@ -165,6 +165,9 @@ impl MeshletMesh {
                 &cull_data,
                 &connected_meshlets_per_meshlet,
                 preserve_area,
+                &meshlets,
+                &vertices,
+                &position_only_vertex_remap,
             );
             simplification_queue.clear();
 
@@ -655,26 +658,42 @@ fn group_meshlets(
     meshlet_cull_data: &[TempMeshletCullData],
     connected_meshlets_per_meshlet: &[Vec<(usize, usize)>],
     spatial: bool,
+    meshlets: &Meshlets,
+    vertices: &VertexDataAdapter<'_>,
+    remap: &[u32],
 ) -> Vec<TempMeshletGroup> {
     if spatial {
-        let points: Vec<_> = simplification_queue
-            .iter()
-            .map(|&i| Vec3::from(meshlet_cull_data[i as usize].aabb.center()))
-            .collect();
-        return lod_spatial::partition(&points, TARGET_MESHLETS_PER_GROUP)
-            .into_iter()
-            .map(|ids| {
-                let mut group = TempMeshletGroup::default();
-                for i in ids {
-                    let id = simplification_queue[i];
-                    let data = &meshlet_cull_data[id as usize];
-                    group.meshlets.push(id);
-                    group.aabb = group.aabb.merge(&data.aabb);
-                    group.lod_bounds = merge_spheres(group.lod_bounds, data.lod_group_sphere);
-                }
-                group
-            })
-            .collect();
+        let mut indices = Vec::new();
+        let mut counts = Vec::with_capacity(simplification_queue.len());
+        for &id in simplification_queue {
+            let meshlet = meshlets.get(id as usize);
+            counts.push(meshlet.triangles.len() as u32);
+            indices.extend(
+                meshlet
+                    .triangles
+                    .iter()
+                    .map(|&i| remap[meshlet.vertices[i as usize] as usize]),
+            );
+        }
+        return lod_spatial::connected_partition(
+            &indices,
+            &counts,
+            vertices,
+            TARGET_MESHLETS_PER_GROUP,
+        )
+        .into_iter()
+        .map(|ids| {
+            let mut group = TempMeshletGroup::default();
+            for i in ids {
+                let id = simplification_queue[i];
+                let data = &meshlet_cull_data[id as usize];
+                group.meshlets.push(id);
+                group.aabb = group.aabb.merge(&data.aabb);
+                group.lod_bounds = merge_spheres(group.lod_bounds, data.lod_group_sphere);
+            }
+            group
+        })
+        .collect();
     }
     let mut xadj = Vec::with_capacity(simplification_queue.len() + 1);
     let mut adjncy = Vec::new();
