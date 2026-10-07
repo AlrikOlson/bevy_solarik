@@ -42,6 +42,36 @@ pub struct StorageBuffer<T: ShaderType> {
     changed: bool,
     buffer_usage: BufferUsages,
     last_written_size: Option<BufferSize>,
+    last_uploaded: Vec<u8>,
+}
+
+/// Actual publication work, independently of reserved GPU capacity.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct StorageBufferUpload {
+    pub bytes: u64,
+    pub ranges: u32,
+    pub allocated: bool,
+}
+
+fn changed_ranges(data: &[u8], previous: &[u8]) -> Vec<core::ops::Range<usize>> {
+    const PAGE: usize = 64 * 1024;
+    const MAX_RANGES: usize = 128;
+    let mut ranges: Vec<core::ops::Range<usize>> = Vec::new();
+    for start in (0..data.len()).step_by(PAGE) {
+        let end = (start + PAGE).min(data.len());
+        if previous.get(start..end) == Some(&data[start..end]) {
+            continue;
+        }
+        if let Some(last) = ranges.last_mut().filter(|r| r.end == start) {
+            last.end = end;
+        } else {
+            ranges.push(start..end);
+            if ranges.len() > MAX_RANGES {
+                return core::iter::once(0..data.len()).collect();
+            }
+        }
+    }
+    ranges
 }
 
 impl<T: ShaderType> From<T> for StorageBuffer<T> {
@@ -54,6 +84,7 @@ impl<T: ShaderType> From<T> for StorageBuffer<T> {
             changed: false,
             buffer_usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
             last_written_size: None,
+            last_uploaded: Vec::new(),
         }
     }
 }
@@ -68,6 +99,7 @@ impl<T: ShaderType + Default> Default for StorageBuffer<T> {
             changed: false,
             buffer_usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
             last_written_size: None,
+            last_uploaded: Vec::new(),
         }
     }
 }
@@ -129,6 +161,8 @@ impl<T: ShaderType + WriteInto> StorageBuffer<T> {
     /// If there is no GPU-side buffer allocated to hold the data currently stored, or if a GPU-side buffer previously
     /// allocated does not have enough capacity, a new GPU-side buffer is created.
     pub fn write_buffer(&mut self, device: &RenderDevice, queue: &RenderQueue) {
+        // A full publication invalidates the optional changed-range receipt.
+        self.last_uploaded.clear();
         self.scratch.write(&self.value).unwrap();
 
         let capacity = self.buffer.as_deref().map(wgpu::Buffer::size).unwrap_or(0);
@@ -146,6 +180,56 @@ impl<T: ShaderType + WriteInto> StorageBuffer<T> {
         }
 
         self.last_written_size = BufferSize::new(size);
+    }
+
+    /// Publish exact changed std430 bytes while retaining the allocation.
+    ///
+    /// Logical binding size follows the current value, including after shrink.
+    /// At most 128 contiguous 64 KiB page ranges are written; more fragmented
+    /// changes fall back to one full write. This changes no data or precision.
+    pub fn write_buffer_changed(
+        &mut self,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+    ) -> StorageBufferUpload {
+        self.scratch.as_mut().clear();
+        self.scratch.write(&self.value).unwrap();
+        let data = self.scratch.as_ref();
+        let size = data.len() as u64;
+        let capacity = self.buffer.as_deref().map(wgpu::Buffer::size).unwrap_or(0);
+        let allocated = capacity < size || self.changed || self.buffer.is_none();
+        let ranges = if allocated {
+            let allocation_size = size.max(4).next_multiple_of(64 * 1024);
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: make_buffer_label::<Self>(&self.label),
+                size: allocation_size,
+                usage: self.buffer_usage,
+                mapped_at_creation: false,
+            }));
+            self.changed = false;
+            core::iter::once(0..data.len()).collect()
+        } else {
+            changed_ranges(data, &self.last_uploaded)
+        };
+        let mut upload = StorageBufferUpload {
+            allocated,
+            ranges: ranges.len() as u32,
+            ..Default::default()
+        };
+        self.last_uploaded.resize(data.len(), 0);
+        for range in ranges {
+            if !range.is_empty() {
+                queue.write_buffer(
+                    self.buffer.as_ref().unwrap(),
+                    range.start as u64,
+                    &data[range.clone()],
+                );
+                self.last_uploaded[range.clone()].copy_from_slice(&data[range.clone()]);
+                upload.bytes += range.len() as u64;
+            }
+        }
+        self.last_written_size = BufferSize::new(size);
+        upload
     }
 }
 

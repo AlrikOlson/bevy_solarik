@@ -176,6 +176,20 @@ async fn find_adapter_by_name(
     None
 }
 
+/// Initialize a headless device through the same feature and backend policy as native rendering.
+pub async fn initialize_headless_renderer(options: &WgpuSettings) -> RenderResources {
+    initialize_renderer(
+        options
+            .backends
+            .expect("headless initialization requires a backend"),
+        None,
+        options,
+        #[cfg(feature = "raw_vulkan_init")]
+        Default::default(),
+    )
+    .await
+}
+
 /// Initializes the renderer by retrieving and preparing the GPU instance, device and queue
 /// for the specified backend.
 pub async fn initialize_renderer(

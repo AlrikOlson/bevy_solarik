@@ -110,6 +110,24 @@ pub struct RaytracingSceneBindings {
 #[derive(Default)]
 pub(crate) struct SceneCache {
     inputs: Option<SceneInputs>,
+    storage: SceneStorage,
+    tlas: super::tlas::SceneTlas,
+}
+
+#[derive(Default)]
+struct SceneStorage {
+    materials: StorageBufferList<GpuMaterial>,
+    detail_parameters: StorageBufferList<GpuSurfaceDetail>,
+    transforms: StorageBufferList<Mat4>,
+    previous_frame_transforms: StorageBufferList<Mat4>,
+    geometry_ids: StorageBufferList<GpuInstanceGeometryIds>,
+    material_ids: StorageBufferList<u32>,
+    light_sources: StorageBufferList<GpuLightSource>,
+    directional_lights: StorageBufferList<GpuDirectionalLight>,
+    local_lights: StorageBufferList<GpuLocalLight>,
+    previous_frame_light_id_translations: StorageBufferList<u32>,
+    sky: StorageBuffer<GpuSkyLight>,
+    rings: StorageBuffer<crate::rings::RingData>,
 }
 #[derive(PartialEq)]
 struct RayInstanceInput {
@@ -281,27 +299,40 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     let mut index_buffers = CachedBindingArray::new();
     let mut textures = CachedBindingArray::new();
     let mut samplers = Vec::new();
-    let mut materials = StorageBufferList::<GpuMaterial>::default();
-    let mut detail_parameters = StorageBufferList::<GpuSurfaceDetail>::default();
+    let SceneCache { storage, tlas, .. } = &mut *scene_cache;
+    let (tlas, tlas_reused) = tlas.prepare(&render_device, instances_query.iter().len());
+    bevy_render::diagnostic::profile_value(
+        "scene.tlas_allocation_reused",
+        f64::from(tlas_reused),
+        "count",
+    );
+    let SceneStorage {
+        materials,
+        detail_parameters,
+        transforms,
+        previous_frame_transforms,
+        geometry_ids,
+        material_ids,
+        light_sources,
+        directional_lights,
+        local_lights,
+        previous_frame_light_id_translations,
+        sky: sky_buffer,
+        rings: ring_buffer,
+    } = storage;
+    materials.get_mut().clear();
+    detail_parameters.get_mut().clear();
+    transforms.get_mut().clear();
+    previous_frame_transforms.get_mut().clear();
+    geometry_ids.get_mut().clear();
+    material_ids.get_mut().clear();
+    light_sources.get_mut().clear();
+    directional_lights.get_mut().clear();
+    local_lights.get_mut().clear();
+    previous_frame_light_id_translations.get_mut().clear();
     let mut scan_textures = CachedBindingArray::new();
     let mut scan_samplers = Vec::new();
-    let mut tlas = render_device
-        .wgpu_device()
-        .create_tlas(&CreateTlasDescriptor {
-            label: Some("tlas"),
-            flags: AccelerationStructureFlags::PREFER_FAST_TRACE,
-            update_mode: AccelerationStructureUpdateMode::Build,
-            max_instances: instances_query.iter().len() as u32,
-        });
-    let mut transforms = StorageBufferList::<Mat4>::default();
-    let mut previous_frame_transforms = StorageBufferList::<Mat4>::default();
-    let mut geometry_ids = StorageBufferList::<GpuInstanceGeometryIds>::default();
-    let mut material_ids = StorageBufferList::<u32>::default();
-    let mut light_sources = StorageBufferList::<GpuLightSource>::default();
     let mut light_fluxes = Vec::new();
-    let mut directional_lights = StorageBufferList::<GpuDirectionalLight>::default();
-    let mut local_lights = StorageBufferList::<GpuLocalLight>::default();
-    let mut previous_frame_light_id_translations = StorageBufferList::<u32>::default();
 
     let mut material_id_map: HashMap<AssetId<StandardMaterial>, u32, FixedHasher> =
         HashMap::default();
@@ -612,16 +643,33 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     }
 
     let upload_profile = bevy_render::diagnostic::profile_scope("scene.upload");
-    materials.write_buffer(&render_device, &render_queue);
-    detail_parameters.write_buffer(&render_device, &render_queue);
-    transforms.write_buffer(&render_device, &render_queue);
-    previous_frame_transforms.write_buffer(&render_device, &render_queue);
-    geometry_ids.write_buffer(&render_device, &render_queue);
-    material_ids.write_buffer(&render_device, &render_queue);
-    light_sources.write_buffer(&render_device, &render_queue);
-    directional_lights.write_buffer(&render_device, &render_queue);
-    local_lights.write_buffer(&render_device, &render_queue);
-    previous_frame_light_id_translations.write_buffer(&render_device, &render_queue);
+    let uploads = [
+        materials.write_buffer_changed(&render_device, &render_queue),
+        detail_parameters.write_buffer_changed(&render_device, &render_queue),
+        transforms.write_buffer_changed(&render_device, &render_queue),
+        previous_frame_transforms.write_buffer_changed(&render_device, &render_queue),
+        geometry_ids.write_buffer_changed(&render_device, &render_queue),
+        material_ids.write_buffer_changed(&render_device, &render_queue),
+        light_sources.write_buffer_changed(&render_device, &render_queue),
+        directional_lights.write_buffer_changed(&render_device, &render_queue),
+        local_lights.write_buffer_changed(&render_device, &render_queue),
+        previous_frame_light_id_translations.write_buffer_changed(&render_device, &render_queue),
+    ];
+    bevy_render::diagnostic::profile_value(
+        "scene.upload_bytes",
+        uploads.iter().map(|u| u.bytes as f64).sum(),
+        "bytes",
+    );
+    bevy_render::diagnostic::profile_value(
+        "scene.upload_ranges",
+        uploads.iter().map(|u| f64::from(u.ranges)).sum(),
+        "count",
+    );
+    bevy_render::diagnostic::profile_value(
+        "scene.buffer_allocations",
+        uploads.iter().filter(|u| u.allocated).count() as f64,
+        "count",
+    );
     drop(upload_profile);
 
     let mut command_encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
@@ -630,7 +678,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     use bevy_render::diagnostic::RecordDiagnostics;
     let diagnostics = diagnostics.as_deref();
     let span = diagnostics.time_span(&mut command_encoder, "scene/tlas_build");
-    command_encoder.build_acceleration_structures(&[], [&tlas]);
+    command_encoder.build_acceleration_structures(&[], [&*tlas]);
     span.end(&mut command_encoder);
     render_queue.submit([command_encoder.finish()]);
 
@@ -666,7 +714,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         ));
     // A storage buffer: wgpu refuses a uniform buffer in a bind group that
     // also holds binding arrays (the textures and mesh slabs above).
-    let mut sky_buffer = StorageBuffer::from(GpuSkyLight {
+    sky_buffer.set(GpuSkyLight {
         intensity: sky_shader_intensity(sky_light.intensity, sky_image.is_some()),
         ray_max_distance: ray_settings.max_distance(),
         relative_ray_min: ray_settings.relative_min_distance(),
@@ -677,9 +725,9 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             weather_image.is_some(),
         ),
     });
-    sky_buffer.write_buffer(&render_device, &render_queue);
-    let mut ring_buffer = StorageBuffer::from(rings.0.clone());
-    ring_buffer.write_buffer(&render_device, &render_queue);
+    sky_buffer.write_buffer_changed(&render_device, &render_queue);
+    ring_buffer.set(rings.0.clone());
+    ring_buffer.write_buffer_changed(&render_device, &render_queue);
 
     if scan_textures.is_empty() {
         scan_textures
@@ -1024,7 +1072,7 @@ impl GpuDirectionalLight {
 }
 
 /// Mirrors `SkyLight` in `raytracing_scene_bindings.wgsl`.
-#[derive(ShaderType)]
+#[derive(ShaderType, Default)]
 struct GpuSkyLight {
     intensity: f32,
     ray_max_distance: f32,
@@ -1034,7 +1082,7 @@ struct GpuSkyLight {
 }
 
 /// Mirrors `LightMedium` in `light_medium.wgsl`. Metres.
-#[derive(ShaderType, Clone, Copy, Debug, PartialEq)]
+#[derive(ShaderType, Clone, Copy, Debug, PartialEq, Default)]
 struct GpuLightMedium {
     centre: Vec3,
     radius: f32,

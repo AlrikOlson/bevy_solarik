@@ -564,23 +564,39 @@ pub fn prepare_meshlet_per_frame_resources(
         }
     }
     if instance_manager.instance_upload_dirty {
-        instance_manager
-            .instance_cutouts
-            .write_buffer(&render_device, &render_queue);
-
         // TODO: Move this and the submit to a separate system and remove pub from the fields
-        instance_manager
-            .instance_uniforms
-            .write_buffer(&render_device, &render_queue);
-        instance_manager
-            .instance_aabbs
-            .write_buffer(&render_device, &render_queue);
-        instance_manager
-            .instance_material_ids
-            .write_buffer(&render_device, &render_queue);
-        instance_manager
-            .instance_bvh_root_nodes
-            .write_buffer(&render_device, &render_queue);
+        let uploads = [
+            instance_manager
+                .instance_cutouts
+                .write_buffer_changed(&render_device, &render_queue),
+            instance_manager
+                .instance_uniforms
+                .write_buffer_changed(&render_device, &render_queue),
+            instance_manager
+                .instance_aabbs
+                .write_buffer_changed(&render_device, &render_queue),
+            instance_manager
+                .instance_material_ids
+                .write_buffer_changed(&render_device, &render_queue),
+            instance_manager
+                .instance_bvh_root_nodes
+                .write_buffer_changed(&render_device, &render_queue),
+        ];
+        bevy_render::diagnostic::profile_value(
+            "meshlet.upload_bytes",
+            uploads.iter().map(|u| u.bytes as f64).sum(),
+            "bytes",
+        );
+        bevy_render::diagnostic::profile_value(
+            "meshlet.upload_ranges",
+            uploads.iter().map(|u| f64::from(u.ranges)).sum(),
+            "count",
+        );
+        bevy_render::diagnostic::profile_value(
+            "meshlet.buffer_allocations",
+            uploads.iter().filter(|u| u.allocated).count() as f64,
+            "count",
+        );
 
         instance_manager.instance_upload_dirty = false;
         bevy_render::diagnostic::profile_value("meshlet.instance_uploads", 1.0, "count");

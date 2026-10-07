@@ -4,6 +4,7 @@ pub mod collimated;
 mod extract;
 mod light_sampling;
 mod ray_settings;
+mod tlas;
 mod types;
 
 use bevy_shader::load_shader_library;
