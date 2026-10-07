@@ -36,6 +36,12 @@ pub const MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR: u8 = 4;
 
 const CENTIMETERS_PER_METER: f32 = 100.0;
 
+#[path = "lod_area.rs"]
+mod lod_area;
+#[path = "lod_attributes.rs"]
+mod lod_attributes;
+#[path = "lod_spatial.rs"]
+mod lod_spatial;
 #[path = "tangent_data.rs"]
 mod tangent_data;
 
@@ -74,13 +80,31 @@ impl MeshletMesh {
         let tangents = tangent_data::source_tangents(mesh)?;
         let mut geometry = mesh.clone();
         geometry.remove_attribute(Mesh::ATTRIBUTE_TANGENT);
-        Self::from_geometry(&geometry, vertex_position_quantization_factor, tangents)
+        Self::from_geometry(
+            &geometry,
+            vertex_position_quantization_factor,
+            tangents,
+            false,
+        )
+    }
+
+    /// Preserve boundary area in foliage LODs. Source geometry is never modified.
+    /// Only use for leaf surfaces; dilation is unsuitable for solid architecture.
+    pub fn from_mesh_preserve_area(
+        mesh: &Mesh,
+        precision: u8,
+    ) -> Result<Self, MeshToMeshletMeshConversionError> {
+        let tangents = tangent_data::source_tangents(mesh)?;
+        let mut geometry = mesh.clone();
+        geometry.remove_attribute(Mesh::ATTRIBUTE_TANGENT);
+        Self::from_geometry(&geometry, precision, tangents, true)
     }
 
     fn from_geometry(
         mesh: &Mesh,
         vertex_position_quantization_factor: u8,
         source_tangents: Option<&[[f32; 4]]>,
+        preserve_area: bool,
     ) -> Result<Self, MeshToMeshletMeshConversionError> {
         let s = debug_span!("build meshlet mesh");
         let _e = s.enter();
@@ -89,17 +113,27 @@ impl MeshletMesh {
         let indices = validate_input_mesh(mesh)?;
 
         // Get meshlet vertices
-        let vertex_buffer = mesh.create_packed_vertex_buffer_data();
+        let mut vertex_buffer = mesh.create_packed_vertex_buffer_data();
+        let mut source_tangents = source_tangents.map(<[_]>::to_vec);
         let vertex_stride = mesh.get_vertex_size() as usize;
         let vertices = VertexDataAdapter::new(&vertex_buffer, vertex_stride, 0).unwrap();
-        let vertex_normals = bytemuck::cast_slice(&vertex_buffer[12..16]);
+        let attribute_weights = lod_attributes::weights(
+            bytemuck::cast_slice(&vertex_buffer),
+            vertex_stride / 4,
+            &indices,
+        );
 
         // Generate a position-only vertex buffer for determining triangle/meshlet connectivity
-        let position_only_vertex_remap = generate_position_remap(&vertices);
+        let mut position_only_vertex_remap = generate_position_remap(&vertices);
 
         // Split the mesh into an initial list of meshlets (LOD 0)
-        let (mut meshlets, mut cull_data) =
-            compute_meshlets(&indices, &vertices, &position_only_vertex_remap, None);
+        let (mut meshlets, mut cull_data) = compute_meshlets(
+            &indices,
+            &vertices,
+            &position_only_vertex_remap,
+            None,
+            preserve_area,
+        );
 
         let mut vertex_locks = vec![false; vertices.vertex_count];
 
@@ -108,7 +142,12 @@ impl MeshletMesh {
         let mut all_groups = Vec::new();
         let mut simplification_queue: Vec<_> = (0..meshlets.len() as u32).collect();
         let mut stuck = Vec::new();
+        let mut diagnostic_level = 0;
         while !simplification_queue.is_empty() {
+            diagnostic_level += 1;
+            let vertices = VertexDataAdapter::new(&vertex_buffer, vertex_stride, 0).unwrap();
+            let vertex_normals = bytemuck::cast_slice(&vertex_buffer[12..]);
+            vertex_locks.resize(vertices.vertex_count, false);
             let s = debug_span!("simplify lod", meshlets = simplification_queue.len());
             let _e = s.enter();
 
@@ -125,6 +164,7 @@ impl MeshletMesh {
                 &simplification_queue,
                 &cull_data,
                 &connected_meshlets_per_meshlet,
+                preserve_area,
             );
             simplification_queue.clear();
 
@@ -148,42 +188,81 @@ impl MeshletMesh {
                 let _e = s.enter();
 
                 // Simplify the group to ~50% triangle count
-                let Some((simplified_group_indices, mut group_error)) = simplify_meshlet_group(
-                    &group,
-                    &meshlets,
-                    &vertices,
-                    vertex_normals,
-                    vertex_stride,
-                    &vertex_locks,
-                ) else {
+                let Some((simplified_group_indices, mut group_error, dilation)) =
+                    simplify_meshlet_group(
+                        &group,
+                        &meshlets,
+                        &vertices,
+                        vertex_normals,
+                        &attribute_weights,
+                        vertex_stride,
+                        &vertex_locks,
+                        &position_only_vertex_remap,
+                        preserve_area,
+                    )
+                else {
                     // Couldn't simplify the group enough
                     return Err(group);
                 };
 
                 // Force the group error to be atleast as large as all of its constituent meshlet's
                 // individual errors.
-                for &id in group.meshlets.iter() {
-                    group_error = group_error.max(cull_data[id as usize].error);
-                }
+                let inherited_error = group
+                    .meshlets
+                    .iter()
+                    .map(|&id| cull_data[id as usize].error)
+                    .fold(0.0_f32, f32::max);
+                let local_error = group_error;
+                // Match the monotonic perceptual error merge in meshoptimizer's
+                // clusterlod reference (c313abae, default merge_previous=1).
+                // This is an LOD estimate, not a Hausdorff displacement bound.
+                group_error = group_error.max(inherited_error);
                 group.parent_error = group_error;
 
-                // Build new meshlets using the simplified group
-                let new_meshlets = compute_meshlets(
-                    &simplified_group_indices,
-                    &vertices,
-                    &position_only_vertex_remap,
-                    Some((group.lod_bounds, group.parent_error)),
-                );
-
-                Ok((group, new_meshlets))
+                Ok((
+                    group,
+                    simplified_group_indices,
+                    dilation,
+                    local_error,
+                    inherited_error,
+                ))
             });
 
             let first_group = all_groups.len() as u32;
             let mut passed_tris = 0;
             let mut stuck_tris = 0;
+            let mut diagnostic_errors = Vec::new();
             for group in simplified {
                 match group {
-                    Ok((group, (new_meshlets, new_cull_data))) => {
+                    Ok((mut group, mut reduced, dilation, local_error, inherited_error)) => {
+                        let displacement = append_dilated_vertices(
+                            &mut vertex_buffer,
+                            vertex_stride,
+                            &mut source_tangents,
+                            &mut position_only_vertex_remap,
+                            &mut reduced,
+                            &dilation,
+                        );
+                        group.parent_error = inherited_error.max(local_error + displacement);
+                        if tracing::enabled!(tracing::Level::DEBUG) {
+                            diagnostic_errors.push([local_error, inherited_error, displacement]);
+                        }
+                        for &(_, point) in &dilation {
+                            group.lod_bounds = merge_spheres(
+                                group.lod_bounds,
+                                BoundingSphere::new(point, f32::EPSILON),
+                            );
+                            group.aabb = group.aabb.merge(&Aabb3d::new(point, Vec3::ZERO));
+                        }
+                        let vertices =
+                            VertexDataAdapter::new(&vertex_buffer, vertex_stride, 0).unwrap();
+                        let (new_meshlets, new_cull_data) = compute_meshlets(
+                            &reduced,
+                            &vertices,
+                            &position_only_vertex_remap,
+                            Some((group.lod_bounds, group.parent_error)),
+                            preserve_area,
+                        );
                         let start = meshlets.len();
                         merge_meshlets(&mut meshlets, new_meshlets);
                         cull_data.extend(new_cull_data);
@@ -201,6 +280,14 @@ impl MeshletMesh {
                     }
                 }
             }
+            report_lod_errors(diagnostic_level, preserve_area, &diagnostic_errors);
+            tracing::debug!(
+                level = diagnostic_level,
+                foliage = preserve_area,
+                passed_tris,
+                stuck_tris,
+                "LOD reduction progress"
+            );
 
             // If we have enough triangles that passed, we can retry simplifying the stuck
             // meshlets.
@@ -219,6 +306,27 @@ impl MeshletMesh {
         }
 
         let (bvh, aabb, depth) = bvh.build(&mut meshlets, all_groups, &mut cull_data);
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let bins = [0.0_f32, 0.01, 0.1, 1.0, 10.0, f32::MAX];
+            let counts = bins.map(|error| {
+                bvh.iter()
+                    .map(|node| {
+                        (0..8)
+                            .filter(|&i| {
+                                node.child_counts[i] != u8::MAX && node.aabbs[i].error >= error
+                            })
+                            .map(|i| u64::from(node.child_counts[i]))
+                            .sum::<u64>()
+                    })
+                    .sum::<u64>()
+            });
+            tracing::debug!(
+                foliage = preserve_area,
+                ?bins,
+                ?counts,
+                "LOD leaf queue error thresholds (last is terminal)"
+            );
+        }
 
         // Copy vertex attributes per meshlet and compress
         let mut vertex_positions = BitVec::<u32, Lsb0>::new();
@@ -228,7 +336,9 @@ impl MeshletMesh {
         let mut bevy_meshlets = Vec::with_capacity(meshlets.len());
         for (i, meshlet) in meshlets.meshlets.iter().enumerate() {
             vertex_tangents.extend(meshlets.get(i).vertices.iter().map(|id| {
-                source_tangents.map_or(Vec4::ZERO, |values| Vec4::from_array(values[*id as usize]))
+                source_tangents
+                    .as_ref()
+                    .map_or(Vec4::ZERO, |values| Vec4::from_array(values[*id as usize]))
             }));
             build_and_compress_per_meshlet_vertex_data(
                 meshlet,
@@ -263,6 +373,28 @@ impl MeshletMesh {
             bvh_depth: depth,
         })
     }
+}
+
+fn report_lod_errors(level: usize, foliage: bool, errors: &[[f32; 3]]) {
+    if errors.is_empty() {
+        return;
+    }
+    let quantiles: [[f32; 3]; 3] = core::array::from_fn(|component| {
+        let mut values: Vec<_> = errors.iter().map(|e| e[component]).collect();
+        values.sort_unstable_by(f32::total_cmp);
+        [
+            values[values.len() / 2],
+            values[values.len() * 9 / 10],
+            values[values.len() - 1],
+        ]
+    });
+    tracing::debug!(
+        level,
+        foliage,
+        groups = errors.len(),
+        ?quantiles,
+        "Meshlet LOD error local/inherited/dilation [p50,p90,max]"
+    );
 }
 
 fn validate_input_mesh(mesh: &Mesh) -> Result<Cow<'_, [u32]>, MeshToMeshletMeshConversionError> {
@@ -300,7 +432,33 @@ fn compute_meshlets(
     vertices: &VertexDataAdapter,
     position_only_vertex_remap: &[u32],
     prev_lod_data: Option<(BoundingSphere, f32)>,
+    spatial: bool,
 ) -> (Meshlets, Vec<TempMeshletCullData>) {
+    if spatial {
+        let points: Vec<_> = indices
+            .chunks_exact(3)
+            .map(|t| {
+                t.iter()
+                    .map(|&i| {
+                        let offset = vertices.position_offset + i as usize * vertices.vertex_stride;
+                        *bytemuck::from_bytes::<Vec3>(
+                            &vertices.reader.get_ref()[offset..offset + 12],
+                        )
+                    })
+                    .sum::<Vec3>()
+                    / 3.0
+            })
+            .collect();
+        let partitions = lod_spatial::partition(&points, 126)
+            .into_iter()
+            .map(|ids| {
+                ids.into_iter()
+                    .flat_map(|i| indices[i * 3..i * 3 + 3].iter().copied())
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        return build_partitioned_meshlets(&partitions, vertices, prev_lod_data);
+    }
     // For each vertex, build a list of all triangles that use it
     let mut vertices_to_triangles = vec![Vec::new(); position_only_vertex_remap.len()];
     for (i, index) in indices.iter().enumerate() {
@@ -372,6 +530,14 @@ fn compute_meshlets(
         meshlet_indices.extend_from_slice(&indices[base_index..(base_index + 3)]);
     }
 
+    build_partitioned_meshlets(&indices_per_meshlet, vertices, prev_lod_data)
+}
+
+fn build_partitioned_meshlets(
+    indices_per_meshlet: &[Vec<u32>],
+    vertices: &VertexDataAdapter,
+    prev_lod_data: Option<(BoundingSphere, f32)>,
+) -> (Meshlets, Vec<TempMeshletCullData>) {
     // Use meshopt to build meshlets from the sets of triangles
     let mut meshlets = Meshlets {
         meshlets: Vec::new(),
@@ -385,7 +551,7 @@ fn compute_meshlets(
                 [vertices.position_offset + v as usize * vertices.vertex_stride..][..12],
         )
     };
-    for meshlet_indices in &indices_per_meshlet {
+    for meshlet_indices in indices_per_meshlet {
         let meshlet = build_meshlets(meshlet_indices, vertices, 256, 128, 0.0);
         for meshlet in meshlet.iter() {
             let (lod_group_sphere, error) = prev_lod_data.unwrap_or_else(|| {
@@ -460,7 +626,28 @@ fn group_meshlets(
     simplification_queue: &[u32],
     meshlet_cull_data: &[TempMeshletCullData],
     connected_meshlets_per_meshlet: &[Vec<(usize, usize)>],
+    spatial: bool,
 ) -> Vec<TempMeshletGroup> {
+    if spatial {
+        let points: Vec<_> = simplification_queue
+            .iter()
+            .map(|&i| Vec3::from(meshlet_cull_data[i as usize].aabb.center()))
+            .collect();
+        return lod_spatial::partition(&points, TARGET_MESHLETS_PER_GROUP)
+            .into_iter()
+            .map(|ids| {
+                let mut group = TempMeshletGroup::default();
+                for i in ids {
+                    let id = simplification_queue[i];
+                    let data = &meshlet_cull_data[id as usize];
+                    group.meshlets.push(id);
+                    group.aabb = group.aabb.merge(&data.aabb);
+                    group.lod_bounds = merge_spheres(group.lod_bounds, data.lod_group_sphere);
+                }
+                group
+            })
+            .collect();
+    }
     let mut xadj = Vec::with_capacity(simplification_queue.len() + 1);
     let mut adjncy = Vec::new();
     let mut adjwgt = Vec::new();
@@ -542,9 +729,12 @@ fn simplify_meshlet_group(
     meshlets: &Meshlets,
     vertices: &VertexDataAdapter<'_>,
     vertex_normals: &[f32],
+    attribute_weights: &[f32],
     vertex_stride: usize,
     vertex_locks: &[bool],
-) -> Option<(Vec<u32>, f32)> {
+    remap: &[u32],
+    preserve_area: bool,
+) -> Option<(Vec<u32>, f32, Vec<(u32, Vec3)>)> {
     // Build a new index buffer into the mesh vertex data by combining all meshlet data in the group
     let group_indices = group
         .meshlets
@@ -564,12 +754,18 @@ fn simplify_meshlet_group(
         &group_indices,
         vertices,
         vertex_normals,
-        &[0.5; 3],
+        attribute_weights,
         vertex_stride,
         vertex_locks,
         group_indices.len() / 2,
         f32::MAX,
-        SimplifyOptions::Sparse | SimplifyOptions::ErrorAbsolute,
+        SimplifyOptions::Sparse
+            | SimplifyOptions::ErrorAbsolute
+            | if preserve_area {
+                SimplifyOptions::ErrorClamped
+            } else {
+                SimplifyOptions::empty()
+            },
         Some(&mut error),
     );
 
@@ -580,7 +776,53 @@ fn simplify_meshlet_group(
         return None;
     }
 
-    Some((simplified_group_indices, error))
+    let dilation = if preserve_area {
+        lod_area::dilate(
+            bytemuck::cast_slice(vertices.reader.get_ref()),
+            vertex_stride / 4,
+            &group_indices,
+            &simplified_group_indices,
+            remap,
+            vertex_locks,
+        )
+    } else {
+        Vec::new()
+    };
+    Some((simplified_group_indices, error, dilation))
+}
+
+fn append_dilated_vertices(
+    buffer: &mut Vec<u8>,
+    stride: usize,
+    tangents: &mut Option<Vec<[f32; 4]>>,
+    remap: &mut Vec<u32>,
+    indices: &mut [u32],
+    changes: &[(u32, Vec3)],
+) -> f32 {
+    let mut ids = HashMap::<u32, u32>::default();
+    let mut canonical = HashMap::<u32, u32>::default();
+    let mut displacement = 0.0_f32;
+    for &(old, point) in changes {
+        let start = old as usize * stride;
+        let original = *bytemuck::from_bytes::<Vec3>(&buffer[start..start + 12]);
+        displacement = displacement.max(original.distance(point));
+        let new = (buffer.len() / stride) as u32;
+        buffer.extend_from_within(start..start + stride);
+        let offset = new as usize * stride;
+        buffer[offset..offset + 12].copy_from_slice(bytemuck::bytes_of(&point));
+        let representative = *canonical.entry(remap[old as usize]).or_insert(new);
+        remap.push(representative);
+        if let Some(tangents) = tangents {
+            tangents.push(tangents[old as usize]);
+        }
+        ids.insert(old, new);
+    }
+    for id in indices {
+        if let Some(new) = ids.get(id) {
+            *id = *new;
+        }
+    }
+    displacement
 }
 
 fn merge_meshlets(meshlets: &mut Meshlets, merge: Meshlets) {

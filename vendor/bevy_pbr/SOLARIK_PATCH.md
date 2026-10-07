@@ -86,6 +86,57 @@ with its toolchain's default layout. Additional Rust source differences from
 the archive are that formatter output; they are retained under the workspace's
 format-forward policy. Manifests and both license files remain byte-identical.
 
+Perspective meshlet LOD now converts simplification error into world units,
+as the orthographic path already does. Without this conversion enlarged
+instances lose detail too early. The space-sim `meshlet_lod_gpu` Vulkan
+regression executes the production predicate for equal projected trees at
+scales 0.1, 1 and 10; it fails before the repair and passes afterward.
+
+The processor also includes UVs in its attribute error. It uses meshoptimizer's
+documented reciprocal square root of mean absolute UV triangle area as the
+automatic UV weight, without an extra tuning factor. A planar texture-kink
+regression demonstrates the previous normal-only error accepting texture
+damage at a 0.001 limit. Original positions, UVs, tangents and alpha images
+remain unchanged; this is not an aggregate foliage coverage guarantee.
+
+`from_mesh_preserve_area` is an explicit leaf-surface opt-in. Total-area
+redistribution follows the meshoptimizer author's clusterlod approach, with
+locked group seams and a moderate-shrinkage guard. Separate LOD vertices keep
+source geometry immutable. Bounds include displaced vertices; the area path
+uses max(inherited error, local simplification error + dilation displacement),
+following the monotonic merge in pinned meshoptimizer clusterlod c313abae.
+This is a perceptual LOD estimate, not a Hausdorff bound. Native near/far crown
+coverage passes the unchanged 98% requirement (98.95% / 98.24%).
+It solves triangle area along bounded boundary directions rather
+than compounding first-order area overshoot. This is approximate foliage
+coverage, not an exact alpha-visibility guarantee. Solid meshes retain the
+ordinary conversion path. `finest_lod_only` is a diagnostic copy for isolating
+LOD loss and deliberately forfeits LOD savings.
+
+The conservation objective includes interior triangles: selecting only
+boundary-adjacent triangle area made an unchanged retriangulation expand and
+restored only 3/4 of a grid's surface. Both cases have RED/GREEN regressions.
+Only unlocked open-boundary vertices move, consistent with Epic's documented
+Nanite Preserve Area operation. Total area does not guarantee projected cover.
+
+meshopt 0.6.2 is now vendored at `../meshopt`, with its upstream ErrorClamped
+attribute-quadric correction exposed only to foliage. See its SOLARIK_PATCH.md
+for pinned provenance and licenses. Opt-in debug counters report local,
+inherited and dilation errors plus finite/terminal queue costs.
+
+The opt-in foliage path partitions triangle centroids and meshlet centers by
+balanced longest-axis spatial splits. Shared-vertex-only METIS grouping has
+no locality constraint for disconnected leaves; redistribution must remain
+local to avoid exchanging coverage between unrelated branches. Existing
+126-triangle and eight-meshlet capacities remain. Solid meshes retain METIS.
+
+`MeshletMesh::workset_profile` supplies a conservative distance-dependent
+queue-write bound for perspective views. It includes every BVH child and
+meshlet, with no assumed frustum or occlusion savings. Consumers must bound
+all active view projections and scales, use all-LOD admission for unsupported
+views, and account for positional uncertainty. This does not change GPU queue
+capacity, preserve aggregate foliage coverage, or establish frame-time targets.
+
 Regression evidence is the space-sim native vegetation virtual-geometry probe
 with WGPU validation enabled, deferred shading, Solarik, and DLSS. Headless
 geometry tests cannot exercise this GPU binding failure. Acceptance requires

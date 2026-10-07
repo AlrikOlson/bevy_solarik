@@ -13,6 +13,8 @@ mod persistent_buffer_impls;
 mod pipelines;
 mod resource_manager;
 mod visibility_buffer_raster_node;
+mod workset;
+pub use workset::MeshletWorkset;
 
 pub(crate) use self::{
     instance_manager::{InstanceManager, queue_material_meshlet_meshes},

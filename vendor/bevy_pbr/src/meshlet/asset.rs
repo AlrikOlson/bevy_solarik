@@ -63,6 +63,23 @@ pub struct MeshletMesh {
 }
 
 impl MeshletMesh {
+    /// Diagnostic copy retaining only the finest geometry at every viewing distance.
+    /// This deliberately disables LOD savings; do not use for production residency.
+    pub fn finest_lod_only(&self) -> Self {
+        let mut mesh = self.clone();
+        for node in Arc::make_mut(&mut mesh.bvh) {
+            for bounds in &mut node.aabbs {
+                bounds.error = f32::MAX;
+            }
+        }
+        for data in Arc::make_mut(&mut mesh.meshlet_cull_data) {
+            if data.aabb.error > 0.0 {
+                data.aabb.error = f32::MAX;
+            }
+        }
+        mesh
+    }
+
     /// Number of stored meshlets across all generated LODs.
     pub fn meshlet_count(&self) -> usize {
         self.meshlets.len()
