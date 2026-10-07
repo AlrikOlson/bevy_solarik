@@ -435,6 +435,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     }
 
     let mut instance_id = 0;
+    let mut material_transport_flags = 0;
     for (entity, mesh, material, transform, previous_frame_transform) in &instances_query {
         let Some(blas) = blas_manager.get(&mesh.id()) else {
             continue;
@@ -452,6 +453,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             continue;
         };
 
+        material_transport_flags |= material.flags;
         raytracing_scene_bindings.has_foliage |= alpha_testing.0 && (material.flags >> 16) != 0;
         if alpha_testing.0
             && material.flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND) != 0
@@ -668,7 +670,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         intensity: sky_shader_intensity(sky_light.intensity, sky_image.is_some()),
         ray_max_distance: ray_settings.max_distance(),
         relative_ray_min: ray_settings.relative_min_distance(),
-        _padding: 0.0,
+        material_transport_flags,
         medium: GpuLightMedium::new(
             planet.as_deref(),
             atmosphere.as_deref(),
@@ -1027,7 +1029,7 @@ struct GpuSkyLight {
     intensity: f32,
     ray_max_distance: f32,
     relative_ray_min: f32,
-    _padding: f32,
+    material_transport_flags: u32,
     medium: GpuLightMedium,
 }
 

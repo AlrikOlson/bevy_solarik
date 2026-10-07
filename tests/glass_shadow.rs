@@ -49,38 +49,54 @@ fn glass_shadow_gpu() {
         });
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         // alpha, count, distance, diffuse coverage, opaque blocker, incidence cosine.
-        for [alpha, count, distance, diffuse, opaque, cosine] in [
-            [1.0f32, 0.0, 10.0, 0.0, 0.0, 1.0],
-            [1.0, 1.0, 10.0, 0.0, 0.0, 1.0],
-            [0.0, 1.0, 10.0, 0.0, 0.0, 1.0],
-            [0.35, 1.0, 10.0, 0.0, 0.0, 1.0],
-            [1.0, 4.0, 10.0, 0.0, 0.0, 1.0],
-            [1.0, 32.0, 40.0, 0.0, 0.0, 1.0],
-            [1.0, 33.0, 40.0, 0.0, 0.0, 1.0],
-            [1.0, 1.0, 0.5, 0.0, 0.0, 1.0],
-            [1.0, 1.0, 10.0, 0.0, 1.0, 1.0],
-            [0.35, 2.0, 10.0, 1.0, 0.0, 1.0],
-            [1.0, 1.0, 10.0, 1.0, 0.0, 1.0],
-            [1.0, 1.0, 10.0, 0.0, 0.0, 0.5],
-            [0.35, 2.0, 10.0, 2.0, 0.0, 1.0],
-            [1.0, 1.0, 10.0, 2.0, 0.0, 1.0],
+        for [
+            alpha,
+            count,
+            distance,
+            diffuse,
+            opaque,
+            cosine,
+            fast_kind,
+            already_visible,
+        ] in [
+            [1.0f32, 0.0, 10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 1.0, 10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [0.35, 1.0, 10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 4.0, 10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 32.0, 40.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 33.0, 40.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 10.0, 0.0, 1.0, 1.0, 0.0, 0.0],
+            [0.35, 2.0, 10.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 10.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 10.0, 0.0, 0.0, 0.5, 0.0, 0.0],
+            [0.35, 2.0, 10.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 10.0, 2.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 10.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 10.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 0.5, 0.0, 0.0, 1.0, 1.0, 0.0],
+            [0.4, 1.0, 10.0, 0.0, 0.0, 1.0, 2.0, 0.0],
+            [0.5, 1.0, 10.0, 0.0, 0.0, 1.0, 2.0, 0.0],
+            [1.0, 0.0, 10.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.4, 0.0, 10.0, 0.0, 0.0, 1.0, 2.0, 1.0],
         ] {
             let tint = [0.2f32, 0.5, 0.8];
             let input = [
                 [tint[0], tint[1], tint[2], alpha],
                 [0.5, count, distance, diffuse],
-                [opaque, cosine, 0.0, 0.0],
+                [opaque, cosine, fast_kind, already_visible],
             ];
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
@@ -108,7 +124,7 @@ fn glass_shadow_gpu() {
                 pass.set_bind_group(0, &group, &[]);
                 pass.dispatch_workgroups(1, 1, 1);
             }
-            encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, 16);
+            encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, 32);
             queue.submit([encoder.finish()]);
             let (sender, receiver) = std::sync::mpsc::channel();
             readback.slice(..).map_async(wgpu::MapMode::Read, move |r| {
@@ -124,7 +140,7 @@ fn glass_shadow_gpu() {
             let reflection = 2.0 * f / (1.0 + f);
             let blocked = opaque > 0.0 || count > 32.0;
             let panes = if distance < 1.0 { 0 } else { count as i32 };
-            for (i, value) in result.iter().enumerate() {
+            for (i, value) in result[..4].iter().enumerate() {
                 let single = if diffuse >= 2.0 {
                     1.0
                 } else if diffuse > 0.0 {
@@ -134,10 +150,24 @@ fn glass_shadow_gpu() {
                 } else {
                     1.0 - alpha + alpha * (1.0 - reflection) * tint[i]
                 };
-                let expected = if blocked { 0.0 } else { single.powi(panes) };
+                let expected = if fast_kind > 0.0 {
+                    let solid = fast_kind == 1.0 || alpha >= 0.5;
+                    u32::from(already_visible > 0.0 || panes == 0 || !solid) as f32
+                } else if blocked {
+                    0.0
+                } else {
+                    single.powi(panes)
+                };
                 assert!(
                     (*value - expected).abs() < 2e-5,
                     "case {input:?}: {result:?}, channel{i} expected{expected}"
+                );
+            }
+            if fast_kind > 0.0 || opaque > 0.0 {
+                assert_eq!(
+                    &result[4..],
+                    &[0.0, u32::from(already_visible == 0.0) as f32, 0.0, 0.0],
+                    "opaque/masked transport must skip pane queries and full shading"
                 );
             }
             drop(data);

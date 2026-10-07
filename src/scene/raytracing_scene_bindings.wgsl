@@ -121,7 +121,7 @@ struct SkyLight {
     intensity: f32,
     ray_max_distance: f32,
     relative_ray_min: f32,
-    _padding: f32,
+    material_transport_flags: u32,
     // The air of the planet the scene stands on, which directional light
     // crosses on its way to a surface. No medium when its radius is zero.
     medium: LightMedium,

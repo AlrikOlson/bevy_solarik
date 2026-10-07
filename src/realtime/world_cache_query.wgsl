@@ -100,10 +100,11 @@ fn query_world_cache(world_position_in: vec3<f32>, world_normal: vec3<f32>, view
             // Cell is empty - initialize it
             world_cache_geometry_data[key].world_position = world_position;
             world_cache_geometry_data[key].world_normal = world_normal;
+            world_cache_geometry_data[key].last_traced_frame = 0u;
             return vec3(0.0);
         } else {
             // Collision - linear probe to next entry
-            key += 1u;
+            key = wrap_key(key + 1u);
         }
     }
 
@@ -139,12 +140,15 @@ fn compute_key(world_position: vec3<u32>, world_normal: vec3<u32>) -> u32 {
 }
 
 fn compute_checksum(world_position: vec3<u32>, world_normal: vec3<u32>) -> u32 {
-    var key = iqint_hash(world_position.x);
-    key = iqint_hash(key + world_position.y);
-    key = iqint_hash(key + world_position.z);
-    key = iqint_hash(key + world_normal.x);
-    key = iqint_hash(key + world_normal.y);
-    key = iqint_hash(key + world_normal.z);
+    // Domain-separated PCG preserves all input bits. The former odd-polynomial
+    // chain erased the sign bit of subsequent float coordinates/normals, so
+    // opposite leaf hemispheres could alias when their table probes collided.
+    var key = pcg_hash(world_position.x ^ 0x9E3779B9u);
+    key = pcg_hash(key + world_position.y);
+    key = pcg_hash(key + world_position.z);
+    key = pcg_hash(key + world_normal.x);
+    key = pcg_hash(key + world_normal.y);
+    key = pcg_hash(key + world_normal.z);
     return max(key, 1u); // 0u is reserved for WORLD_CACHE_EMPTY_CELL
 }
 
@@ -152,11 +156,6 @@ fn pcg_hash(input: u32) -> u32 {
     let state = input * 747796405u + 2891336453u;
     let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
-}
-
-fn iqint_hash(input: u32) -> u32 {
-    let n = (input << 13u) ^ input;
-    return n * (n * n * 15731u + 789221u) + 1376312589u;
 }
 
 fn wrap_key(key: u32) -> u32 {

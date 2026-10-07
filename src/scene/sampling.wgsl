@@ -6,6 +6,7 @@ enable wgpu_ray_query;
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
 #import bevy_render::maths::{PI_2, orthonormalize}
 #import bevy_solarik::thin_glass::thin_glass_weights
+#import bevy_solarik::scene_bindings::sky_light
 #import bevy_solarik::scene_bindings::{directional_light_transmittance, trace_glass_ray, resolve_ray_hit_full, MATERIAL_FLAG_ALPHA_BLEND, trace_ray, RAY_T_MIN, ray_max_distance, light_sources, directional_lights, local_lights, LightSource, LIGHT_SOURCE_KIND_DIRECTIONAL, light_source_is_emissive_mesh, resolve_triangle_data_full, materials, material_ids, resolve_material_alpha, MATERIAL_FLAG_DIFFUSE_BLEND, ResolvedRayHitFull, MIRROR_ROUGHNESS_THRESHOLD}
 
 fn power_heuristic(f: f32, g: f32) -> f32 {
@@ -424,6 +425,14 @@ fn trace_shadow_transmission(origin: vec3<f32>, direction: vec3<f32>, ray_t_max:
 
 // GI endpoint/visibility tracing already samples diffuse alpha coverage.
 fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t_max: f32, include_coverage: bool) -> vec4<f32> {
+    // Only actual admitted TLAS materials decide this shortcut. Mixed panes
+    // and diffuse coverage retain the complete ordered transport below.
+    if (sky_light.material_transport_flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) == 0u {
+        // Both false callers have already traced visibility/the GI endpoint.
+        if !include_coverage || ray_t_max < RAY_T_MIN { return vec4(1.0); }
+        let hit = trace_ray(origin, direction, RAY_T_MIN, ray_t_max, RAY_FLAG_TERMINATE_ON_FIRST_HIT);
+        return vec4(select(0.0, 1.0, hit.kind == RAY_QUERY_INTERSECTION_NONE));
+    }
     var transmission = vec4(1.0);
     var ray_t_min = RAY_T_MIN;
     for (var panes = 0u; panes <= 32u; panes += 1u) {

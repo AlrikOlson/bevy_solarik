@@ -47,6 +47,10 @@ pub struct SolarikLightingPipelines {
     compact_world_cache_single_block_pipeline: CachedComputePipelineId,
     compact_world_cache_blocks_pipeline: CachedComputePipelineId,
     compact_world_cache_write_active_cells_pipeline: CachedComputePipelineId,
+    clear_world_cache_priority_pipeline: CachedComputePipelineId,
+    histogram_world_cache_priority_pipeline: CachedComputePipelineId,
+    budget_world_cache_priority_pipeline: CachedComputePipelineId,
+    select_world_cache_priority_pipeline: CachedComputePipelineId,
     sample_di_for_world_cache_pipeline: CachedComputePipelineId,
     sample_gi_for_world_cache_pipeline: CachedComputePipelineId,
     blend_new_world_cache_samples_pipeline: CachedComputePipelineId,
@@ -142,6 +146,10 @@ pub fn prepare_primary_glass(
         p.compact_world_cache_single_block_pipeline,
         p.compact_world_cache_blocks_pipeline,
         p.compact_world_cache_write_active_cells_pipeline,
+        p.clear_world_cache_priority_pipeline,
+        p.histogram_world_cache_priority_pipeline,
+        p.budget_world_cache_priority_pipeline,
+        p.select_world_cache_priority_pipeline,
         p.sample_di_for_world_cache_pipeline,
         p.sample_gi_for_world_cache_pipeline,
         p.blend_new_world_cache_samples_pipeline,
@@ -272,6 +280,10 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         Some(compact_world_cache_single_block_pipeline),
         Some(compact_world_cache_blocks_pipeline),
         Some(compact_world_cache_write_active_cells_pipeline),
+        Some(clear_world_cache_priority_pipeline),
+        Some(histogram_world_cache_priority_pipeline),
+        Some(budget_world_cache_priority_pipeline),
+        Some(select_world_cache_priority_pipeline),
         Some(sample_di_for_world_cache_pipeline),
         Some(sample_gi_for_world_cache_pipeline),
         Some(blend_new_world_cache_samples_pipeline),
@@ -297,6 +309,10 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         pipeline_cache.get_compute_pipeline(pipelines.compact_world_cache_blocks_pipeline),
         pipeline_cache
             .get_compute_pipeline(pipelines.compact_world_cache_write_active_cells_pipeline),
+        pipeline_cache.get_compute_pipeline(pipelines.clear_world_cache_priority_pipeline),
+        pipeline_cache.get_compute_pipeline(pipelines.histogram_world_cache_priority_pipeline),
+        pipeline_cache.get_compute_pipeline(pipelines.budget_world_cache_priority_pipeline),
+        pipeline_cache.get_compute_pipeline(pipelines.select_world_cache_priority_pipeline),
         pipeline_cache.get_compute_pipeline(pipelines.sample_di_for_world_cache_pipeline),
         pipeline_cache.get_compute_pipeline(pipelines.sample_gi_for_world_cache_pipeline),
         pipeline_cache.get_compute_pipeline(pipelines.blend_new_world_cache_samples_pipeline),
@@ -403,8 +419,9 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         )
     });
 
-    // Choice of number here is arbitrary
+    // Preserve the stochastic seed; cache scheduling needs a separate clock.
     let frame_index = frame_count.0.wrapping_mul(5782582);
+    let render_frame = frame_count.0;
 
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
@@ -449,13 +466,13 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         if let Some(pipeline) = foliage_pipeline.filter(|_| scene_bindings.has_foliage) {
             let span = diagnostics.time_span(&mut pass, "solarik_lighting/primary_foliage");
             pass.set_pipeline(pipeline);
-            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32]));
+            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32, render_frame]));
             pass.dispatch_workgroups(dx, dy, 1);
             span.end(&mut pass);
         }
         if let Some(pipeline) = primary_pipeline.filter(|_| owns_glass) {
             pass.set_pipeline(pipeline);
-            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32]));
+            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32, render_frame]));
             pass.dispatch_workgroups(dx, dy, 1);
         }
         return;
@@ -479,7 +496,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(presample_light_tiles_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups(LIGHT_TILE_BLOCKS as u32, 1, 1);
     d.end(&mut pass);
@@ -491,7 +508,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(decay_world_cache_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups((WORLD_CACHE_SIZE / 1024) as u32, 1, 1);
 
@@ -504,12 +521,21 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(compact_world_cache_write_active_cells_pipeline);
     pass.dispatch_workgroups((WORLD_CACHE_SIZE / 1024) as u32, 1, 1);
 
+    pass.set_pipeline(clear_world_cache_priority_pipeline);
+    pass.dispatch_workgroups(1, 1, 1);
+    pass.set_pipeline(histogram_world_cache_priority_pipeline);
+    pass.dispatch_workgroups((WORLD_CACHE_SIZE / 256) as u32, 1, 1);
+    pass.set_pipeline(budget_world_cache_priority_pipeline);
+    pass.dispatch_workgroups(1, 1, 1);
+    pass.set_pipeline(select_world_cache_priority_pipeline);
+    pass.dispatch_workgroups((WORLD_CACHE_SIZE / 256) as u32, 1, 1);
+
     pass.set_bind_group(2, None, &[]);
 
     pass.set_pipeline(sample_di_for_world_cache_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups_indirect(
         &solarik_lighting_resources.world_cache_active_cells_dispatch,
@@ -519,7 +545,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(sample_gi_for_world_cache_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups_indirect(
         &solarik_lighting_resources.world_cache_active_cells_dispatch,
@@ -539,14 +565,14 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(di_initial_and_temporal_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
     pass.set_pipeline(di_spatial_and_shade_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
@@ -557,14 +583,14 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(gi_initial_and_temporal_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
     pass.set_pipeline(gi_spatial_and_shade_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
@@ -578,7 +604,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(specular_gi_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32]),
+        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
     d.end(&mut pass);
@@ -590,6 +616,21 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         &s.world_cache_active_cells_count.slice(..),
         "solarik_lighting/world_cache_active_cells_count",
     );
+    for (word, name) in [
+        (96, "world_cache_selected_cells"),
+        (97, "world_cache_unlit_cells"),
+        (98, "world_cache_selected_unlit"),
+        (99, "world_cache_selected_refresh"),
+        (100, "world_cache_oldest_age"),
+        (101, "world_cache_updated_cells"),
+        (102, "world_cache_reset"),
+    ] {
+        diagnostics.record_u32(
+            ctx.command_encoder(),
+            &s.world_cache_b.slice(word * 4..(word + 1) * 4),
+            format!("solarik_lighting/{name}"),
+        );
+    }
 }
 
 /// Initializes the Solarik lighting pipelines at render startup.
@@ -675,7 +716,7 @@ pub fn init_solari_lighting_pipelines(
         pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some(label.into()),
             layout,
-            immediate_size: 8,
+            immediate_size: 12,
             shader,
             shader_defs,
             entry_point: Some(entry_point.into()),
@@ -732,12 +773,40 @@ pub fn init_solari_lighting_pipelines(
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_NON_ATOMIC_LIFE_BUFFER".into()],
         ),
+        clear_world_cache_priority_pipeline: create_pipeline(
+            "solarik_lighting_clear_world_cache_priority_pipeline",
+            "clear_world_cache_priority",
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            Some(&bind_group_layout_world_cache_active_cells_dispatch),
+            vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
+        ),
+        histogram_world_cache_priority_pipeline: create_pipeline(
+            "solarik_lighting_histogram_world_cache_priority_pipeline",
+            "histogram_world_cache_priority",
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            Some(&bind_group_layout_world_cache_active_cells_dispatch),
+            vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
+        ),
+        budget_world_cache_priority_pipeline: create_pipeline(
+            "solarik_lighting_budget_world_cache_priority_pipeline",
+            "budget_world_cache_priority",
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            Some(&bind_group_layout_world_cache_active_cells_dispatch),
+            vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
+        ),
+        select_world_cache_priority_pipeline: create_pipeline(
+            "solarik_lighting_select_world_cache_priority_pipeline",
+            "select_world_cache_priority",
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            Some(&bind_group_layout_world_cache_active_cells_dispatch),
+            vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
+        ),
         sample_di_for_world_cache_pipeline: create_pipeline(
             "solarik_lighting_sample_di_for_world_cache_pipeline",
             "sample_di",
             load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wgsl"),
             None,
-            vec![],
+            vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         sample_gi_for_world_cache_pipeline: create_pipeline(
             "solarik_lighting_sample_gi_for_world_cache_pipeline",
@@ -745,6 +814,7 @@ pub fn init_solari_lighting_pipelines(
             load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wgsl"),
             None,
             vec![
+                "WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into(),
                 "WORLD_CACHE_QUERY_ATOMIC_MAX_LIFETIME".into(),
                 "FOLIAGE_TRANSMISSION".into(),
             ],
@@ -754,7 +824,7 @@ pub fn init_solari_lighting_pipelines(
             "blend_new_samples",
             load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wgsl"),
             None,
-            vec![],
+            vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         presample_light_tiles_pipeline: create_pipeline(
             "solarik_lighting_presample_light_tiles_pipeline",

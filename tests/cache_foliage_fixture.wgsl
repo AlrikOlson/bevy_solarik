@@ -18,7 +18,10 @@ struct Hit { world_position: vec3<f32>, geometric_world_normal: vec3<f32>, mater
 var<private> view = View(vec3(0.0, 0.0, 3.0));
 var<private> constants = Constants(0u);
 var<private> world_cache_active_cells_count = 1u;
-var<private> world_cache_active_cell_indices: array<u32, 1>;
+var<private> world_cache_a: array<u32, 1>;
+fn selected_world_cache_cell_count() -> u32 {
+    return select(1u, 0u, config[0].z == 3.0);
+}
 var<private> world_cache_geometry_data: array<Geometry, 1>;
 var<private> world_cache_active_cells_new_radiance: array<vec3<f32>, 1>;
 var<private> query_count = 0u;

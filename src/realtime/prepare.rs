@@ -208,7 +208,7 @@ pub fn prepare_solari_lighting_resources(
         let world_cache_b = render_device.create_buffer(&BufferDescriptor {
             label: Some("solarik_lighting_world_cache_b"),
             size: 1024 * size_of::<u32>() as u64,
-            usage: BufferUsages::STORAGE,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 

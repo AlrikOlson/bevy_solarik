@@ -218,7 +218,7 @@ fn cache_foliage_identity_gpu() {
 @group(0) @binding(1) var<storage, read_write> output: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> world_cache_life: array<atomic<u32>>;
 var<workgroup> world_cache_checksums: array<atomic<u32>, 64>;
-struct Geometry { world_position: vec3<f32>, world_normal: vec3<f32> }
+struct Geometry { world_position: vec3<f32>, last_traced_frame: u32, world_normal: vec3<f32> }
 var<private> world_cache_geometry_data: array<Geometry, 64>;
 var<private> world_cache_radiance: array<vec4<f32>, 64>;
 const WORLD_CACHE_POSITION_BASE_CELL_SIZE = 0.15;
@@ -231,6 +231,7 @@ fn probe() {
     for (var i = 0u; i < 64u; i++) { atomicStore(&world_cache_life[i], 0u); }
     let p = vec3(1.0, 2.0, 3.0);
     let n = normalize(config[0].xyz);
+    if config[1].w > 0.0 { atomicStore(&world_cache_checksums[31u], 0xFFFFFFFEu); }
     var rng = 0u;
     // Claim both sides, then populate their independent incident fields.
     let cold_front = query_world_cache(p, n, p, 1.0, 7u, &rng);
@@ -238,6 +239,7 @@ fn probe() {
     var front_key = 63u;
     var back_key = 63u;
     for (var i = 0u; i < 64u; i++) {
+        if i == 31u && config[1].w > 0.0 { continue; }
         if atomicLoad(&world_cache_checksums[i]) != 0u {
             if dot(world_cache_geometry_data[i].world_normal, n) > 0.99 {
                 front_key = i;
@@ -270,7 +272,6 @@ fn probe() {
         "compute_key",
         "compute_checksum",
         "pcg_hash",
-        "iqint_hash",
         "wrap_key",
     ] {
         source.push_str(
@@ -281,7 +282,11 @@ fn probe() {
                     "WORLD_CACHE_QUERY_ATOMIC_MAX_LIFETIME",
                 ],
             )
-            .replace("#{WORLD_CACHE_SIZE}", "32u"),
+            .replace("#{WORLD_CACHE_SIZE}", "32u")
+            .replace(
+                "return wrap_key(key);",
+                "return select(wrap_key(key), 31u, config[1].w > 0.0);",
+            ),
         );
     }
     let mut inputs = Vec::new();
@@ -293,12 +298,14 @@ fn probe() {
         [-0.5, -1.0, 0.01],
     ] {
         for t in [0.0, 0.25, 0.5, 1.0] {
-            inputs.push([
-                [normal[0], normal[1], normal[2], t],
-                [0.0; 4],
-                [2.0, 4.0, 8.0, 16.0],
-                [10.0, 6.0, 3.0, 32.0],
-            ]);
+            for terminal_collision in [0.0, 1.0] {
+                inputs.push([
+                    [normal[0], normal[1], normal[2], t],
+                    [0.0, 0.0, 0.0, terminal_collision],
+                    [2.0, 4.0, 8.0, 16.0],
+                    [10.0, 6.0, 3.0, 32.0],
+                ]);
+            }
         }
     }
     let results = futures_lite::future::block_on(probe(source, &inputs));
@@ -312,13 +319,13 @@ fn probe() {
             );
             assert_eq!(
                 result[3][channel], input[3][channel],
-                "opposite field changed"
+                "opposite field changed: input={input:?}, output={result:?}"
             );
         }
         assert_eq!(result[1], [0.0; 4], "opaque energy or RNG changed");
         assert_ne!(result[2][0], result[2][1], "hemisphere cache alias");
         assert!(
-            result[2][0] < 63.0 && result[2][1] < 63.0,
+            result[2][0] < 32.0 && result[2][1] < 32.0,
             "both sides must be allocated"
         );
         assert_eq!(result[2][2], 7.0, "atomic max must preserve front lifetime");

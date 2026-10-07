@@ -32,7 +32,11 @@ enable wgpu_ray_query;
 @group(1) @binding(18) var<storage, read_write> world_cache_luminance_deltas: array<f32, #{WORLD_CACHE_SIZE}>;
 @group(1) @binding(19) var<storage, read_write> world_cache_active_cells_new_radiance: array<vec3<f32>, #{WORLD_CACHE_SIZE}>;
 @group(1) @binding(20) var<storage, read_write> world_cache_a: array<u32, #{WORLD_CACHE_SIZE}>;
+#ifdef WORLD_CACHE_PRIORITY_ATOMIC_BUFFER
+@group(1) @binding(21) var<storage, read_write> world_cache_b: array<atomic<u32>, 1024u>;
+#else
 @group(1) @binding(21) var<storage, read_write> world_cache_b: array<u32, 1024u>;
+#endif
 @group(1) @binding(22) var<storage, read_write> world_cache_active_cell_indices: array<u32, #{WORLD_CACHE_SIZE}>;
 @group(1) @binding(23) var<storage, read_write> world_cache_active_cells_count: u32;
 
@@ -43,7 +47,8 @@ enable wgpu_ray_query;
 @group(2) @binding(3) var specular_motion_vectors: texture_storage_2d<rg16float, write>;
 #endif
 
-struct PushConstants { frame_index: u32, reset: u32 }
+// frame_index retains the renderer's scrambled RNG seed. It is not a clock.
+struct PushConstants { frame_index: u32, reset: u32, render_frame: u32 }
 var<immediate> constants: PushConstants;
 
 // Don't adjust the size of this struct without also adjusting `prepare::RESOLVED_LIGHT_SAMPLE_STRUCT_SIZE`.
@@ -74,7 +79,7 @@ struct Reservoir {
 
 struct WorldCacheGeometryData {
     world_position: vec3<f32>,
-    padding_a: u32,
+    last_traced_frame: u32,
     world_normal: vec3<f32>,
     padding_b: u32
 }

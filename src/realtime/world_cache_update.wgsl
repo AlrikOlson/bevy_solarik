@@ -7,6 +7,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::presample_light_tiles::{ResolvedLightSamplePacked, unpack_resolved_light_sample}
 #import bevy_solarik::sampling::{calculate_resolved_light_contribution, trace_light_transmission, trace_shadow_transmission_impl}
 #import bevy_solarik::scene_bindings::{trace_ray, resolve_ray_hit_full, sample_sky, RAY_T_MIN, ray_max_distance}
+#import bevy_solarik::world_cache_priority::{selected_world_cache_cell_count, PRIORITY_UPDATED_COUNT}
 #import bevy_solarik::world_cache::{
     WORLD_CACHE_MAX_TEMPORAL_SAMPLES,
     WORLD_CACHE_DIRECT_LIGHT_SAMPLE_COUNT,
@@ -19,7 +20,8 @@ enable wgpu_ray_query;
     view,
     constants,
     world_cache_active_cells_count,
-    world_cache_active_cell_indices,
+    world_cache_a,
+    world_cache_b,
     world_cache_life,
     world_cache_geometry_data,
     world_cache_radiance,
@@ -29,13 +31,11 @@ enable wgpu_ray_query;
 
 @compute @workgroup_size(64, 1, 1)
 fn sample_di(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_invocation_id) active_cell_id: vec3<u32>) {
-    if active_cell_id.x >= world_cache_active_cells_count { return; }
+    if active_cell_id.x >= selected_world_cache_cell_count() { return; }
 
-    let cell_index = world_cache_active_cell_indices[active_cell_id.x];
+    let cell_index = world_cache_a[active_cell_id.x];
     let geometry_data = world_cache_geometry_data[cell_index];
     var rng = cell_index + constants.frame_index;
-
-    if rand_f(&rng) >= f32(WORLD_CACHE_CELL_UPDATES_SOFT_CAP) / f32(world_cache_active_cells_count) { return; }
 
     let new_radiance = sample_random_light_ris(geometry_data.world_position, geometry_data.world_normal, workgroup_id.xy, &rng);
 
@@ -44,13 +44,11 @@ fn sample_di(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
 
 @compute @workgroup_size(64, 1, 1)
 fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_invocation_id) active_cell_id: vec3<u32>) {
-    if active_cell_id.x >= world_cache_active_cells_count { return; }
+    if active_cell_id.x >= selected_world_cache_cell_count() { return; }
 
-    let cell_index = world_cache_active_cell_indices[active_cell_id.x];
+    let cell_index = world_cache_a[active_cell_id.x];
     let geometry_data = world_cache_geometry_data[cell_index];
     var rng = cell_index + constants.frame_index;
-
-    if rand_f(&rng) >= f32(WORLD_CACHE_CELL_UPDATES_SOFT_CAP) / f32(world_cache_active_cells_count) { return; }
 
     let ray_direction = sample_cosine_hemisphere(geometry_data.world_normal, &rng);
     // Traced to the end of the world so that geometry beyond the GI ray
@@ -75,12 +73,10 @@ fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
 
 @compute @workgroup_size(64, 1, 1)
 fn blend_new_samples(@builtin(global_invocation_id) active_cell_id: vec3<u32>) {
-    if active_cell_id.x >= world_cache_active_cells_count { return; }
+    let selected_count = selected_world_cache_cell_count();
+    if active_cell_id.x >= selected_count { return; }
 
-    let cell_index = world_cache_active_cell_indices[active_cell_id.x];
-    var rng = cell_index + constants.frame_index;
-
-    if rand_f(&rng) >= f32(WORLD_CACHE_CELL_UPDATES_SOFT_CAP) / f32(world_cache_active_cells_count) { return; }
+    let cell_index = world_cache_a[active_cell_id.x];
 
     let old_radiance = world_cache_radiance[cell_index];
     let new_radiance = world_cache_active_cells_new_radiance[active_cell_id.x];
@@ -99,6 +95,10 @@ fn blend_new_samples(@builtin(global_invocation_id) active_cell_id: vec3<u32>) {
 
     world_cache_radiance[cell_index] = vec4(blended_radiance, sample_count);
     world_cache_luminance_deltas[cell_index] = blended_luminance_delta;
+    world_cache_geometry_data[cell_index].last_traced_frame = constants.render_frame;
+    if active_cell_id.x % 64u == 0u {
+        atomicAdd(&world_cache_b[PRIORITY_UPDATED_COUNT], min(64u, selected_count - active_cell_id.x));
+    }
 }
 
 // Convert the history horizon from rendered frames to successful cell updates.
