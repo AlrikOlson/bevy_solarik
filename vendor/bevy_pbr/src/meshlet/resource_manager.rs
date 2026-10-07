@@ -419,6 +419,7 @@ impl ResourceManager {
                         storage_buffer_read_only_sized(false, None),
                         texture_depth_2d(),
                         storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -1199,6 +1200,7 @@ pub fn prepare_meshlet_view_bind_groups(
                     instance_manager.instance_uniforms.binding().unwrap(),
                     scene_depth.view(),
                     meshlet_mesh_manager.vertex_tangents.binding(),
+                    meshlet_mesh_manager.vertex_tangent_indices.binding(),
                 )),
             )
         });

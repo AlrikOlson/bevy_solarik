@@ -324,6 +324,7 @@ mod tests {
             vertex_normals: Vec::new().into(),
             vertex_uvs: Vec::new().into(),
             vertex_tangents: Vec::new().into(),
+            vertex_tangent_indices: Vec::new().into(),
             indices: Vec::new().into(),
             meshlets: Vec::new().into(),
             bvh: vec![node].into(),

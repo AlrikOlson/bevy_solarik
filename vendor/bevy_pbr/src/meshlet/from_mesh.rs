@@ -354,12 +354,15 @@ impl MeshletMesh {
             );
         }
         vertex_positions.set_uninitialized(false);
+        let (vertex_tangents, vertex_tangent_indices) =
+            super::asset::tangent_palette::intern(vertex_tangents);
 
         Ok(Self {
             vertex_positions: vertex_positions.into_vec().into(),
             vertex_normals: vertex_normals.into(),
             vertex_uvs: vertex_uvs.into(),
             vertex_tangents: vertex_tangents.into(),
+            vertex_tangent_indices: vertex_tangent_indices.into(),
             indices: meshlets.triangles.into(),
             bvh: bvh.into(),
             meshlets: bevy_meshlets.into(),

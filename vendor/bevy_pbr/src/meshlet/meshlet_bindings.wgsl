@@ -277,6 +277,7 @@ fn get_meshlet_vertex_position(meshlet: ptr<function, Meshlet>, vertex_id: u32) 
 @group(2) @binding(7) var<storage, read> meshlet_instance_uniforms: array<Mesh>; // Per entity instance
 @group(2) @binding(8) var meshlet_scene_depth: texture_depth_2d;
 @group(2) @binding(9) var<storage, read> meshlet_vertex_tangents: array<vec4<f32>>;
+@group(2) @binding(10) var<storage, read> meshlet_vertex_tangent_indices: array<u32>;
 
 // TODO: Load only twice, instead of 3x in cases where you load 3 indices per thread?
 fn get_meshlet_vertex_id(index_id: u32) -> u32 {
@@ -325,7 +326,8 @@ fn get_meshlet_vertex_normal(meshlet: ptr<function, Meshlet>, vertex_id: u32) ->
 }
 
 fn get_meshlet_vertex_tangent(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> vec4<f32> {
-    return meshlet_vertex_tangents[(*meshlet).start_vertex_attribute_id + vertex_id];
+    let index = meshlet_vertex_tangent_indices[(*meshlet).start_vertex_attribute_id + vertex_id];
+    return meshlet_vertex_tangents[index];
 }
 
 fn get_meshlet_vertex_uv(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> vec2<f32> {

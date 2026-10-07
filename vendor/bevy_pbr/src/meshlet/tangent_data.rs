@@ -73,13 +73,19 @@ mod tests {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents.clone());
         let prepared = super::super::MeshletMesh::from_mesh(&mesh, 4).unwrap();
-        assert_eq!(prepared.vertex_tangents.len(), prepared.vertex_uvs.len());
-        for (uv, tangent) in prepared
+        assert_eq!(
+            prepared.vertex_tangent_indices.len(),
+            prepared.vertex_uvs.len()
+        );
+        for (uv, index) in prepared
             .vertex_uvs
             .iter()
-            .zip(prepared.vertex_tangents.iter())
+            .zip(prepared.vertex_tangent_indices.iter())
         {
-            assert_eq!(*tangent, Vec4::from_array(tangents[uv.x as usize]));
+            assert_eq!(
+                prepared.vertex_tangents[*index as usize],
+                Vec4::from_array(tangents[uv.x as usize])
+            );
         }
     }
 

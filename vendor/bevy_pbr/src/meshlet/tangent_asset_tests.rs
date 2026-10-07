@@ -29,3 +29,23 @@ fn mismatched_count_and_nonfinite_tangents_fail_before_upload() {
     write_slice(&[Vec4::splat(f32::NAN)], &mut bytes).unwrap();
     assert!(read_vertex_tangents(&mut Cursor::new(bytes), 4, 1).is_err());
 }
+
+#[test]
+fn palette_serialization_keeps_version_four_wire_bytes() {
+    let values = [
+        Vec4::new(1., -0., 0., -1.),
+        Vec4::ZERO,
+        Vec4::new(1., -0., 0., -1.),
+    ];
+    let (palette, indices) = tangent_palette::intern(values);
+    let mut expected = Vec::new();
+    write_slice(&values, &mut expected).unwrap();
+    let mut actual = Vec::new();
+    write_vertex_tangents(&palette, &indices, &mut actual).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        &*read_vertex_tangents(&mut Cursor::new(actual), 4, 3).unwrap(),
+        &values
+    );
+    assert!(write_vertex_tangents(&palette, &[u32::MAX], &mut Vec::new()).is_err());
+}

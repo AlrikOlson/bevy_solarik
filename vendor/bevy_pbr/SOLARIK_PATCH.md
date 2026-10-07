@@ -66,6 +66,12 @@ streaming. Native hardware/software/shadow acceptance is still required.
 Meshlet asset format v4 stores authored MikkTSpace tangents through all LODs
 and GPU resolve. The loader also accepts v3 with the legacy zero-tangent
 fallback; malformed v4 tangent counts, values and handedness are rejected.
+2026-10-07: CPU/GPU residency shares bit-identical authored tangents across
+meshlets and LODs using a Vec4 palette and u32 indices. Material group 2 binding
+10 carries indices rebased to each asset's palette allocation. Both allocations
+are released together. The v4 wire format is unchanged: save expands indices,
+and validated v3/v4 loads intern exact float bits, including signed zero and
+handedness. No tangent quantization or geometry/LOD change is introduced.
 CPU checks, tests and lint pass. The original-alpha grass native probe runs,
 but its reverse appearance agreement is 97.5023%, below the unchanged 98%
 acceptance requirement. This opt-in capability remains experimental; neither

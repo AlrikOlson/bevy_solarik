@@ -22,12 +22,13 @@ pub struct MeshletMeshManager {
     pub vertex_normals: PersistentGpuBuffer<Arc<[u32]>>,
     pub vertex_uvs: PersistentGpuBuffer<Arc<[Vec2]>>,
     pub vertex_tangents: PersistentGpuBuffer<Arc<[Vec4]>>,
+    pub vertex_tangent_indices: PersistentGpuBuffer<Arc<[u32]>>,
     pub indices: PersistentGpuBuffer<Arc<[u8]>>,
     pub bvh_nodes: PersistentGpuBuffer<Arc<[BvhNode]>>,
     pub meshlets: PersistentGpuBuffer<Arc<[Meshlet]>>,
     pub meshlet_cull_data: PersistentGpuBuffer<Arc<[MeshletCullData]>>,
     meshlet_mesh_slices:
-        HashMap<AssetId<MeshletMesh>, ([Range<BufferAddress>; 8], MeshletAabb, u32)>,
+        HashMap<AssetId<MeshletMesh>, ([Range<BufferAddress>; 9], MeshletAabb, u32)>,
 }
 
 pub fn init_meshlet_mesh_manager(mut commands: Commands, render_device: Res<RenderDevice>) {
@@ -36,6 +37,10 @@ pub fn init_meshlet_mesh_manager(mut commands: Commands, render_device: Res<Rend
         vertex_normals: PersistentGpuBuffer::new("meshlet_vertex_normals", &render_device),
         vertex_uvs: PersistentGpuBuffer::new("meshlet_vertex_uvs", &render_device),
         vertex_tangents: PersistentGpuBuffer::new("meshlet_vertex_tangents", &render_device),
+        vertex_tangent_indices: PersistentGpuBuffer::new(
+            "meshlet_vertex_tangent_indices",
+            &render_device,
+        ),
         indices: PersistentGpuBuffer::new("meshlet_indices", &render_device),
         bvh_nodes: PersistentGpuBuffer::new("meshlet_bvh_nodes", &render_device),
         meshlets: PersistentGpuBuffer::new("meshlets", &render_device),
@@ -68,9 +73,15 @@ impl MeshletMeshManager {
             let vertex_tangents_slice = self
                 .vertex_tangents
                 .queue_write(Arc::clone(&meshlet_mesh.vertex_tangents), ());
+            let rebased = super::asset::tangent_palette::rebase(
+                &meshlet_mesh.vertex_tangent_indices,
+                vertex_tangents_slice.start,
+            );
+            let vertex_tangent_indices_slice =
+                self.vertex_tangent_indices.queue_write(rebased.into(), ());
             debug_assert_eq!(
                 vertex_normals_slice.start / 4,
-                vertex_tangents_slice.start / 16
+                vertex_tangent_indices_slice.start / 4
             );
             let indices_slice = self
                 .indices
@@ -101,6 +112,7 @@ impl MeshletMeshManager {
                     meshlets_slice,
                     meshlet_cull_data_slice,
                     vertex_tangents_slice,
+                    vertex_tangent_indices_slice,
                 ],
                 meshlet_mesh.aabb,
                 meshlet_mesh.bvh_depth,
@@ -108,7 +120,7 @@ impl MeshletMeshManager {
         };
 
         // If the MeshletMesh asset has not been uploaded to the GPU yet, queue it for uploading
-        let ([_, _, _, _, bvh_node_slice, _, _, _], aabb, bvh_depth) = self
+        let ([_, _, _, _, bvh_node_slice, _, _, _, _], aabb, bvh_depth) = self
             .meshlet_mesh_slices
             .entry(asset_id)
             .or_insert_with_key(queue_meshlet_mesh)
@@ -132,6 +144,7 @@ impl MeshletMeshManager {
                 meshlets_slice,
                 meshlet_cull_data_slice,
                 vertex_tangents_slice,
+                vertex_tangent_indices_slice,
             ],
             _,
             _,
@@ -143,6 +156,8 @@ impl MeshletMeshManager {
             self.vertex_uvs.mark_slice_unused(vertex_uvs_slice);
             self.vertex_tangents
                 .mark_slice_unused(vertex_tangents_slice);
+            self.vertex_tangent_indices
+                .mark_slice_unused(vertex_tangent_indices_slice);
             self.indices.mark_slice_unused(indices_slice);
             self.bvh_nodes.mark_slice_unused(bvh_node_slice);
             self.meshlets.mark_slice_unused(meshlets_slice);
@@ -169,6 +184,9 @@ pub fn perform_pending_meshlet_mesh_writes(
         .perform_writes(&render_queue, &render_device);
     meshlet_mesh_manager
         .vertex_tangents
+        .perform_writes(&render_queue, &render_device);
+    meshlet_mesh_manager
+        .vertex_tangent_indices
         .perform_writes(&render_queue, &render_device);
     meshlet_mesh_manager
         .indices

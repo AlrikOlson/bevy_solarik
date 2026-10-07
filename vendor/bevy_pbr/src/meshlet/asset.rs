@@ -13,6 +13,9 @@ use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use std::io::{Read, Write};
 use thiserror::Error;
 
+#[path = "tangent_palette.rs"]
+pub(super) mod tangent_palette;
+
 /// Unique identifier for the [`MeshletMesh`] asset format.
 const MESHLET_MESH_ASSET_MAGIC: u64 = 1717551717668;
 
@@ -47,6 +50,8 @@ pub struct MeshletMesh {
     pub(crate) vertex_uvs: Arc<[Vec2]>,
     /// Authored `MikkTSpace` tangents; zero values retain legacy derivative reconstruction.
     pub(crate) vertex_tangents: Arc<[Vec4]>,
+    /// Lossless indices into the shared authored tangent palette.
+    pub(crate) vertex_tangent_indices: Arc<[u32]>,
     /// Triangle indices for meshlets.
     pub(crate) indices: Arc<[u8]>,
     /// The BVH8 used for culling and LOD selection of the meshlets. The root is at index 0.
@@ -96,6 +101,7 @@ impl MeshletMesh {
             + self.vertex_normals.len() * size_of::<u32>()
             + self.vertex_uvs.len() * size_of::<Vec2>()
             + self.vertex_tangents.len() * size_of::<Vec4>()
+            + self.vertex_tangent_indices.len() * size_of::<u32>()
             + self.indices.len() * size_of::<u8>()
             + self.bvh.len() * size_of::<BvhNode>()
             + self.meshlets.len() * size_of::<Meshlet>()
@@ -231,7 +237,11 @@ impl AssetSaver for MeshletMeshSaver {
         write_slice(&asset.vertex_positions, &mut writer)?;
         write_slice(&asset.vertex_normals, &mut writer)?;
         write_slice(&asset.vertex_uvs, &mut writer)?;
-        write_slice(&asset.vertex_tangents, &mut writer)?;
+        write_vertex_tangents(
+            &asset.vertex_tangents,
+            &asset.vertex_tangent_indices,
+            &mut writer,
+        )?;
         write_slice(&asset.indices, &mut writer)?;
         write_slice(&asset.bvh, &mut writer)?;
         write_slice(&asset.meshlets, &mut writer)?;
@@ -282,6 +292,8 @@ impl AssetLoader for MeshletMeshLoader {
         let vertex_normals = read_slice(reader)?;
         let vertex_uvs: Arc<[Vec2]> = read_slice(reader)?;
         let vertex_tangents = read_vertex_tangents(reader, version, vertex_uvs.len())?;
+        let (vertex_tangents, vertex_tangent_indices) =
+            tangent_palette::intern(vertex_tangents.iter().copied());
         let indices = read_slice(reader)?;
         let bvh = read_slice(reader)?;
         let meshlets = read_slice(reader)?;
@@ -291,7 +303,8 @@ impl AssetLoader for MeshletMeshLoader {
             vertex_positions,
             vertex_normals,
             vertex_uvs,
-            vertex_tangents,
+            vertex_tangents: vertex_tangents.into(),
+            vertex_tangent_indices: vertex_tangent_indices.into(),
             indices,
             bvh,
             meshlets,
@@ -371,6 +384,23 @@ fn read_vertex_tangents(
         return Err(MeshletMeshSaveOrLoadError::InvalidVertexTangents);
     }
     Ok(values)
+}
+
+// Retain the version-four wire format. Sharing is a CPU/GPU residency detail;
+// existing authored tangent files remain bit-for-bit compatible.
+fn write_vertex_tangents(
+    values: &[Vec4],
+    indices: &[u32],
+    writer: &mut dyn Write,
+) -> Result<(), MeshletMeshSaveOrLoadError> {
+    writer.write_all(&(indices.len() as u64).to_le_bytes())?;
+    for &index in indices {
+        let value = values
+            .get(index as usize)
+            .ok_or(MeshletMeshSaveOrLoadError::InvalidVertexTangents)?;
+        writer.write_all(bytemuck::bytes_of(value))?;
+    }
+    Ok(())
 }
 
 // TODO: Use async for everything and get rid of this adapter
