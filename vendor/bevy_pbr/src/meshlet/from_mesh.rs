@@ -243,7 +243,8 @@ impl MeshletMesh {
                             &mut reduced,
                             &dilation,
                         );
-                        group.parent_error = inherited_error.max(local_error + displacement);
+                        group.parent_error =
+                            dilated_error(inherited_error, local_error, displacement);
                         if tracing::enabled!(tracing::Level::DEBUG) {
                             diagnostic_errors.push([local_error, inherited_error, displacement]);
                         }
@@ -373,6 +374,30 @@ impl MeshletMesh {
             bvh_depth: depth,
         })
     }
+}
+
+fn dilated_error(inherited: f32, local: f32, displacement: f32) -> f32 {
+    // The copied vertices move after simplification. That new displacement
+    // also applies when the inherited approximation dominates the local one.
+    inherited.max(local) + displacement
+}
+
+#[test]
+fn later_dilation_cannot_hide_inside_an_inherited_error() {
+    let source = Vec3::ZERO;
+    let previous = Vec3::X * 0.125;
+    let dilated = previous + Vec3::X * 0.03125;
+    let estimate = dilated_error(
+        source.distance(previous),
+        0.015625,
+        previous.distance(dilated),
+    );
+    assert!(
+        estimate >= source.distance(dilated),
+        "new displacement vanished: {estimate}"
+    );
+    assert_eq!(dilated_error(0.125, 0.25, 0.03125), 0.28125);
+    assert_eq!(dilated_error(0.125, 0.25, 0.0), 0.25);
 }
 
 fn report_lod_errors(level: usize, foliage: bool, errors: &[[f32; 3]]) {

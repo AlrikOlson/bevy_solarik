@@ -26,7 +26,7 @@ pub(crate) use self::{
 pub use self::asset::{
     MESHLET_MESH_ASSET_VERSION, MeshletMesh, MeshletMeshLoader, MeshletMeshSaver,
 };
-pub use self::cutout::{MeshletCutoutAtlas, MeshletVisibilityCutout};
+pub use self::cutout::{MeshletCutoutAtlas, MeshletDoubleSided, MeshletVisibilityCutout};
 #[cfg(feature = "meshlet_processor")]
 pub use self::from_mesh::{
     MESHLET_DEFAULT_VERTEX_POSITION_QUANTIZATION_FACTOR, MeshToMeshletMeshConversionError,

@@ -13,6 +13,7 @@
         get_meshlet_vertex_position,
         get_meshlet_vertex_uv,
         meshlet_cutout_visible,
+        meshlet_double_sided,
     },
     mesh_functions::mesh_position_local_to_world,
 }
@@ -63,7 +64,7 @@ fn vertex(@builtin(instance_index) instance_index: u32, @builtin(vertex_index) v
 fn fragment(vertex_output: VertexOutput, @builtin(front_facing) front_facing: bool) {
     // Match software visibility rasterization: opposed surfaces must not
     // compete at identical depth and select the back-facing material normal.
-    if !front_facing { discard; }
+    if !front_facing && !meshlet_double_sided(vertex_output.instance_id) { discard; }
     if !meshlet_cutout_visible(vertex_output.instance_id, vertex_output.uv) { discard; }
     let depth = bitcast<u32>(vertex_output.position.z);
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT

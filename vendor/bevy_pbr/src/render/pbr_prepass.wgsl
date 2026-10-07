@@ -32,7 +32,7 @@ fn fragment(
 ) -> prepass_io::FragmentOutput {
 #ifdef MESHLET_MESH_MATERIAL_PASS
     let in = resolve_vertex_output(frag_coord);
-    let is_front = true;
+    let is_front = in.is_front;
 #else   // MESHLET_MESH_MATERIAL_PASS
 
 #ifdef BINDLESS

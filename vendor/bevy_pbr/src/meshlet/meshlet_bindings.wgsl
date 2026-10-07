@@ -220,6 +220,10 @@ fn meshlet_cutout_visible(instance_id: u32, uv: vec2<f32>) -> bool {
     return textureSampleLevel(meshlet_cutout_atlas, meshlet_cutout_sampler, uv, i32(cutout.x), 0.0).a >= cutout.y;
 }
 
+fn meshlet_double_sided(instance_id: u32) -> bool {
+    return meshlet_instance_cutouts[instance_id].z != 0.0;
+}
+
 // TODO: Load only twice, instead of 3x in cases where you load 3 indices per thread?
 fn get_meshlet_vertex_id(index_id: u32) -> u32 {
     let packed_index = meshlet_indices[index_id / 4u];

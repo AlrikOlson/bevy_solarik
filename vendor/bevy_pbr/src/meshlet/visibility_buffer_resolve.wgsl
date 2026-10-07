@@ -37,6 +37,7 @@ struct PartialDerivatives {
     barycentrics: vec3<f32>,
     ddx: vec3<f32>,
     ddy: vec3<f32>,
+    is_front: bool,
 }
 
 // https://github.com/ConfettiFX/The-Forge/blob/9d43e69141a9cd0ce2ce2d2db5122234d3a2d5b5/Common_3/Renderer/VisibilityBuffer2/Shaders/FSL/vb_shading_utilities.h.fsl#L90-L150
@@ -53,6 +54,7 @@ fn compute_partial_derivatives(vertex_world_positions: array<vec4<f32>, 3>, ndc_
     let ndc_2 = vertex_clip_position_2.xy * inv_w[2];
 
     let inv_det = 1.0 / determinant(mat2x2(ndc_2 - ndc_1, ndc_0 - ndc_1));
+    result.is_front = inv_det > 0.0;
     result.ddx = vec3(ndc_1.y - ndc_2.y, ndc_2.y - ndc_0.y, ndc_0.y - ndc_1.y) * inv_det * inv_w;
     result.ddy = vec3(ndc_2.x - ndc_1.x, ndc_0.x - ndc_2.x, ndc_1.x - ndc_0.x) * inv_det * inv_w;
 
@@ -96,6 +98,7 @@ struct VertexOutput {
     mesh_flags: u32,
     cluster_id: u32,
     material_bind_group_slot: u32,
+    is_front: bool,
 #ifdef PREPASS_FRAGMENT
 #ifdef MOTION_VECTOR_PREPASS
     motion_vector: vec2<f32>,
@@ -190,6 +193,7 @@ fn resolve_vertex_output(frag_coord: vec4<f32>) -> VertexOutput {
         instance_uniform.flags,
         instance_id ^ meshlet_id,
         instance_uniform.material_and_lightmap_bind_group_slot & 0xffffu,
+        partial_derivatives.is_front,
 #ifdef PREPASS_FRAGMENT
 #ifdef MOTION_VECTOR_PREPASS
         motion_vector,

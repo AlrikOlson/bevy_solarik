@@ -22,6 +22,11 @@ pub struct MeshletVisibilityCutout {
     pub cutoff: f32,
 }
 
+/// Rasterize both windings of a meshlet surface. Its material must also enable
+/// double-sided shading so back-face normals match the ordinary mesh path.
+#[derive(Clone, Copy, Component)]
+pub struct MeshletDoubleSided;
+
 pub(super) fn metadata(
     cutout: Option<&MeshletVisibilityCutout>,
     atlas: &MeshletCutoutAtlas,

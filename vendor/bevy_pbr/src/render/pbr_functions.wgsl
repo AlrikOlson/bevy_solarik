@@ -137,11 +137,18 @@ fn prepare_world_normal(
     is_front: bool,
 ) -> vec3<f32> {
     var output: vec3<f32> = world_normal;
+#ifdef MESHLET_MESH_MATERIAL_PASS
+#ifndef STANDARD_MATERIAL_NORMAL_MAP
+    // Meshlets always provide tangents, even for a material without a normal map.
+    output = (f32(!double_sided || is_front) * 2.0 - 1.0) * output;
+#endif
+#else
 #ifndef VERTEX_TANGENTS
 #ifndef STANDARD_MATERIAL_NORMAL_MAP
     // NOTE: When NOT using normal-mapping, if looking at the back face of a double-sided
     // material, the normal needs to be inverted. This is a branchless version of that.
     output = (f32(!double_sided || is_front) * 2.0 - 1.0) * output;
+#endif
 #endif
 #endif
     return output;

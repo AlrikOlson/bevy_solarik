@@ -31,7 +31,8 @@ fn prepass_fragment(@builtin(position) frag_coord: vec4<f32>) -> prepass_io::Fra
     var out: prepass_io::FragmentOutput;
 
 #ifdef NORMAL_PREPASS
-    out.normal = vec4(vertex_output.world_normal * 0.5 + vec3(0.5), 1.0);
+    let normal = select(-vertex_output.world_normal, vertex_output.world_normal, vertex_output.is_front);
+    out.normal = vec4(normal * 0.5 + vec3(0.5), 1.0);
 #endif
 
 #ifdef MOTION_VECTOR_PREPASS

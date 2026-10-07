@@ -15,6 +15,7 @@
         get_meshlet_vertex_position,
         get_meshlet_vertex_uv,
         meshlet_cutout_visible,
+        meshlet_double_sided,
     },
     mesh_functions::mesh_position_local_to_world,
     view_transformations::ndc_to_uv,
@@ -83,13 +84,16 @@ fn rasterize_cluster(
     let uv_1 = perspective_uvs[vertex_ids[1]];
     let uv_2 = perspective_uvs[vertex_ids[0]];
 
-    // Backface culling
-    let triangle_double_area = edge_function(vertex_0.xy, vertex_1.xy, vertex_2.xy);
-    if triangle_double_area <= 0.0 { return; }
+    // Retain original triangle/UV order. Orient all edge equations together so
+    // back faces have identical coverage and perspective interpolation.
+    let signed_area = edge_function(vertex_0.xy, vertex_1.xy, vertex_2.xy);
+    if signed_area == 0.0 || (signed_area < 0.0 && !meshlet_double_sided(instanced_offset.instance_id)) { return; }
+    let orientation = sign(signed_area);
+    let triangle_double_area = abs(signed_area);
 
     // Setup triangle gradients
-    let w_x = vec3(vertex_1.y - vertex_2.y, vertex_2.y - vertex_0.y, vertex_0.y - vertex_1.y);
-    let w_y = vec3(vertex_2.x - vertex_1.x, vertex_0.x - vertex_2.x, vertex_1.x - vertex_0.x);
+    let w_x = orientation * vec3(vertex_1.y - vertex_2.y, vertex_2.y - vertex_0.y, vertex_0.y - vertex_1.y);
+    let w_y = orientation * vec3(vertex_2.x - vertex_1.x, vertex_0.x - vertex_2.x, vertex_1.x - vertex_0.x);
     let vertices_z = vec3(vertex_0.z, vertex_1.z, vertex_2.z) / triangle_double_area;
     let z_x = dot(vertices_z, w_x);
     let z_y = dot(vertices_z, w_y);
@@ -106,7 +110,7 @@ fn rasterize_cluster(
 
     // Setup initial triangle equations
     let starting_pixel = vec2(min_x, min_y) + 0.5;
-    var w_row = vec3(
+    var w_row = orientation * vec3(
         edge_function(vertex_1.xy, vertex_2.xy, starting_pixel),
         edge_function(vertex_2.xy, vertex_0.xy, starting_pixel),
         edge_function(vertex_0.xy, vertex_1.xy, starting_pixel),

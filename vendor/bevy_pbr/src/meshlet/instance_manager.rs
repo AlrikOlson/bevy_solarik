@@ -1,4 +1,4 @@
-use super::{MeshletCutoutAtlas, MeshletVisibilityCutout, cutout::metadata};
+use super::{MeshletCutoutAtlas, MeshletDoubleSided, MeshletVisibilityCutout, cutout::metadata};
 use super::{MeshletMesh, MeshletMesh3d, meshlet_mesh_manager::MeshletMeshManager};
 use crate::DUMMY_MESH_MATERIAL;
 use crate::{
@@ -214,6 +214,7 @@ pub fn extract_meshlet_mesh_entities(
                     Has<NotShadowReceiver>,
                     Has<NotShadowCaster>,
                     Option<&MeshletVisibilityCutout>,
+                    Has<MeshletDoubleSided>,
                 )>,
                 Res<AssetServer>,
                 ResMut<Assets<MeshletMesh>>,
@@ -254,11 +255,13 @@ pub fn extract_meshlet_mesh_entities(
         not_shadow_receiver,
         not_shadow_caster,
         cutout,
+        double_sided,
     ) in &instances_query
     {
-        let Some(cutout) = metadata(cutout, &atlas, &images) else {
+        let Some(mut cutout) = metadata(cutout, &atlas, &images) else {
             continue;
         };
+        cutout.z = f32::from(double_sided);
         // Skip instances with an unloaded MeshletMesh asset
         // TODO: This is a semi-expensive check
         if asset_server.is_managed(meshlet_mesh.id())
