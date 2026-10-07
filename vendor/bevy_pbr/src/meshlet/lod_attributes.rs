@@ -76,6 +76,54 @@ mod tests {
     }
 
     #[test]
+    fn opaque_group_attribute_error_is_bounded_by_spatial_support() {
+        let vertices: [[f32; 8]; 5] = [
+            [0., 0., 0., 0., 0., 1., 0., 0.],
+            [1., 0., 0., 0., 0., 1., 1., 0.],
+            [1., 1., 0., 0., 0., 1., 1., 1.],
+            [0., 1., 0., 0., 0., 1., 0., 1.],
+            [0.5, 0.5, 0., 0., 0., 1., 1000., 0.5],
+        ];
+        let bytes = bytemuck::cast_slice(&vertices);
+        let adapter = VertexDataAdapter::new(bytes, 32, 0).unwrap();
+        let floats: &[f32] = bytemuck::cast_slice(bytes);
+        let meshlets = meshopt::Meshlets {
+            meshlets: vec![meshopt::ffi::meshopt_Meshlet {
+                vertex_offset: 0,
+                triangle_offset: 0,
+                vertex_count: 5,
+                triangle_count: 4,
+            }],
+            vertices: vec![0, 1, 2, 3, 4],
+            triangles: vec![0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4],
+        };
+        let mut group = super::super::TempMeshletGroup::default();
+        group.meshlets.push(0);
+        let (reduced, error, dilation) = super::super::simplify_meshlet_group(
+            &group,
+            &meshlets,
+            &adapter,
+            &floats[3..],
+            &[0.5, 0.5, 0.5, 100., 100.],
+            32,
+            &[true, true, true, true, false],
+            &[0, 1, 2, 3, 4],
+            false,
+        )
+        .expect("opaque group reduces its interior vertex");
+        assert_eq!(reduced.len(), 6);
+        assert!(dilation.is_empty());
+        assert!(
+            error.is_finite() && error > 0.0 && error <= 1.001,
+            "unit-area opaque attribute error escaped support: {error}"
+        );
+        assert!(
+            reduced.iter().all(|&i| i < 4),
+            "locked outer vertices retained"
+        );
+    }
+
+    #[test]
     fn planar_texture_distortion_is_not_free() {
         let vertices: [[f32; 8]; 5] = [
             [0., 0., 0., 0., 0., 1., 0., 0.],

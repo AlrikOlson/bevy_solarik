@@ -808,11 +808,9 @@ fn simplify_meshlet_group(
         f32::MAX,
         SimplifyOptions::Sparse
             | SimplifyOptions::ErrorAbsolute
-            | if preserve_area {
-                SimplifyOptions::ErrorClamped
-            } else {
-                SimplifyOptions::empty()
-            },
+            // Attribute-aware LOD errors need the same spatial support bound
+            // for opaque surfaces as for foliage (recommended by meshoptimizer).
+            | SimplifyOptions::ErrorClamped,
         Some(&mut error),
     );
 
