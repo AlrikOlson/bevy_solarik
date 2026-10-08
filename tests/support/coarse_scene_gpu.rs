@@ -2,7 +2,7 @@ use super::{Probe, Request};
 use bevy_solarik::coarse_scene::{self, PackedSource};
 use wgpu::util::DeviceExt;
 
-pub fn pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
+pub fn pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipeline {
     let shared = coarse_scene::SHADER
         .lines()
         .filter(|line| !line.starts_with("#define_import_path"))
@@ -10,9 +10,7 @@ pub fn pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
         .join("\n");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("production coarse sparse lookup/decoder"),
-        source: wgpu::ShaderSource::Wgsl(
-            format!("{shared}\n{}", include_str!("../coarse_scene.wgsl")).into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(format!("{shared}\n{entry}").into()),
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,

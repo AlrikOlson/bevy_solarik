@@ -10,6 +10,7 @@ use bytemuck::{Pod, Zeroable};
 mod packing;
 pub use packing::PackedDirectional;
 pub const SHADER: &str = include_str!("coarse_scene.wgsl");
+pub const WALK_SHADER: &str = include_str!("coarse_walk.wgsl");
 pub const MISSING: u32 = u32::MAX;
 pub const MAX_GPU_BYTES: usize = 128 << 20;
 
@@ -35,6 +36,7 @@ pub struct GpuSource {
 }
 pub(crate) fn load_shader(app: &mut bevy_app::App) {
     bevy_shader::load_shader_library!(app, "coarse_scene.wgsl");
+    bevy_shader::load_shader_library!(app, "coarse_walk.wgsl");
 }
 impl Grid {
     pub fn index(&self, point: [f32; 3]) -> Option<usize> {

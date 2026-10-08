@@ -40,7 +40,7 @@ fn immutable_coarse_sources_decode_and_lookup_exactly_on_gpu() {
         .await;
         let device = resources.0.wgpu_device();
         let queue = &resources.1;
-        let pipeline = gpu::pipeline(device);
+        let pipeline = gpu::pipeline(device, include_str!("coarse_scene.wgsl"));
         let mut reports = Vec::new();
         for id in [5, 43] {
             for resolution in [16, 32] {
