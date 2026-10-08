@@ -1,7 +1,7 @@
 //! Exercise the production receipt against actual ECS mutations and removals.
 use super::*;
 use bevy_ecs::world::World;
-use bevy_math::Vec3;
+use bevy_math::{Affine3A, Vec3};
 
 type Data = (
     Entity,
@@ -15,15 +15,20 @@ type Data = (
     Has<MeshletDoubleSided>,
 );
 
-fn capture(world: &mut World) -> Vec<InstanceInput> {
-    world
-        .query::<Data>()
-        .iter(world)
-        .map(InstanceInput::from_row)
-        .collect()
+fn capture(world: &mut World) -> InstanceManager {
+    let mut manager = InstanceManager::new();
+    manager.slots.begin();
+    for (position, row) in world.query::<Data>().iter(world).enumerate() {
+        let slot = manager.observe_query(position, row.0);
+        extend_to(&mut manager.inputs, slot.index as usize, None);
+        manager.inputs[slot.index as usize] = Some(InstanceInput::from_row(row, slot.generation));
+        manager.slots.activate(slot);
+    }
+    manager.query_publication = manager.slots.publication;
+    manager
 }
-fn matches(world: &mut World, inputs: &[InstanceInput]) -> bool {
-    inputs_match(inputs, world.query::<Data>().iter(world))
+fn matches(world: &mut World, manager: &InstanceManager) -> bool {
+    manager.query_matches(world.query::<Data>().iter(world))
 }
 
 #[test]
@@ -135,6 +140,78 @@ fn persistent_raw_scene_receipt_handles_motion_catchup_optional_removals_and_mem
     inputs = capture(&mut world);
     world.entity_mut(entity).remove::<MeshletMesh3d>();
     assert!(!matches(&mut world, &inputs));
+}
+
+fn scene_matches(
+    world: &mut World,
+    manager: &InstanceManager,
+    materials: &RenderMaterialInstances,
+    bindings: &RenderMaterialBindings,
+) -> bool {
+    manager.scene_matches(world.query::<Data>().iter(world), materials, bindings)
+}
+
+fn insert_material(materials: &mut RenderMaterialInstances, entity: MainEntity) {
+    materials.instances.insert(
+        entity,
+        crate::RenderMaterialInstance {
+            asset_id: DUMMY_MESH_MATERIAL.untyped(),
+            last_change_tick: bevy_ecs::change_detection::Tick::new(1),
+        },
+    );
+}
+
+fn spawn_meshlet(world: &mut World) -> Entity {
+    world
+        .spawn((MeshletMesh3d::default(), GlobalTransform::IDENTITY))
+        .id()
+}
+
+#[test]
+fn cached_slots_require_readiness_and_material_mutation_receipts() {
+    let mut world = World::new();
+    world.spawn((MeshletMesh3d::default(), GlobalTransform::IDENTITY));
+    let mut manager = capture(&mut world);
+    let mut materials = RenderMaterialInstances::default();
+    let bindings = RenderMaterialBindings::default();
+    manager.material_receipt = materials.instances.receipt();
+    assert!(scene_matches(&mut world, &manager, &materials, &bindings));
+    let slot = manager.query_slots[0];
+    manager.slots.deactivate(slot);
+    assert!(!scene_matches(&mut world, &manager, &materials, &bindings));
+    manager.slots.activate(slot);
+    assert!(scene_matches(&mut world, &manager, &materials, &bindings));
+    let entity = manager.slots.entity(slot.index).unwrap().into();
+    insert_material(&mut materials, entity);
+    assert!(!scene_matches(&mut world, &manager, &materials, &bindings));
+    manager.material_receipt = materials.instances.receipt();
+    assert!(scene_matches(&mut world, &manager, &materials, &bindings));
+    materials.instances = crate::material_instances::MaterialInstanceMap::default();
+    assert!(!scene_matches(&mut world, &manager, &materials, &bindings));
+}
+
+#[test]
+fn cached_query_reordering_repairs_slots_without_publication() {
+    let mut world = World::new();
+    let a = spawn_meshlet(&mut world);
+    let b = spawn_meshlet(&mut world);
+    let mut manager = capture(&mut world);
+    let old = manager.query_slots.clone();
+    manager.query_slots.reverse();
+    assert!(!matches(&mut world, &manager));
+    let publication = manager.slots.publication;
+    manager.slots.begin();
+    let first = manager.observe_query(0, a);
+    let second = manager.observe_query(1, b);
+    assert_eq!([first, second], old.as_slice());
+    assert_eq!(manager.slots.publication, publication);
+    assert!(matches(&mut world, &manager));
+    let mut stale = first;
+    stale.generation += 1;
+    manager.query_slots[0] = stale;
+    assert!(!matches(&mut world, &manager));
+    assert_eq!(manager.observe_query(0, a), first);
+    assert!(matches(&mut world, &manager));
 }
 
 #[test]

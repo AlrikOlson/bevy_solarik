@@ -57,6 +57,7 @@ pub mod render_asset;
 pub mod render_phase;
 pub mod render_resource;
 pub mod renderer;
+pub mod scene_slots;
 pub mod settings;
 pub mod slab_allocator;
 pub mod storage;

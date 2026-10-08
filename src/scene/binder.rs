@@ -115,6 +115,8 @@ pub(crate) struct SceneCache {
     inputs: Option<SceneInputs>,
     storage: SceneStorage,
     tlas: super::tlas::SceneTlas,
+    slots: bevy_render::scene_slots::SceneSlots,
+    instance_inputs: Vec<Option<RayInstanceInput>>,
 }
 
 #[derive(Default)]
@@ -125,6 +127,7 @@ struct SceneStorage {
     previous_frame_transforms: StorageBufferList<Mat4>,
     geometry_ids: StorageBufferList<GpuInstanceGeometryIds>,
     material_ids: StorageBufferList<u32>,
+    active_indices: StorageBufferList<u32>,
     light_sources: StorageBufferList<GpuLightSource>,
     directional_lights: StorageBufferList<GpuDirectionalLight>,
     local_lights: StorageBufferList<GpuLocalLight>,
@@ -132,7 +135,6 @@ struct SceneStorage {
     sky: StorageBuffer<GpuSkyLight>,
     rings: StorageBuffer<crate::rings::RingData>,
 }
-#[derive(PartialEq)]
 struct RayInstanceInput {
     entity: Entity,
     mesh: AssetId<Mesh>,
@@ -140,9 +142,19 @@ struct RayInstanceInput {
     transform: Affine3A,
     previous: Affine3A,
 }
+impl PartialEq for RayInstanceInput {
+    fn eq(&self, other: &Self) -> bool {
+        self.entity == other.entity
+            && self.mesh == other.mesh
+            && self.material == other.material
+            && self.transform.to_cols_array().map(f32::to_bits)
+                == other.transform.to_cols_array().map(f32::to_bits)
+            && self.previous.to_cols_array().map(f32::to_bits)
+                == other.previous.to_cols_array().map(f32::to_bits)
+    }
+}
 #[derive(PartialEq)]
 struct SceneInputs {
-    instances: Vec<RayInstanceInput>,
     directional: Vec<(Entity, GpuDirectionalLight)>,
     local: Vec<(Entity, GpuLocalLight)>,
     sky: Option<AssetId<Image>>,
@@ -157,14 +169,75 @@ struct SceneInputs {
     blas_generation: u64,
 }
 
-pub(crate) fn prepare_raytracing_scene_bindings(
-    instances_query: Query<(
+type RayRows<'a, 'b> = Query<
+    'a,
+    'b,
+    (
         Entity,
-        &RaytracingMesh3d,
-        &MeshMaterial3d<StandardMaterial>,
-        &GlobalTransform,
-        Option<&PreviousGlobalTransform>,
-    )>,
+        &'static RaytracingMesh3d,
+        &'static MeshMaterial3d<StandardMaterial>,
+        &'static GlobalTransform,
+        Option<&'static PreviousGlobalTransform>,
+    ),
+>;
+
+fn update_instance_inputs(
+    cache: &mut SceneCache,
+    rows: &RayRows<'_, '_>,
+    queue: &RenderQueue,
+    dependencies: bool,
+) -> (Vec<u32>, usize) {
+    cache.slots.begin();
+    let mut dirty = Vec::new();
+    let mut added = 0usize;
+    for (entity, mesh, material, transform, previous) in rows {
+        let input = RayInstanceInput {
+            entity,
+            mesh: mesh.id(),
+            material: material.id(),
+            transform: transform.affine(),
+            previous: previous.map_or(transform.affine(), |t| t.0),
+        };
+        added += usize::from(observe_instance(cache, input, dependencies, &mut dirty));
+    }
+    let removed = cache.slots.finish(queue);
+    for slot in &removed {
+        cache.instance_inputs[slot.index as usize] = None;
+    }
+    profile_slots(cache, added, removed.len(), dirty.len());
+    (dirty, removed.len())
+}
+fn observe_instance(
+    cache: &mut SceneCache,
+    input: RayInstanceInput,
+    dependencies: bool,
+    dirty: &mut Vec<u32>,
+) -> bool {
+    let fresh = cache.slots.get(input.entity).is_none();
+    let slot = cache.slots.touch(input.entity);
+    let index = slot.index as usize;
+    if cache.instance_inputs.len() <= index {
+        cache.instance_inputs.resize_with(index + 1, || None);
+    }
+    if dependencies || cache.instance_inputs[index].as_ref() != Some(&input) {
+        dirty.push(slot.index);
+        cache.instance_inputs[index] = Some(input);
+    }
+    fresh
+}
+fn profile_slots(cache: &SceneCache, added: usize, removed: usize, dirty: usize) {
+    bevy_render::diagnostic::profile_value("scene.slots_added", added as f64, "count");
+    bevy_render::diagnostic::profile_value("scene.slots_removed", removed as f64, "count");
+    bevy_render::diagnostic::profile_value("scene.slots_changed", dirty as f64, "count");
+    bevy_render::diagnostic::profile_value(
+        "scene.slot_capacity",
+        cache.slots.capacity() as f64,
+        "count",
+    );
+}
+
+pub(crate) fn prepare_raytracing_scene_bindings(
+    instances_query: RayRows<'_, '_>,
     directional_lights_query: Query<(Entity, &ExtractedDirectionalLight)>,
     // Point and spot lights: bevy_pbr extracts both into ExtractedPointLight
     // (spot_light_angles tells them apart).
@@ -189,15 +262,17 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         Option<Res<crate::atmosphere::AtmosphereState>>,
         Res<crate::rings::RingShadow>,
     ),
-    (render_device, diagnostics, mut scene_cache): (
+    (render_device, diagnostics, mut scene_cache, frame): (
         Res<RenderDevice>,
         Option<Res<bevy_render::diagnostic::DiagnosticsRecorder>>,
         Local<SceneCache>,
+        Option<Res<bevy_diagnostic::FrameCount>>,
     ),
     pipeline_cache: Res<PipelineCache>,
     render_queue: Res<RenderQueue>,
     mut raytracing_scene_bindings: ResMut<RaytracingSceneBindings>,
 ) {
+    let _source = frame.and_then(|f| bevy_render::diagnostic::profile_source_frame(f.0));
     let _cpu_profile = bevy_render::diagnostic::profile_scope("scene.prepare");
     bevy_render::diagnostic::profile_value(
         "scene.ray_instances",
@@ -209,18 +284,6 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         .filter(|p| p.cloud_coverage > 0.0)
         .and_then(|p| p.weather.as_ref());
     let inputs = SceneInputs {
-        instances: instances_query
-            .iter()
-            .map(
-                |(entity, mesh, material, transform, previous)| RayInstanceInput {
-                    entity,
-                    mesh: mesh.id(),
-                    material: material.id(),
-                    transform: transform.affine(),
-                    previous: previous.map_or(transform.affine(), |t| t.0),
-                },
-            )
-            .collect(),
         directional: directional_lights_query
             .iter()
             .map(|(entity, light)| (entity, GpuDirectionalLight::new(light)))
@@ -254,7 +317,15 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         || lommel.is_changed()
         || texture_assets.is_changed()
         || fallback_texture.is_changed();
-    let reused = !resources_changed
+    let (mut dirty_indices, removed) = update_instance_inputs(
+        &mut scene_cache,
+        &instances_query,
+        &render_queue,
+        resources_changed,
+    );
+    let reused = dirty_indices.is_empty()
+        && removed == 0
+        && !resources_changed
         && !raytracing_scene_bindings.settle_light_history
         && scene_cache.inputs.as_ref() == Some(&inputs)
         && raytracing_scene_bindings.bind_group.is_some();
@@ -284,6 +355,8 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         .collect();
 
     if instances_query.iter().len() == 0 {
+        scene_cache.tlas.prepare(&render_device, 0);
+        scene_cache.storage.active_indices.get_mut().clear();
         return;
     }
 
@@ -306,7 +379,29 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     let mut index_buffers = CachedBindingArray::new();
     let mut textures = CachedBindingArray::new();
     let mut samplers = Vec::new();
-    let SceneCache { storage, tlas, .. } = &mut *scene_cache;
+    let SceneCache {
+        storage,
+        tlas,
+        slots,
+        ..
+    } = &mut *scene_cache;
+    let slot_capacity = slots.capacity();
+    let candidate_entities: Vec<_> = (0..slot_capacity as u32)
+        .filter_map(|i| slots.entity(i))
+        .collect();
+    storage
+        .transforms
+        .get_mut()
+        .resize(slot_capacity, Mat4::IDENTITY);
+    storage
+        .previous_frame_transforms
+        .get_mut()
+        .resize(slot_capacity, Mat4::IDENTITY);
+    storage
+        .geometry_ids
+        .get_mut()
+        .resize(slot_capacity, GpuInstanceGeometryIds::default());
+    storage.material_ids.get_mut().resize(slot_capacity, 0);
     let (tlas, tlas_reused) = tlas.prepare(&render_device, instances_query.iter().len());
     bevy_render::diagnostic::profile_value(
         "scene.tlas_allocation_reused",
@@ -320,6 +415,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         previous_frame_transforms,
         geometry_ids,
         material_ids,
+        active_indices,
         light_sources,
         directional_lights,
         local_lights,
@@ -329,10 +425,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     } = storage;
     materials.get_mut().clear();
     detail_parameters.get_mut().clear();
-    transforms.get_mut().clear();
-    previous_frame_transforms.get_mut().clear();
-    geometry_ids.get_mut().clear();
-    material_ids.get_mut().clear();
+    let mut active_dirty_indices = Vec::new();
     light_sources.get_mut().clear();
     directional_lights.get_mut().clear();
     local_lights.get_mut().clear();
@@ -474,20 +567,32 @@ pub(crate) fn prepare_raytracing_scene_bindings(
 
     let mut instance_id = 0;
     let mut material_transport_flags = 0;
-    for (entity, mesh, material, transform, previous_frame_transform) in &instances_query {
+    for entity in candidate_entities {
+        let Ok((_, mesh, material, transform, previous_frame_transform)) =
+            instances_query.get(entity)
+        else {
+            continue;
+        };
+        let slot = slots.get(entity).unwrap();
+        let index = slot.index as usize;
         let Some(blas) = blas_manager.get(&mesh.id()) else {
+            slots.deactivate(slot);
             continue;
         };
         let Some(vertex_slice) = mesh_allocator.mesh_vertex_slice(&mesh.id()) else {
+            slots.deactivate(slot);
             continue;
         };
         let Some(index_slice) = mesh_allocator.mesh_index_slice(&mesh.id()) else {
+            slots.deactivate(slot);
             continue;
         };
         let Some(material_id) = material_id_map.get(&material.id()).copied() else {
+            slots.deactivate(slot);
             continue;
         };
         let Some(material) = materials.get().get(material_id as usize) else {
+            slots.deactivate(slot);
             continue;
         };
 
@@ -502,16 +607,19 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         *tlas.get_mut_single(instance_id).unwrap() = Some(TlasInstance::new(
             blas,
             tlas_transform(&transform),
-            Default::default(),
+            slot.index,
             0xFF,
         ));
 
-        transforms.get_mut().push(transform);
-        previous_frame_transforms.get_mut().push(
-            previous_frame_transform
-                .map(|t| Mat4::from(t.0))
-                .unwrap_or(transform),
-        );
+        assert!(slot.index < (1 << 24), "TLAS custom slot capacity");
+        transforms.get_mut()[index] = transform;
+        previous_frame_transforms.get_mut()[index] = previous_frame_transform
+            .map(|t| Mat4::from(t.0))
+            .unwrap_or(transform);
+        slots.activate(slot);
+        if active_indices.set_index(instance_id, slot.index) {
+            active_dirty_indices.push(u32::try_from(instance_id).expect("active index capacity"));
+        }
 
         let (vertex_buffer_id, _) = vertex_buffers.push_if_absent(
             vertex_slice.buffer.as_entire_buffer_binding(),
@@ -522,16 +630,19 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             index_slice.buffer.id(),
         );
 
-        geometry_ids.get_mut().push(GpuInstanceGeometryIds {
+        let geometry = GpuInstanceGeometryIds {
             vertex_buffer_id,
             vertex_buffer_offset: vertex_slice.range.start,
             index_buffer_id,
             index_buffer_offset: index_slice.range.start,
             triangle_count: (index_slice.range.len() / 3) as u32,
             light_probability: 0.0,
-        });
-
-        material_ids.get_mut().push(material_id);
+        };
+        if geometry_ids.get()[index] != geometry || material_ids.get()[index] != material_id {
+            dirty_indices.push(slot.index);
+        }
+        geometry_ids.get_mut()[index] = geometry;
+        material_ids.get_mut()[index] = material_id;
 
         if material.emissive != Vec3::ZERO {
             // Texture-average emission is not available on the CPU. The
@@ -550,7 +661,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             light_sources
                 .get_mut()
                 .push(GpuLightSource::new_emissive_mesh_light(
-                    instance_id as u32,
+                    slot.index,
                     (index_slice.range.len() / 3) as u32,
                 ));
 
@@ -563,6 +674,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         instance_id += 1;
     }
 
+    active_indices.get_mut().truncate(instance_id);
     if instance_id == 0 {
         return;
     }
@@ -652,6 +764,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     let upload_profile = bevy_render::diagnostic::profile_scope("scene.upload");
     #[cfg(feature = "graphics_debug")]
     {
+        if active_indices.buffer().is_none() {
+            active_indices.set_label(Some("ray_active_indices"));
+            active_indices.add_usages(BufferUsages::COPY_SRC);
+        }
         if materials.buffer().is_none() {
             materials.set_label(Some("scene_materials"));
             materials.add_usages(BufferUsages::COPY_SRC);
@@ -674,12 +790,17 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         }
     }
     let uploads = [
+        active_indices.write_buffer_indices(&render_device, &render_queue, &active_dirty_indices),
         materials.write_buffer_changed(&render_device, &render_queue),
         detail_parameters.write_buffer_changed(&render_device, &render_queue),
-        transforms.write_buffer_changed(&render_device, &render_queue),
-        previous_frame_transforms.write_buffer_changed(&render_device, &render_queue),
-        geometry_ids.write_buffer_changed(&render_device, &render_queue),
-        material_ids.write_buffer_changed(&render_device, &render_queue),
+        transforms.write_buffer_indices(&render_device, &render_queue, &dirty_indices),
+        previous_frame_transforms.write_buffer_indices(
+            &render_device,
+            &render_queue,
+            &dirty_indices,
+        ),
+        geometry_ids.write_buffer_indices(&render_device, &render_queue, &dirty_indices),
+        material_ids.write_buffer_indices(&render_device, &render_queue, &dirty_indices),
         light_sources.write_buffer_changed(&render_device, &render_queue),
         directional_lights.write_buffer_changed(&render_device, &render_queue),
         local_lights.write_buffer_changed(&render_device, &render_queue),
@@ -712,6 +833,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
                 ),
                 ("ray_geometry_ids", geometry_ids.buffer()),
                 ("ray_material_ids", material_ids.buffer()),
+                ("ray_active_indices", active_indices.buffer()),
                 ("ray_materials", materials.buffer()),
             ]
             .into_iter()
@@ -911,7 +1033,7 @@ impl<T, I: Eq + Hash> CachedBindingArray<T, I> {
 
 type StorageBufferList<T> = StorageBuffer<Vec<T>>;
 
-#[derive(ShaderType)]
+#[derive(ShaderType, Clone, Default, PartialEq)]
 struct GpuInstanceGeometryIds {
     vertex_buffer_id: u32,
     vertex_buffer_offset: u32,

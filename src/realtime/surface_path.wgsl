@@ -54,7 +54,7 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
                 return radiance + throughput * sample_sky(wi);
             }
             let candidate = resolve_ray_hit_full(ray);
-            let raw = materials[material_ids[ray.instance_index]];
+            let raw = materials[material_ids[ray.instance_custom_data]];
             let glass = (raw.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
             let coverage = (raw.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u;
             if (glass || coverage) && panes == 32u { return radiance; }

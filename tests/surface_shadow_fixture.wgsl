@@ -3,7 +3,7 @@ fn emitted_radiance(m: Material, outgoing: vec3f) -> vec3f { return m.emissive; 
 struct Material { base_color:vec3<f32>, roughness:f32, metallic:f32, reflectance:f32, emissive:vec3<f32> }
 struct ResolvedRayHitFull { world_position:vec3<f32>, world_normal:vec3<f32>, geometric_world_normal:vec3<f32>, material:Material, uv:vec2<f32> }
 struct RawMaterial { flags:u32 }
-struct Ray { kind:u32, instance_index:u32, t:f32 }
+struct Ray { kind:u32, instance_custom_data:u32, t:f32 }
 struct Bsdf { wi:vec3<f32>, throughput:vec3<f32>, pdf:f32 }
 struct Light { radiance:vec3<f32>, inverse_pdf:f32, wi:vec3<f32>, brdf_rays_can_hit:bool, solid_angle_pdf:f32 }
 struct ResolvedLightSample { world_position:vec4<f32> }
@@ -28,7 +28,7 @@ fn rand_f(rng:ptr<function,u32>)->f32 {
 }
 fn resolve_material_alpha(m:RawMaterial,uv:vec2<f32>)->f32 { return config[0].a; }
 fn resolve_ray_hit_full(r:Ray)->ResolvedRayHitFull {
- let pane=r.instance_index==0u;
+ let pane=r.instance_custom_data==0u;
  let emission=select(select(1.0,0.0,config[1].y==2.0&&hit_z>0.0),0.0,pane);
  let m=Material(select(vec3(0.0),config[0].rgb,pane),1.0,0.0,0.5,vec3(emission));
  return ResolvedRayHitFull(vec3(0.0,0.0,hit_z),vec3(0.0,0.0,1.0),vec3(0.0,0.0,1.0),m,vec2(0.0));

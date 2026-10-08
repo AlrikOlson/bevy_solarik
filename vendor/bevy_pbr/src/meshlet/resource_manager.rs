@@ -171,6 +171,7 @@ impl ResourceManager {
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -538,7 +539,9 @@ pub fn prepare_meshlet_per_frame_resources(
     mut commands: Commands,
     cutout_atlas: Res<MeshletCutoutAtlas>,
     gpu_images: Res<RenderAssets<GpuImage>>,
+    frame: Option<Res<bevy_diagnostic::FrameCount>>,
 ) {
+    let _source = frame.and_then(|f| bevy_render::diagnostic::profile_source_frame(f.0));
     let _cpu_profile = bevy_render::diagnostic::profile_scope("meshlet.prepare_upload");
     bevy_render::diagnostic::profile_value(
         "meshlet.scene_instances",
@@ -546,6 +549,11 @@ pub fn prepare_meshlet_per_frame_resources(
         "count",
     );
     if instance_manager.scene_instance_count == 0 {
+        for (view_entity, _, _, _) in &views {
+            commands
+                .entity(view_entity)
+                .remove::<(MeshletViewResources, MeshletViewBindGroups)>();
+        }
         return;
     }
 
@@ -555,32 +563,53 @@ pub fn prepare_meshlet_per_frame_resources(
         .filter(|image| gpu_cutout_ready(image))
         .is_none()
     {
-        instance_manager.rebuild_next_extract = true;
-        instance_manager.instance_upload_dirty = true;
-        for cutout in instance_manager.instance_cutouts.get_mut() {
+        for (index, cutout) in instance_manager
+            .instance_cutouts
+            .get_mut()
+            .iter_mut()
+            .enumerate()
+        {
             if cutout.x >= 0.0 {
                 cutout.x = -2.0;
+                instance_manager.dirty_indices.push(index as u32);
+                instance_manager.rebuild_next_extract = true;
+                instance_manager.instance_upload_dirty = true;
             }
         }
     }
     if instance_manager.instance_upload_dirty {
+        let dirty = core::mem::take(&mut instance_manager.dirty_indices);
+        let active_dirty = core::mem::take(&mut instance_manager.active_dirty_indices);
         // TODO: Move this and the submit to a separate system and remove pub from the fields
         let uploads = [
-            instance_manager
-                .instance_cutouts
-                .write_buffer_changed(&render_device, &render_queue),
-            instance_manager
-                .instance_uniforms
-                .write_buffer_changed(&render_device, &render_queue),
-            instance_manager
-                .instance_aabbs
-                .write_buffer_changed(&render_device, &render_queue),
-            instance_manager
-                .instance_material_ids
-                .write_buffer_changed(&render_device, &render_queue),
+            instance_manager.active_indices.write_buffer_indices(
+                &render_device,
+                &render_queue,
+                &active_dirty,
+            ),
+            instance_manager.instance_cutouts.write_buffer_indices(
+                &render_device,
+                &render_queue,
+                &dirty,
+            ),
+            instance_manager.instance_uniforms.write_buffer_indices(
+                &render_device,
+                &render_queue,
+                &dirty,
+            ),
+            instance_manager.instance_aabbs.write_buffer_indices(
+                &render_device,
+                &render_queue,
+                &dirty,
+            ),
+            instance_manager.instance_material_ids.write_buffer_indices(
+                &render_device,
+                &render_queue,
+                &dirty,
+            ),
             instance_manager
                 .instance_bvh_root_nodes
-                .write_buffer_changed(&render_device, &render_queue),
+                .write_buffer_indices(&render_device, &render_queue, &dirty),
         ];
         bevy_render::diagnostic::profile_value(
             "meshlet.upload_bytes",
@@ -598,6 +627,15 @@ pub fn prepare_meshlet_per_frame_resources(
             "count",
         );
 
+        bevy_render::diagnostic::profile_value(
+            "meshlet.published_slots",
+            dirty.len() as f64,
+            "count",
+        );
+        instance_manager.active_dirty_indices = active_dirty;
+        instance_manager.active_dirty_indices.clear();
+        instance_manager.dirty_indices = dirty;
+        instance_manager.dirty_indices.clear();
         instance_manager.instance_upload_dirty = false;
         bevy_render::diagnostic::profile_value("meshlet.instance_uploads", 1.0, "count");
     } else {
@@ -630,9 +668,14 @@ pub fn prepare_meshlet_per_frame_resources(
                 buffer.set_label(Some("meshlet_view_instance_visibility"));
                 buffer
             });
-        for (instance_index, (_, layers, not_shadow_caster)) in
-            instance_manager.instances.iter().enumerate()
-        {
+        instance_visibility
+            .get_mut()
+            .resize(instance_manager.slots.capacity().max(1).div_ceil(32), 0);
+        instance_visibility.get_mut().fill(0);
+        for &slot in instance_manager.slots.active_indices() {
+            let instance_index = slot as usize;
+            let (_, layers, not_shadow_caster) =
+                instance_manager.instances[instance_index].as_ref().unwrap();
             // If either the layers don't match the view's layers or this is a shadow view
             // and the instance is not a shadow caster, hide the instance for this view
             if !render_layers
@@ -974,6 +1017,7 @@ pub fn prepare_meshlet_view_bind_groups(
                 view_resources.second_pass_count.as_entire_binding(),
                 view_resources.second_pass_dispatch.as_entire_binding(),
                 view_resources.second_pass_candidates.as_entire_binding(),
+                instance_manager.active_indices.binding().unwrap(),
             )),
         );
 

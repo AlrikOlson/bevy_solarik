@@ -51,7 +51,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if ray.kind != RAY_QUERY_INTERSECTION_NONE {
             let ray_hit = resolve_ray_hit_full(ray);
             let wo = -ray_direction;
-            let material = materials[material_ids[ray.instance_index]];
+            let material = materials[material_ids[ray.instance_custom_data]];
             if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
                 let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
                 if rand_f(&rng) >= alpha {

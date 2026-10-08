@@ -5,8 +5,8 @@
 mod cpu_profile;
 mod span_stack;
 pub use cpu_profile::{
-    CpuProfileGuard, CpuProfileSample, profile_enabled, profile_scope, profile_value,
-    take_cpu_profile,
+    CpuProfileGuard, CpuProfileSample, CpuProfileSourceGuard, profile_enabled, profile_scope,
+    profile_source_frame, profile_value, take_cpu_profile,
 };
 
 mod erased_render_asset_diagnostic_plugin;
@@ -35,7 +35,8 @@ use crate::{
 use self::internal::{Pass, RenderDiagnosticsMutex, WriteTimestamp, sync_diagnostics};
 pub use self::{
     erased_render_asset_diagnostic_plugin::ErasedRenderAssetDiagnosticPlugin,
-    internal::DiagnosticsRecorder, mesh_allocator_diagnostic_plugin::MeshAllocatorDiagnosticPlugin,
+    internal::{DiagnosticsRecorder, RenderDiagnosticFrames},
+    mesh_allocator_diagnostic_plugin::MeshAllocatorDiagnosticPlugin,
     render_asset_diagnostic_plugin::RenderAssetDiagnosticPlugin,
 };
 
@@ -73,7 +74,8 @@ pub struct RenderDiagnosticsPlugin;
 impl Plugin for RenderDiagnosticsPlugin {
     fn build(&self, app: &mut App) {
         let render_diagnostics_mutex = RenderDiagnosticsMutex::default();
-        app.insert_resource(render_diagnostics_mutex.clone())
+        app.init_resource::<RenderDiagnosticFrames>()
+            .insert_resource(render_diagnostics_mutex.clone())
             .add_systems(PreUpdate, sync_diagnostics);
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
@@ -93,6 +95,12 @@ impl Plugin for RenderDiagnosticsPlugin {
         render_app.add_systems(
             Render,
             begin_diagnostics_frame.before(RenderSystems::ExtractCommands),
+        );
+        render_app.add_systems(
+            Render,
+            tag_diagnostics_frame
+                .after(RenderSystems::ExtractCommands)
+                .before(RenderSystems::PrepareAssets),
         );
         render_app.add_systems(
             RenderGraph,
@@ -117,6 +125,13 @@ pub fn begin_diagnostics_frame(mut recorder: ResMut<DiagnosticsRecorder>) {
     recorder.begin_frame();
 }
 
+fn tag_diagnostics_frame(
+    mut recorder: ResMut<DiagnosticsRecorder>,
+    frame: Res<bevy_diagnostic::FrameCount>,
+) {
+    recorder.set_source_frame(frame.0);
+}
+
 /// Resolves the encoder used for diagnostic recording
 pub fn resolve_encoder(
     mut recorder: ResMut<DiagnosticsRecorder>,
@@ -137,7 +152,7 @@ fn finish_diagnostics_frame(
 ) {
     let mutex = mutex.0.clone();
     recorder.finish_frame(&render_device, move |diagnostics| {
-        *mutex.lock().unwrap() = Some(diagnostics);
+        mutex.lock().unwrap().push(diagnostics);
     });
 }
 

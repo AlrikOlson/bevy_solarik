@@ -114,7 +114,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             break;
         }
         let ray_hit = resolve_ray_hit_full(ray);
-        let material = materials[material_ids[ray.instance_index]];
+        let material = materials[material_ids[ray.instance_custom_data]];
         if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
 #ifdef DLSS_RR_GUIDE_BUFFERS
             psr_finished = true;

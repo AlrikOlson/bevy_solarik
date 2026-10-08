@@ -145,6 +145,11 @@ impl<T: ShaderType + WriteInto> StorageBuffer<T> {
         self.label.as_deref()
     }
 
+    /// Reserved CPU serialization/comparison bytes, excluding the typed value.
+    pub fn cpu_backing_bytes(&self) -> usize {
+        self.scratch.as_ref().capacity() + self.last_uploaded.capacity()
+    }
+
     /// Add more [`BufferUsages`] to the buffer.
     ///
     /// This method only allows addition of flags to the default usage flags.
@@ -229,6 +234,144 @@ impl<T: ShaderType + WriteInto> StorageBuffer<T> {
             }
         }
         self.last_written_size = BufferSize::new(size);
+        upload
+    }
+}
+
+impl StorageBuffer<Vec<u32>> {
+    /// Update one compact index position without rebuilding the array.
+    pub fn set_index(&mut self, position: usize, value: u32) -> bool {
+        assert!(position <= self.value.len(), "contiguous index publication");
+        if let Some(old) = self.value.get_mut(position) {
+            if *old == value {
+                return false;
+            }
+            *old = value;
+        } else {
+            self.value.push(value);
+        }
+        true
+    }
+
+    /// Retain exact active ordering and report only changed record positions.
+    pub fn set_indices(&mut self, values: &[u32]) -> Vec<u32> {
+        let dirty = values
+            .iter()
+            .enumerate()
+            .filter(|&(position, &value)| self.set_index(position, value))
+            .map(|(position, _)| u32::try_from(position).expect("index array capacity"))
+            .collect();
+        self.value.truncate(values.len());
+        dirty
+    }
+}
+
+impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
+    /// Serialize and publish only explicitly changed fixed-size std430 records.
+    /// Allocation/growth initializes the complete value. Logical shrink retains
+    /// capacity, with one safe array element for an empty binding.
+    pub fn write_buffer_indices(
+        &mut self,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+        indices: &[u32],
+    ) -> StorageBufferUpload {
+        let stride = <Vec<T> as ShaderType>::METADATA.stride().get();
+        let size = stride * self.value.len().max(1) as u64;
+        let capacity = self.buffer.as_deref().map(wgpu::Buffer::size).unwrap_or(0);
+        if self.value.is_empty()
+            || self.changed
+            || capacity < size
+            || self.buffer.is_none()
+            || self.last_uploaded.is_empty()
+        {
+            return self.initialize_indices(device, queue, size as usize);
+        }
+        let known_size = self.last_uploaded.len();
+        if self.last_uploaded.capacity() < size as usize {
+            self.last_uploaded
+                .reserve_exact(capacity as usize - known_size);
+        }
+        self.last_uploaded.resize(size as usize, 0);
+        let ranges = self.indexed_ranges(indices, stride as usize, known_size);
+        self.last_written_size = BufferSize::new(size);
+        self.publish_ranges(queue, ranges)
+    }
+    fn initialize_indices(
+        &mut self,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+        size: usize,
+    ) -> StorageBufferUpload {
+        self.scratch = StorageBufferWrapper::new(Vec::with_capacity(size));
+        if self.last_uploaded.capacity() < size {
+            self.last_uploaded
+                .reserve_exact(size - self.last_uploaded.len());
+        }
+        let upload = self.write_buffer_changed(device, queue);
+        self.scratch = StorageBufferWrapper::new(Vec::new());
+        self.last_uploaded.shrink_to(size);
+        upload
+    }
+    fn indexed_ranges(
+        &mut self,
+        indices: &[u32],
+        stride: usize,
+        known_size: usize,
+    ) -> Vec<core::ops::Range<usize>> {
+        let mut sorted = indices.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let mut ranges: Vec<core::ops::Range<usize>> = Vec::new();
+        let mut scratch = StorageBufferWrapper::new(vec![0u8; stride]);
+        for index in sorted {
+            let Some(range) = self.changed_record(index as usize, stride, known_size, &mut scratch)
+            else {
+                continue;
+            };
+            if let Some(last) = ranges.last_mut().filter(|r| r.end == range.start) {
+                last.end = range.end;
+            } else {
+                ranges.push(range);
+            }
+        }
+        ranges
+    }
+    fn changed_record(
+        &mut self,
+        index: usize,
+        stride: usize,
+        known_size: usize,
+        scratch: &mut StorageBufferWrapper<Vec<u8>>,
+    ) -> Option<core::ops::Range<usize>> {
+        let value = self.value.get(index)?;
+        scratch.as_mut().fill(0);
+        scratch.write(value).unwrap();
+        let start = index * stride;
+        let range = start..start + stride;
+        if range.end <= known_size
+            && self.last_uploaded[range.clone()] == scratch.as_ref()[..stride]
+        {
+            return None;
+        }
+        self.last_uploaded[range.clone()].copy_from_slice(&scratch.as_ref()[..stride]);
+        Some(range)
+    }
+    fn publish_ranges(
+        &self,
+        queue: &RenderQueue,
+        ranges: Vec<core::ops::Range<usize>>,
+    ) -> StorageBufferUpload {
+        let mut upload = StorageBufferUpload::default();
+        for range in ranges {
+            queue.write_buffer(
+                self.buffer.as_ref().unwrap(),
+                range.start as u64,
+                &self.last_uploaded[range.clone()],
+            );
+            upload.bytes += range.len() as u64;
+            upload.ranges += 1;
+        }
         upload
     }
 }

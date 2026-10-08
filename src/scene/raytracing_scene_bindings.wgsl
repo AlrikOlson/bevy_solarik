@@ -145,7 +145,7 @@ const LIGHT_NOT_PRESENT_THIS_FRAME = 0xFFFFFFFFu;
 @group(0) @binding(6) var<storage> transforms: array<mat4x4<f32>>; // TODO: Use mat3x4<f32>?
 @group(0) @binding(7) var<storage> previous_frame_transforms: array<mat4x4<f32>>; // TODO: Use mat3x4<f32>?
 @group(0) @binding(8) var<storage> geometry_ids: array<InstanceGeometryIds>;
-@group(0) @binding(9) var<storage> material_ids: array<u32>; // TODO: Store material_id in instance_custom_index instead?
+@group(0) @binding(9) var<storage> material_ids: array<u32>; // TODO: Store material_id in instance_custom_data instead?
 @group(0) @binding(10) var<storage> light_sources: array<LightSource>;
 @group(0) @binding(11) var<storage> directional_lights: array<DirectionalLight>;
 @group(0) @binding(12) var<storage> local_lights: array<LocalLight>;
@@ -274,13 +274,13 @@ fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f3
 
 // Alpha test for a candidate hit on non-opaque geometry.
 fn candidate_is_solid(candidate: RayIntersection, include_glass: bool, origin: vec3f, direction: vec3f) -> bool {
-    let material = materials[material_ids[candidate.instance_index]];
+    let material = materials[material_ids[candidate.instance_custom_data]];
     let glass = (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
     if glass && !include_glass { return false; }
     let diffuse = (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u;
     if !glass && !diffuse && (material.flags & MATERIAL_FLAG_ALPHA_MASK) == 0u { return true; }
     let barycentrics = vec3(1.0 - candidate.barycentrics.x - candidate.barycentrics.y, candidate.barycentrics);
-    let vertices = load_vertices(geometry_ids[candidate.instance_index], candidate.primitive_index);
+    let vertices = load_vertices(geometry_ids[candidate.instance_custom_data], candidate.primitive_index);
     let uv = mat3x2(vertices[0].uv, vertices[1].uv, vertices[2].uv) * barycentrics;
     let alpha = resolve_material_alpha(material, uv);
     if diffuse {
@@ -291,7 +291,7 @@ fn candidate_is_solid(candidate: RayIntersection, include_glass: bool, origin: v
         let d = bitcast<vec3u>(direction);
         var h = o.x ^ (o.y * 1664525u) ^ (o.z * 1013904223u)
             ^ d.x ^ (d.y * 2246822519u) ^ (d.z * 3266489917u)
-            ^ (candidate.instance_index * 374761393u);
+            ^ (candidate.instance_custom_data * 374761393u);
         h = (h ^ (h >> 16u)) * 2246822519u;
         h = (h ^ (h >> 13u)) * 3266489917u;
         h = h ^ (h >> 16u);
@@ -393,11 +393,11 @@ fn resolve_material(material: Material, uv: vec2<f32>) -> ResolvedMaterial {
 
 fn resolve_ray_hit_full(ray_hit: RayIntersection) -> ResolvedRayHitFull {
     let barycentrics = vec3(1.0 - ray_hit.barycentrics.x - ray_hit.barycentrics.y, ray_hit.barycentrics);
-    var hit = resolve_triangle_data_full(ray_hit.instance_index, ray_hit.primitive_index, barycentrics);
+    var hit = resolve_triangle_data_full(ray_hit.instance_custom_data, ray_hit.primitive_index, barycentrics);
     // A double-sided surface hit from behind is shaded as the side the ray
     // arrived on (the rasteriser does the same for the gbuffer); a
     // single-sided back face keeps upstream's raw normal.
-    let material = materials[material_ids[ray_hit.instance_index]];
+    let material = materials[material_ids[ray_hit.instance_custom_data]];
     if !ray_hit.front_face && (material.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0u {
         hit.world_normal = -hit.world_normal;
         hit.geometric_world_normal = -hit.geometric_world_normal;

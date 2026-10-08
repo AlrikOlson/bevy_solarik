@@ -5,7 +5,7 @@ use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings
 use wgpu::util::DeviceExt;
 
 #[test]
-fn persistent_tlas_removes_departures_and_restores_current_instances() {
+fn persistent_tlas_preserves_sparse_custom_slots_through_readiness_empty_return_and_reuse() {
     bevy_platform::future::block_on(async {
         let resources = initialize_headless_renderer(&WgpuSettings {
             backends: Some(wgpu::Backends::VULKAN),
@@ -70,7 +70,8 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
     rayQueryInitialize(&query, scene, RayDesc(0u, 255u, 0.001, 10.0,
         vec3(f32(id.x) * 2.0, 0.0, -2.0), vec3(0.0, 0.0, 1.0)));
     while rayQueryProceed(&query) {}
-    output[id.x] = u32(rayQueryGetCommittedIntersection(&query).kind != RAY_QUERY_INTERSECTION_NONE);
+    let hit = rayQueryGetCommittedIntersection(&query);
+    output[id.x] = select(0u, hit.instance_custom_data + 1u, hit.kind != RAY_QUERY_INTERSECTION_NONE);
 }
 "#.into()),
         });
@@ -97,12 +98,12 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         let mut cache = scene_tlas::SceneTlas::default();
         let mut original = None;
         for (required, positions, expected) in [
-            (2, vec![0.0, 2.0], [1, 1]),
-            (1, vec![2.0], [0, 1]),
+            (2, vec![(0.0, 23), (2.0, 5)], [24, 6]),
+            (1, vec![(2.0, 5)], [0, 6]),
             (0, vec![], [0, 0]),
-            (2, vec![0.0, 2.0], [1, 1]),
-            (4100, vec![0.0], [1, 0]),
-            (1, vec![2.0], [0, 1]),
+            (2, vec![(0.0, 23), (2.0, 5)], [24, 6]),
+            (4100, vec![(0.0, 47)], [48, 0]),
+            (1, vec![(2.0, 5)], [0, 6]),
         ] {
             let (tlas, reused) = cache.prepare(&device, required);
             if let Some(previous) = &original {
@@ -116,10 +117,10 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
                 assert!(!reused);
                 original = Some(tlas.clone());
             }
-            for (slot, &x) in positions.iter().enumerate() {
+            for (slot, &(x, stable_slot)) in positions.iter().enumerate() {
                 let transform = [1.0, 0.0, 0.0, x, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
                 *tlas.get_mut_single(slot).unwrap() =
-                    Some(wgpu::TlasInstance::new(&blas, transform, 0, 255));
+                    Some(wgpu::TlasInstance::new(&blas, transform, stable_slot, 255));
             }
             assert!(tlas.get()[positions.len()..].iter().all(Option::is_none));
             let group = raw.create_bind_group(&wgpu::BindGroupDescriptor {

@@ -13,6 +13,7 @@ pub fn buffers(world: &mut World) -> Vec<(&'static str, Buffer)> {
     if let Some(instances) = world.get_resource::<InstanceManager>() {
         for (role, buffer) in [
             ("vg_instance_uniforms", instances.instance_uniforms.buffer()),
+            ("vg_active_indices", instances.active_indices.buffer()),
             ("vg_material_ids", instances.instance_material_ids.buffer()),
             ("vg_cutouts", instances.instance_cutouts.buffer()),
             ("vg_root_nodes", instances.instance_bvh_root_nodes.buffer()),

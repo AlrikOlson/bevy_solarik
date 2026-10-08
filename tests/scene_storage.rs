@@ -173,3 +173,157 @@ fn changed_publication_keeps_current_previous_transform_layout() {
         );
     });
 }
+#[test]
+fn indexed_publication_reads_only_changes_and_preserves_growth_and_transform_bits() {
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        let mut buffer = StorageBuffer::from(vec![7u32; 50_001]);
+        buffer.write_buffer_indices(&device, &queue, &[0]);
+        assert_eq!(
+            buffer.cpu_backing_bytes(),
+            50_001 * 4,
+            "indexed init retains one byte receipt"
+        );
+        let id = buffer.buffer().unwrap().id();
+        buffer.get_mut()[3] = 0;
+        buffer.get_mut()[4] = 19;
+        buffer.get_mut()[48_000] = 0xabcdef;
+        let delta = buffer.write_buffer_indices(&device, &queue, &[48_000, 4, 3, 4]);
+        assert_eq!((delta.bytes, delta.ranges, delta.allocated), (12, 2, false));
+        assert_eq!(read(&device, &queue, &buffer)[1..], *buffer.get());
+        assert_eq!(
+            buffer.write_buffer_indices(&device, &queue, &[3, 4]).bytes,
+            0
+        );
+        buffer.get_mut().resize(60_001, 31);
+        let indices: Vec<_> = (50_001..60_001).collect();
+        assert!(
+            !buffer
+                .write_buffer_indices(&device, &queue, &indices)
+                .allocated
+        );
+        assert!(buffer.cpu_backing_bytes() <= buffer.buffer().unwrap().size() as usize);
+        assert_eq!(read(&device, &queue, &buffer)[1..], *buffer.get());
+        buffer.get_mut().truncate(3);
+        buffer.write_buffer_indices(&device, &queue, &[]);
+        assert_eq!(read(&device, &queue, &buffer), [3, 7, 7, 7]);
+        buffer.get_mut().resize(5, 0);
+        assert_eq!(
+            buffer.write_buffer_indices(&device, &queue, &[3, 4]).bytes,
+            8
+        );
+        assert_eq!(read(&device, &queue, &buffer), [5, 7, 7, 7, 0, 0]);
+        buffer.get_mut().clear();
+        buffer.write_buffer_indices(&device, &queue, &[0]);
+        assert_eq!(read(&device, &queue, &buffer), [1, 0]);
+        buffer.get_mut().resize(4, 17);
+        buffer.write_buffer_indices(&device, &queue, &[0, 1, 2, 3]);
+        assert_eq!(buffer.buffer().unwrap().id(), id);
+        assert_eq!(read(&device, &queue, &buffer), [4, 17, 17, 17, 17]);
+        buffer.get_mut().resize(100_001, 123);
+        assert!(
+            buffer
+                .write_buffer_indices(&device, &queue, &[100_000])
+                .allocated
+        );
+        assert!(buffer.cpu_backing_bytes() <= buffer.buffer().unwrap().size() as usize);
+        assert_eq!(read(&device, &queue, &buffer)[1..], *buffer.get());
+
+        let mut current = bevy_math::Mat4::IDENTITY;
+        current.w_axis.x = -0.0;
+        let previous = bevy_math::Mat4::from_translation(bevy_math::Vec3::new(3.0, 4.0, 5.0));
+        let mut transforms = StorageBuffer::from(vec![current, previous]);
+        transforms.write_buffer_indices(&device, &queue, &[0, 1]);
+        current.w_axis.x = 0.0;
+        transforms.get_mut()[0] = current;
+        assert_eq!(
+            transforms.write_buffer_indices(&device, &queue, &[0]).bytes,
+            64
+        );
+        let expected: Vec<_> = current
+            .to_cols_array()
+            .into_iter()
+            .chain(previous.to_cols_array())
+            .map(f32::to_bits)
+            .collect();
+        assert_eq!(read(&device, &queue, &transforms)[1..], expected);
+    });
+}
+
+#[test]
+fn active_index_publication_reads_sparse_edits_and_erases_shrunk_or_empty_tails() {
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        let mut buffer = StorageBuffer::from((0..50_001).collect::<Vec<u32>>());
+        buffer.write_buffer_indices(&device, &queue, &[]);
+        let mut active = buffer.get().clone();
+        active[3] = 60_003;
+        active[48_000] = 98_000;
+        active.truncate(49_999);
+        let dirty = buffer.set_indices(&active);
+        assert_eq!(dirty, [3, 48_000]);
+        let upload = buffer.write_buffer_indices(&device, &queue, &dirty);
+        assert_eq!(
+            (upload.bytes, upload.ranges, upload.allocated),
+            (8, 2, false)
+        );
+        assert_eq!(read(&device, &queue, &buffer)[1..], active);
+        assert!(buffer.set_indices(&active).is_empty());
+        let dirty = buffer.set_indices(&[]);
+        buffer.write_buffer_indices(&device, &queue, &dirty);
+        assert_eq!(read(&device, &queue, &buffer), [1, 0]);
+        let dirty = buffer.set_indices(&[48_000, 7]);
+        buffer.write_buffer_indices(&device, &queue, &dirty);
+        assert_eq!(read(&device, &queue, &buffer), [2, 48_000, 7]);
+    });
+}
+
+#[test]
+fn completed_gpu_retirement_reuses_generations_and_readiness_without_stale_members() {
+    bevy_platform::future::block_on(async {
+        use bevy_render::scene_slots::SceneSlots;
+        let (device, queue) = device().await;
+        let mut world = bevy_ecs::world::World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let c = world.spawn_empty().id();
+        let mut slots = SceneSlots::default();
+        slots.begin();
+        let sa = slots.touch(a);
+        let sb = slots.touch(b);
+        slots.activate(sa);
+        let mut active = StorageBuffer::from(slots.active_indices().to_vec());
+        active.write_buffer_changed(&device, &queue);
+        assert_eq!(read(&device, &queue, &active), [1, sa.index]);
+        slots.activate(sb);
+        slots.deactivate(sa); // Temporarily unavailable asset: preserve identity.
+        active.set(slots.active_indices().to_vec());
+        active.write_buffer_changed(&device, &queue);
+        assert_eq!(read(&device, &queue, &active), [1, sb.index]);
+        slots.activate(sa);
+        assert_eq!(slots.touch(a), sa);
+        slots.begin();
+        slots.touch(b);
+        assert_eq!(slots.finish(&queue), [sa]);
+        device
+            .wgpu_device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        slots.begin();
+        slots.touch(b);
+        let sc = slots.touch(c);
+        assert_eq!(sc.index, sa.index);
+        assert_eq!(sc.generation, sa.generation + 1);
+        assert!(!slots.is_active(sa));
+        slots.activate(sc);
+        slots.finish(&queue);
+        active.set(slots.active_indices().to_vec());
+        active.write_buffer_changed(&device, &queue);
+        assert_eq!(read(&device, &queue, &active)[1..], [sb.index, sc.index]);
+        slots.begin(); // No residents: no stale active work may remain.
+        slots.finish(&queue);
+        active.set(slots.active_indices().to_vec());
+        active.write_buffer_changed(&device, &queue);
+        assert_eq!(read(&device, &queue, &active), [1, 0]);
+    });
+}

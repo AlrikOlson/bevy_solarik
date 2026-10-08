@@ -45,7 +45,7 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
         if remaining <= RAY_T_MIN { return vec4(radiance + transmission * background, has_glass); }
         let ray = trace_glass_ray(origin, direction, RAY_T_MIN, remaining);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE { return vec4(radiance + transmission * background, has_glass); }
-        let material = materials[material_ids[ray.instance_index]];
+        let material = materials[material_ids[ray.instance_custom_data]];
         if (material.flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) == 0u {
             // Raster depth bounds this query. An earlier opaque hit was omitted
             // by raster (e.g. a building's back-facing wall), so sky/background

@@ -8,7 +8,7 @@ const MATERIAL_FLAG_ALPHA_BLEND = 4u;
 const MATERIAL_FLAG_DIFFUSE_BLEND = 16u;
 // These synthetic scenes use ordinary, nondirectional emission.
 fn emitted_radiance(m: ResolvedMaterial, outgoing: vec3f) -> vec3f { return m.emissive; }
-struct Intersection { kind: u32, instance_index: u32, t: f32 }
+struct Intersection { kind: u32, instance_custom_data: u32, t: f32 }
 struct Material { flags: u32 }
 var<private> materials: array<Material, 2>;
 var<private> material_ids: array<u32, 2>;

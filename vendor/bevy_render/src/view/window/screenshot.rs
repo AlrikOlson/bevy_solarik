@@ -48,6 +48,8 @@ use wgpu::{CommandEncoder, Extent3d, TextureFormat};
 #[reflect(Debug, Event)]
 pub struct ScreenshotCaptured {
     pub entity: Entity,
+    /// Extracted source frame, preserved through the asynchronous readback.
+    pub source_render_frame: u32,
     #[deref]
     pub image: Image,
 }
@@ -119,7 +121,7 @@ struct ScreenshotPreparedState {
 }
 
 #[derive(Resource, Deref, DerefMut)]
-pub struct CapturedScreenshots(pub Arc<Mutex<Receiver<(Entity, Image)>>>);
+pub struct CapturedScreenshots(pub Arc<Mutex<Receiver<(Entity, u32, Image)>>>);
 
 #[derive(Resource, Deref, DerefMut, Default)]
 struct RenderScreenshotTargets(EntityHashMap<NormalizedRenderTarget>);
@@ -128,7 +130,7 @@ struct RenderScreenshotTargets(EntityHashMap<NormalizedRenderTarget>);
 struct RenderScreenshotsPrepared(EntityHashMap<ScreenshotPreparedState>);
 
 #[derive(Resource, Deref, DerefMut)]
-struct RenderScreenshotsSender(Sender<(Entity, Image)>);
+struct RenderScreenshotsSender(Sender<(Entity, u32, Image)>);
 
 /// Saves the captured screenshot to disk at the provided path.
 pub fn save_to_disk(path: impl AsRef<Path>) -> impl FnMut(On<ScreenshotCaptured>) {
@@ -205,9 +207,13 @@ pub fn trigger_screenshots(
     captured_screenshots: ResMut<CapturedScreenshots>,
 ) {
     let captured_screenshots = captured_screenshots.lock().unwrap();
-    while let Ok((entity, image)) = captured_screenshots.try_recv() {
+    while let Ok((entity, source_render_frame, image)) = captured_screenshots.try_recv() {
         commands.entity(entity).insert(Captured);
-        commands.trigger(ScreenshotCaptured { image, entity });
+        commands.trigger(ScreenshotCaptured {
+            image,
+            entity,
+            source_render_frame,
+        });
     }
 }
 
@@ -633,6 +639,7 @@ pub(crate) fn collect_screenshots(world: &mut World) {
     let _span = bevy_log::info_span!("collect_screenshots").entered();
 
     let sender = world.resource::<RenderScreenshotsSender>().deref().clone();
+    let source_render_frame = world.resource::<bevy_diagnostic::FrameCount>().0;
     let prepared = world.resource::<RenderScreenshotsPrepared>();
 
     for (entity, prepared) in prepared.iter() {
@@ -681,6 +688,7 @@ pub(crate) fn collect_screenshots(world: &mut World) {
 
             if let Err(e) = sender.send((
                 entity,
+                source_render_frame,
                 Image::new(
                     Extent3d {
                         width,

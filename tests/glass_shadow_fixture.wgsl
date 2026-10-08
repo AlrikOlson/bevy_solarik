@@ -1,7 +1,7 @@
 struct RawMaterial { flags: u32 }
 struct ResolvedMaterial { base_color: vec3f, reflectance: f32 }
 struct ResolvedRayHitFull { world_position: vec3f, geometric_world_normal: vec3f, material: ResolvedMaterial, uv: vec2f }
-struct Ray { kind: u32, instance_index: u32, t: f32 }
+struct Ray { kind: u32, instance_custom_data: u32, t: f32 }
 struct SkyLight { material_transport_flags: u32 }
 var<private> sky_light: SkyLight;
 var<private> work: vec3<u32>;

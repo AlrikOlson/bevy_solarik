@@ -111,6 +111,7 @@ var<immediate> constants: Constants;
 @group(0) @binding(10) var<storage, read_write> meshlet_second_pass_instance_count: atomic<u32>;
 @group(0) @binding(11) var<storage, read_write> meshlet_second_pass_instance_dispatch: DispatchIndirectArgs;
 @group(0) @binding(12) var<storage, read_write> meshlet_second_pass_instance_candidates: array<u32>;
+@group(0) @binding(13) var<storage, read> meshlet_active_indices: array<u32>;
 #else
 @group(0) @binding(10) var<storage, read> meshlet_second_pass_instance_count: u32;
 @group(0) @binding(11) var<storage, read> meshlet_second_pass_instance_candidates: array<u32>;

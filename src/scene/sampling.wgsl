@@ -440,7 +440,7 @@ fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t
         let ray = trace_glass_ray(origin, direction, ray_t_min, ray_t_max);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE { return transmission; }
         if panes == 32u { return vec4(0.0); }
-        let raw_material = materials[material_ids[ray.instance_index]];
+        let raw_material = materials[material_ids[ray.instance_custom_data]];
         let hit = resolve_ray_hit_full(ray);
         let alpha = clamp(resolve_material_alpha(raw_material, hit.uv), 0.0, 1.0);
         if (raw_material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {

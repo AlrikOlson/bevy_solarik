@@ -11,6 +11,9 @@
     meshlet_second_pass_instance_dispatch,
     meshlet_second_pass_instance_candidates,
 }
+#ifdef MESHLET_FIRST_CULLING_PASS
+#import bevy_pbr::meshlet_bindings::meshlet_active_indices
+#endif
 #import bevy_pbr::meshlet_cull_shared::{
     aabb_in_frustum,
     should_occlusion_cull_aabb,
@@ -26,7 +29,7 @@ fn instance_count() -> u32 {
 
 fn map_instance_id(id: u32) -> u32 {
 #ifdef MESHLET_FIRST_CULLING_PASS
-    return id;
+    return meshlet_active_indices[id];
 #else
     return meshlet_second_pass_instance_candidates[id];
 #endif

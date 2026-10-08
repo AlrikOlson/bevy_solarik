@@ -72,6 +72,11 @@ impl DiagnosticsRecorder {
         }))
     }
 
+    /// Tag the current queries and delayed readbacks with their extracted source frame.
+    pub fn set_source_frame(&mut self, frame: u32) {
+        self.current_frame_mut().source_render_frame = frame;
+    }
+
     fn current_frame_mut(&mut self) -> &mut FrameData {
         self.0.current_frame.get_mut().expect("lock poisoned")
     }
@@ -211,6 +216,7 @@ struct SpanRecord {
 }
 
 struct FrameData {
+    source_render_frame: u32,
     device: Device,
     timestamps_query_set: Option<QuerySet>,
     num_timestamps: u32,
@@ -285,6 +291,7 @@ impl FrameData {
         };
 
         FrameData {
+            source_render_frame: 0,
             device: wgpu_device.clone(),
             timestamps_query_set,
             num_timestamps: 0,
@@ -545,7 +552,10 @@ impl FrameData {
                 });
             }
 
-            callback(RenderDiagnostics(diagnostics));
+            callback(RenderDiagnostics {
+                source_render_frame: self.source_render_frame,
+                diagnostics,
+            });
             return;
         };
 
@@ -718,7 +728,10 @@ impl FrameData {
             });
         }
 
-        callback(RenderDiagnostics(diagnostics));
+        callback(RenderDiagnostics {
+            source_render_frame: self.source_render_frame,
+            diagnostics,
+        });
 
         drop(data);
         read_buffer.unmap();
@@ -730,7 +743,20 @@ impl FrameData {
 
 /// Resource which stores render diagnostics of the most recent frame.
 #[derive(Debug, Default, Clone, Resource)]
-pub struct RenderDiagnostics(Vec<RenderDiagnostic>);
+pub struct RenderDiagnostics {
+    /// Extracted frame that produced these asynchronous query results.
+    pub source_render_frame: u32,
+    /// Every diagnostic delivered for that source frame.
+    pub diagnostics: Vec<RenderDiagnostic>,
+}
+
+/// All batches delivered this main update, including out-of-order completions.
+/// Source IDs travel with the original query and value readbacks.
+#[derive(Debug, Default, Resource)]
+pub struct RenderDiagnosticFrames(
+    /// All batches delivered this update, including multiple or reordered readbacks.
+    pub Vec<RenderDiagnostics>,
+);
 
 /// A render diagnostic which has been recorded, but not yet stored in [`DiagnosticsStore`].
 #[derive(Debug, Clone, Resource)]
@@ -746,28 +772,29 @@ pub struct RenderDiagnostic {
 ///  1. in `PreUpdate`, during [`sync_diagnostics`],
 ///  2. after rendering has finished and statistics have been downloaded from GPU.
 #[derive(Debug, Default, Clone, Resource)]
-pub struct RenderDiagnosticsMutex(pub(crate) Arc<Mutex<Option<RenderDiagnostics>>>);
+pub struct RenderDiagnosticsMutex(pub(crate) Arc<Mutex<Vec<RenderDiagnostics>>>);
 
 /// Updates render diagnostics measurements.
-pub fn sync_diagnostics(mutex: Res<RenderDiagnosticsMutex>, mut store: ResMut<DiagnosticsStore>) {
-    let Some(diagnostics) = mutex.0.lock().ok().and_then(|mut v| v.take()) else {
-        return;
-    };
-
+pub fn sync_diagnostics(
+    mutex: Res<RenderDiagnosticsMutex>,
+    mut store: ResMut<DiagnosticsStore>,
+    mut frames: ResMut<RenderDiagnosticFrames>,
+) {
+    frames.0 = core::mem::take(&mut *mutex.0.lock().expect("diagnostic delivery lock"));
     let time = Instant::now();
-
-    for diagnostic in &diagnostics.0 {
-        if store.get(&diagnostic.path).is_none() {
-            store.add(Diagnostic::new(diagnostic.path.clone()).with_suffix(diagnostic.suffix));
+    for frame in &frames.0 {
+        for diagnostic in &frame.diagnostics {
+            if store.get(&diagnostic.path).is_none() {
+                store.add(Diagnostic::new(diagnostic.path.clone()).with_suffix(diagnostic.suffix));
+            }
+            store
+                .get_mut(&diagnostic.path)
+                .unwrap()
+                .add_measurement(DiagnosticMeasurement {
+                    time,
+                    value: diagnostic.value,
+                });
         }
-
-        store
-            .get_mut(&diagnostic.path)
-            .unwrap()
-            .add_measurement(DiagnosticMeasurement {
-                time,
-                value: diagnostic.value,
-            });
     }
 }
 
@@ -842,4 +869,46 @@ impl Pass for ComputePass<'_> {
 pub enum PassKind {
     Render,
     Compute,
+}
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    #[test]
+    fn delayed_batches_preserve_every_original_frame_and_drain_once() {
+        let mut app = bevy_app::App::new();
+        let mutex = RenderDiagnosticsMutex::default();
+        let batch = |source_render_frame, value| RenderDiagnostics {
+            source_render_frame,
+            diagnostics: vec![RenderDiagnostic {
+                path: DiagnosticPath::new("render/test_source"),
+                suffix: "count",
+                value,
+            }],
+        };
+        mutex
+            .0
+            .lock()
+            .unwrap()
+            .extend([batch(17, 91.0), batch(12, 42.0)]);
+        app.insert_resource(mutex)
+            .init_resource::<DiagnosticsStore>()
+            .init_resource::<RenderDiagnosticFrames>()
+            .add_systems(bevy_app::PreUpdate, sync_diagnostics);
+        app.update();
+        let frames = &app.world().resource::<RenderDiagnosticFrames>().0;
+        assert_eq!(
+            frames
+                .iter()
+                .map(|f| (f.source_render_frame, f.diagnostics[0].value))
+                .collect::<Vec<_>>(),
+            [(17, 91.0), (12, 42.0)]
+        );
+        app.update();
+        assert!(
+            app.world()
+                .resource::<RenderDiagnosticFrames>()
+                .0
+                .is_empty()
+        );
+    }
 }
