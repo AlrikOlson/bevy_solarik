@@ -21,7 +21,9 @@ pub fn build(device: &wgpu::Device, queue: &wgpu::Queue, input: &Input) -> Scene
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("source coverage input"),
             contents: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::BLAS_INPUT
+                | wgpu::BufferUsages::COPY_DST,
         })
     });
     let tlas = acceleration(device, queue, input, &buffers);

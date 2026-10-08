@@ -975,6 +975,7 @@ dependencies = [
  "bevy_shader",
  "bevy_transform",
  "bevy_utils",
+ "blake3",
  "bytemuck",
  "derive_more",
  "futures-lite",

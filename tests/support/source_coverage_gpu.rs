@@ -1,9 +1,9 @@
 use super::{Probe, acceleration::Scene};
 
-pub fn pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
+pub fn pipeline(device: &wgpu::Device, source: &str) -> wgpu::ComputePipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("source reference all intersections"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../source_coverage.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,

@@ -33,7 +33,7 @@ fn source_coverage_matches_analytic_and_independent_cpu_rays() {
         .await;
         let device = resources.0.wgpu_device();
         let queue = &resources.1;
-        let pipeline = gpu::pipeline(device);
+        let pipeline = gpu::pipeline(device, include_str!("source_coverage.wgsl"));
         controls(device, queue, &pipeline);
         let mut reports = Vec::new();
         for id in [5, 43] {
