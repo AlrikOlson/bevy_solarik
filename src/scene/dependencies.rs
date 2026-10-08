@@ -92,7 +92,7 @@ fn material_state(material: &StandardMaterial, images: &RenderAssets<GpuImage>) 
 impl Dependencies {
     pub fn observe(
         &mut self,
-        inputs: impl Iterator<Item = RayInstanceInput>,
+        inputs: impl Iterator<Item = (AssetId<Mesh>, AssetId<StandardMaterial>)>,
         blas: &BlasManager,
         materials: &StandardMaterialAssets,
         images: &RenderAssets<GpuImage>,
@@ -104,9 +104,9 @@ impl Dependencies {
     ) -> Changes {
         let mut mesh_ids: HashSet<AssetId<Mesh>> = HashSet::default();
         let mut material_ids: HashSet<AssetId<StandardMaterial>> = HashSet::default();
-        for input in inputs {
-            mesh_ids.insert(input.mesh);
-            material_ids.insert(input.material);
+        for (mesh, material) in inputs {
+            mesh_ids.insert(mesh);
+            material_ids.insert(material);
         }
         let mut changes = Changes::default();
         let globals = global_images

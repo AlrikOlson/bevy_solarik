@@ -130,3 +130,42 @@ fn delta_previous_transform_settles_without_occluder_change_and_dependencies_rep
     assert_eq!(changed, HashSet::from_iter([root]));
     assert!(no_previous == settled);
 }
+
+#[test]
+fn shared_source_pairs_match_full_expansion_without_root_transform_work() {
+    let mut world = World::new();
+    let shared = assembly(&[1., 2., 3.]);
+    let root = world.spawn(shared.clone()).id();
+    for i in 1..512 {
+        world.spawn((
+            shared.clone(),
+            GlobalTransform::from_translation(Vec3::X * i as f32),
+        ));
+    }
+    world.spawn(RaytracingMesh3d::default());
+    let mut materials = bevy_asset::Assets::<StandardMaterial>::default();
+    let different = materials.add(StandardMaterial::default());
+    world.spawn(RaytracingAssembly3d::new(vec![RaytracingAssemblyPart {
+        mesh: Handle::default(),
+        material: different,
+        transform: Affine3A::IDENTITY,
+    }]));
+    let mut state = SystemState::<SceneRows>::new(&mut world);
+    for replacement in [assembly(&[4.]), assembly(&[]), shared.clone()] {
+        world.entity_mut(root).insert(replacement);
+        let rows = state.get_mut(&mut world).unwrap();
+        let full: HashSet<_> = rows
+            .iter()
+            .map(|input| (input.mesh, input.material))
+            .collect();
+        assert_eq!(rows.sources(), full);
+    }
+    world.entity_mut(root).remove::<RaytracingAssembly3d>();
+    let rows = state.get_mut(&mut world).unwrap();
+    assert_eq!(
+        rows.sources(),
+        rows.iter()
+            .map(|input| (input.mesh, input.material))
+            .collect()
+    );
+}

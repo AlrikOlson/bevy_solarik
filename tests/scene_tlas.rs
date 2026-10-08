@@ -97,17 +97,51 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         });
         let mut cache = scene_tlas::SceneTlas::default();
         let mut original = None;
-        for (required, positions, expected) in [
-            (2, vec![(0.0, 23), (2.0, 5)], [24, 6]),
-            (1, vec![(2.0, 5)], [0, 6]),
-            (0, vec![], [0, 0]),
-            (2, vec![(0.0, 23), (2.0, 5)], [24, 6]),
-            (4100, vec![(0.0, 47)], [48, 0]),
-            (1, vec![(2.0, 5)], [0, 6]),
+        let mut retained_group = None;
+        let mut previous_dense: Vec<(f32, u32)> = Vec::new();
+        for (required, full, dense, removals, positions, expected) in [
+            (2, true, true, vec![], vec![(0.0, 23), (2.0, 5)], [24, 6]),
+            // Removing an early physical descriptor displaces a clean survivor.
+            (1, false, true, vec![], vec![(2.0, 5)], [0, 6]),
+            (0, false, true, vec![], vec![], [0, 0]),
+            (2, false, true, vec![], vec![(2.0, 5), (0.0, 23)], [24, 6]),
+            (2, false, true, vec![], vec![(0.0, 5), (2.0, 23)], [6, 24]),
+            (2, false, true, vec![], vec![(2.0, 23), (0.0, 5)], [6, 24]),
+            // Full readiness publication follows the final active order.
+            (
+                3,
+                true,
+                true,
+                vec![],
+                vec![(0.0, 23), (9.0, 4099), (2.0, 5)],
+                [24, 6],
+            ),
+            (2, true, true, vec![], vec![(0.0, 23), (2.0, 5)], [24, 6]),
+            // A high custom ID does not require a high physical address.
+            (1, false, true, vec![], vec![(0.0, 4099)], [4100, 0]),
+            (1, false, true, vec![], vec![(2.0, 4099)], [0, 4100]),
+            (1, false, true, vec![], vec![(2.0, 4099)], [0, 4100]),
+            (24, true, false, vec![], vec![(0.0, 23), (2.0, 5)], [24, 6]),
+            (24, false, false, vec![23], vec![], [0, 6]),
+            (24, false, false, vec![5], vec![], [0, 0]),
+            (24, false, false, vec![], vec![(0.0, 23), (2.0, 5)], [24, 6]),
+            (24, false, false, vec![], vec![(2.0, 23), (0.0, 5)], [6, 24]),
+            (24, false, false, vec![], vec![(0.0, 23), (2.0, 5)], [24, 6]),
+            (4100, true, false, vec![], vec![(0.0, 4099)], [4100, 0]),
+            (4100, false, false, vec![4099], vec![(2.0, 5)], [0, 6]),
+            (6, true, false, vec![], vec![(2.0, 5)], [0, 6]),
         ] {
-            let (tlas, reused) = cache.prepare(&device, required);
+            assert_eq!(cache.get().is_some(), original.is_some());
+            let (tlas, reused) = if full {
+                cache.prepare(&device, required)
+            } else {
+                assert!(
+                    cache.retained(required + 8192).is_none(),
+                    "growth fails before mutation"
+                );
+                (cache.retained(required).unwrap(), true)
+            };
             if let Some(previous) = &original {
-                assert_eq!(reused, required <= 4096);
                 if reused {
                     assert_eq!(tlas, previous);
                 } else {
@@ -115,34 +149,71 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
                 }
             } else {
                 assert!(!reused);
-                original = Some(tlas.clone());
             }
-            for (slot, &(x, stable_slot)) in positions.iter().enumerate() {
+            original = Some(tlas.clone());
+            for slot in removals {
+                scene_tlas::publish_slot(tlas, slot, None);
+            }
+            let publish: Vec<_> = if dense {
+                let old: Vec<_> = previous_dense.iter().map(|&(_, slot)| slot).collect();
+                let changed = scene_tlas::changed_dense_slots(
+                    &old,
+                    positions.iter().map(|&(_, slot)| slot),
+                    |slot| {
+                        full || previous_dense.iter().find(|p| p.1 == slot)
+                            != positions.iter().find(|p| p.1 == slot)
+                    },
+                );
+                for index in required..previous_dense.len() {
+                    scene_tlas::publish_slot(tlas, index as u32, None);
+                }
+                let publish = changed
+                    .into_iter()
+                    .map(|(address, slot)| {
+                        let x = positions.iter().find(|p| p.1 == slot).unwrap().0;
+                        (address, x, slot)
+                    })
+                    .collect();
+                previous_dense = positions.clone();
+                publish
+            } else {
+                positions.iter().map(|&(x, slot)| (slot, x, slot)).collect()
+            };
+            for (address, x, stable_slot) in publish {
                 let transform = [1.0, 0.0, 0.0, x, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-                *tlas.get_mut_single(slot).unwrap() =
-                    Some(wgpu::TlasInstance::new(&blas, transform, stable_slot, 255));
+                scene_tlas::publish_slot(
+                    tlas,
+                    address,
+                    Some(wgpu::TlasInstance::new(&blas, transform, stable_slot, 255)),
+                );
             }
-            assert!(tlas.get()[positions.len()..].iter().all(Option::is_none));
-            let group = raw.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: tlas.as_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: output.as_entire_binding(),
-                    },
-                ],
-            });
+            if dense {
+                assert!(tlas.get()[required..].iter().all(Option::is_none));
+                assert_eq!(tlas.get().len(), 4096, "custom IDs do not grow descriptors");
+            }
+            if full {
+                retained_group = Some(raw.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: tlas.as_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: output.as_entire_binding(),
+                        },
+                    ],
+                }));
+            }
+            let group = retained_group.as_ref().unwrap();
             let mut encoder = raw.create_command_encoder(&Default::default());
             encoder.build_acceleration_structures(&[], [&*tlas]);
             {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &group, &[]);
+                pass.set_bind_group(0, group, &[]);
                 pass.dispatch_workgroups(2, 1, 1);
             }
             encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, 8);

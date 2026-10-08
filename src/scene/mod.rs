@@ -17,6 +17,8 @@ pub struct CaptureSceneIndices;
 #[cfg(feature = "graphics_debug")]
 pub mod graphics_debug;
 mod light_sampling;
+#[cfg(feature = "graphics_debug")]
+mod memory_profile;
 mod ray_settings;
 mod tlas;
 mod types;

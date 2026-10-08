@@ -1,11 +1,15 @@
 //! Compact root queries expand immutable parts only when the ray scene changes.
 use super::binder::RayInstanceInput;
 use super::{RaytracingAssembly3d, RaytracingMesh3d};
+use alloc::sync::Arc;
+use bevy_asset::AssetId;
 use bevy_ecs::{
     entity::Entity,
     system::{Query, SystemParam},
 };
+use bevy_mesh::Mesh;
 use bevy_pbr::{MeshMaterial3d, PreviousGlobalTransform, StandardMaterial};
+use bevy_platform::collections::HashSet;
 use bevy_render::scene_slots::SceneInstance;
 use bevy_transform::components::GlobalTransform;
 
@@ -36,6 +40,26 @@ pub(super) struct SceneRows<'w, 's> {
 impl SceneRows<'_, '_> {
     pub(super) fn len(&self) -> usize {
         self.single.iter().len() + self.assemblies.iter().map(|r| r.1.0.len()).sum::<usize>()
+    }
+    /// Source dependencies do not depend on any root/part transform. Deduplicate
+    /// immutable shared allocations within this invocation before visiting parts.
+    pub(super) fn sources(&self) -> HashSet<(AssetId<Mesh>, AssetId<StandardMaterial>)> {
+        let mut sources = HashSet::default();
+        let mut assemblies: HashSet<_> = HashSet::default();
+        for (_, mesh, material, _, _) in &self.single {
+            sources.insert((mesh.id(), material.id()));
+        }
+        for (_, assembly, _, _) in &self.assemblies {
+            if assemblies.insert(Arc::as_ptr(&assembly.0)) {
+                sources.extend(
+                    assembly
+                        .0
+                        .iter()
+                        .map(|part| (part.mesh.id(), part.material.id())),
+                );
+            }
+        }
+        sources
     }
     /// Expand only one changed root; removal naturally returns no rows.
     pub(super) fn for_root(&self, entity: Entity) -> Vec<RayInstanceInput> {
