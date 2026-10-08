@@ -133,26 +133,40 @@ impl InstanceManager {
             instances: Vec::new(),
             instance_uniforms: {
                 let mut buffer = StorageBuffer::default();
+                #[cfg(feature = "graphics_debug")]
+                buffer.add_usages(bevy_render::render_resource::BufferUsages::COPY_SRC);
                 buffer.set_label(Some("meshlet_instance_uniforms"));
                 buffer
             },
             instance_aabbs: {
                 let mut buffer = StorageBuffer::default();
+                #[cfg(feature = "graphics_debug")]
+                buffer.add_usages(bevy_render::render_resource::BufferUsages::COPY_SRC);
                 buffer.set_label(Some("meshlet_instance_aabbs"));
                 buffer
             },
             instance_material_ids: {
                 let mut buffer = StorageBuffer::default();
+                #[cfg(feature = "graphics_debug")]
+                buffer.add_usages(bevy_render::render_resource::BufferUsages::COPY_SRC);
                 buffer.set_label(Some("meshlet_instance_material_ids"));
                 buffer
             },
             instance_bvh_root_nodes: {
                 let mut buffer = StorageBuffer::default();
+                #[cfg(feature = "graphics_debug")]
+                buffer.add_usages(bevy_render::render_resource::BufferUsages::COPY_SRC);
                 buffer.set_label(Some("meshlet_instance_bvh_root_nodes"));
                 buffer
             },
             view_instance_visibility: EntityHashMap::default(),
-            instance_cutouts: StorageBuffer::default(),
+            instance_cutouts: {
+                let mut buffer = StorageBuffer::default();
+                buffer.set_label(Some("meshlet_instance_cutouts"));
+                #[cfg(feature = "graphics_debug")]
+                buffer.add_usages(bevy_render::render_resource::BufferUsages::COPY_SRC);
+                buffer
+            },
 
             inputs: Vec::new(),
             material_receipt: (0, 0),

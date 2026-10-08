@@ -36,6 +36,8 @@ all-features = true
 features = ["bevy_image/zstd_rust"]
 
 [features]
+# Bounded native resource introspection, compiled only for developer captures.
+graphics_debug = []
 area_light_luts = [
     "bevy_image/ktx2",
     "bevy_image/zstd",

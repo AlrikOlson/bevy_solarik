@@ -229,7 +229,13 @@ pub fn prepare_solari_lighting_resources(
         let world_cache_active_cells_dispatch = render_device.create_buffer(&BufferDescriptor {
             label: Some("solarik_lighting_world_cache_active_cells_dispatch"),
             size: size_of::<[u32; 3]>() as u64,
-            usage: BufferUsages::INDIRECT | BufferUsages::STORAGE,
+            usage: BufferUsages::INDIRECT
+                | BufferUsages::STORAGE
+                | if cfg!(feature = "graphics_debug") {
+                    BufferUsages::COPY_SRC
+                } else {
+                    BufferUsages::empty()
+                },
             mapped_at_creation: false,
         });
 

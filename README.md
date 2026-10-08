@@ -6,6 +6,27 @@ It keeps Solari's ReSTIR direct and indirect lighting and world-space radiance c
 
 Tested on Windows with an RTX 4090 and Vulkan. Other hardware and backends are untested.
 
+## Native graphics inspection
+
+The optional `graphics_debug` feature exposes capture-only snapshots under
+`scene::graphics_debug`, `realtime::graphics_debug` and the vendored public
+`bevy_pbr::experimental::meshlet::graphics_debug` namespace. It adds `COPY_SRC`
+to the corresponding production storage/indirect buffers; default features do
+not change their usage flags or install readback systems.
+
+`RaytracingSceneBindings::debug` records current buffers, logical ray instance
+count, active/capacity TLAS entries, BLAS publication generation and material
+change tick. The other helpers return labelled handles to current cache and
+VG inputs, work statistics and software/hardware indirect arguments. Call them
+after the actual render frame and before cleanup, then perform bounded explicit
+GPU copies. Buffer capacity, sampled bytes and driver AS memory are distinct.
+These APIs do not provide alpha traversal counts or hardware occupancy.
+
+The owning application brackets capture only after deferred extraction has
+completed. Keep capture/readback overhead separate from uncaptured performance.
+No NVIDIA SDK or interception library is vendored by this feature.
+
+
 [Releases](https://github.com/AlrikOlson/bevy_solarik/releases) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ## Bistro in Solarik

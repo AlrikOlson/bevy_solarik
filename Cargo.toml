@@ -25,6 +25,8 @@ zstd_c = ["bevy_image/zstd_c"]
 # needs DLSS_SDK, VULKAN_SDK and libclang at build time).
 dlss = ["bevy_anti_alias/dlss"]
 force_disable_dlss = ["bevy_anti_alias/force_disable_dlss"]
+# Native capture probes; no systems or readbacks in default builds.
+graphics_debug = ["bevy_pbr/graphics_debug"]
 
 [patch.crates-io]
 bevy_render = { path = "vendor/bevy_render" }

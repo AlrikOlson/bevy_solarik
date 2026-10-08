@@ -105,6 +105,9 @@ pub struct RaytracingSceneBindings {
     pub(crate) has_foliage: bool,
     previous_frame_light_entities: Vec<Entity>,
     settle_light_history: bool,
+    #[cfg(feature = "graphics_debug")]
+    /// Capture-only prepared scene generations and readback handles.
+    pub debug: super::graphics_debug::SceneSnapshot,
 }
 
 #[derive(Default)]
@@ -268,6 +271,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     raytracing_scene_bindings.settle_light_history = false;
     raytracing_scene_bindings.bind_group = None;
     raytracing_scene_bindings.glass_entities.clear();
+    #[cfg(feature = "graphics_debug")]
+    {
+        raytracing_scene_bindings.debug = super::graphics_debug::SceneSnapshot::default();
+    }
     raytracing_scene_bindings.has_foliage = false;
 
     let mut this_frame_entity_to_light_id = EntityHashMap::<u32>::default();
@@ -643,6 +650,29 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     }
 
     let upload_profile = bevy_render::diagnostic::profile_scope("scene.upload");
+    #[cfg(feature = "graphics_debug")]
+    {
+        if materials.buffer().is_none() {
+            materials.set_label(Some("scene_materials"));
+            materials.add_usages(BufferUsages::COPY_SRC);
+        }
+        if transforms.buffer().is_none() {
+            transforms.set_label(Some("scene_transforms"));
+            transforms.add_usages(BufferUsages::COPY_SRC);
+        }
+        if previous_frame_transforms.buffer().is_none() {
+            previous_frame_transforms.set_label(Some("scene_previous_transforms"));
+            previous_frame_transforms.add_usages(BufferUsages::COPY_SRC);
+        }
+        if geometry_ids.buffer().is_none() {
+            geometry_ids.set_label(Some("scene_geometry_ids"));
+            geometry_ids.add_usages(BufferUsages::COPY_SRC);
+        }
+        if material_ids.buffer().is_none() {
+            material_ids.set_label(Some("scene_material_ids"));
+            material_ids.add_usages(BufferUsages::COPY_SRC);
+        }
+    }
     let uploads = [
         materials.write_buffer_changed(&render_device, &render_queue),
         detail_parameters.write_buffer_changed(&render_device, &render_queue),
@@ -671,6 +701,29 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         "count",
     );
     drop(upload_profile);
+    #[cfg(feature = "graphics_debug")]
+    {
+        raytracing_scene_bindings.debug = super::graphics_debug::SceneSnapshot {
+            buffers: [
+                ("ray_transforms", transforms.buffer()),
+                (
+                    "ray_previous_transforms",
+                    previous_frame_transforms.buffer(),
+                ),
+                ("ray_geometry_ids", geometry_ids.buffer()),
+                ("ray_material_ids", material_ids.buffer()),
+                ("ray_materials", materials.buffer()),
+            ]
+            .into_iter()
+            .filter_map(|(role, buffer)| buffer.map(|b| (role, b.clone())))
+            .collect(),
+            instances: instances_query.iter().len(),
+            blas_generation: blas_manager.generation,
+            material_change_tick: material_assets.last_changed().get(),
+            tlas_capacity: tlas.get().len(),
+            tlas_active: tlas.get().iter().filter(|i| i.is_some()).count(),
+        };
+    }
 
     let mut command_encoder = render_device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("build_tlas_command_encoder"),
@@ -809,6 +862,8 @@ impl RaytracingSceneBindings {
             ),
             previous_frame_light_entities: Vec::new(),
             settle_light_history: false,
+            #[cfg(feature = "graphics_debug")]
+            debug: super::graphics_debug::SceneSnapshot::default(),
             glass_entities: HashSet::default(),
             has_foliage: false,
         }

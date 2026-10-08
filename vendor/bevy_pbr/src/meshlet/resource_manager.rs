@@ -693,7 +693,13 @@ pub fn prepare_meshlet_per_frame_resources(
         let second_pass_dispatch = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("meshlet_second_pass_dispatch"),
             contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-            usage: BufferUsages::STORAGE | BufferUsages::INDIRECT,
+            usage: BufferUsages::STORAGE
+                | BufferUsages::INDIRECT
+                | if cfg!(feature = "graphics_debug") {
+                    BufferUsages::COPY_SRC
+                } else {
+                    BufferUsages::empty()
+                },
         });
 
         let first_bvh_cull_count_front =
@@ -706,7 +712,14 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_first_bvh_cull_dispatch_front"),
                 contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    }
+                    | BufferUsages::COPY_DST,
             });
         let first_bvh_cull_count_back =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -718,7 +731,14 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_first_bvh_cull_dispatch_back"),
                 contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    }
+                    | BufferUsages::COPY_DST,
             });
 
         let second_bvh_cull_count_front =
@@ -731,7 +751,14 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_second_bvh_cull_dispatch_front"),
                 contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    }
+                    | BufferUsages::COPY_DST,
             });
         let second_bvh_cull_count_back =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -743,7 +770,14 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_second_bvh_cull_dispatch_back"),
                 contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    }
+                    | BufferUsages::COPY_DST,
             });
 
         let front_meshlet_cull_count =
@@ -756,7 +790,13 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_front_meshlet_cull_dispatch"),
                 contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    },
             });
         let back_meshlet_cull_count =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
@@ -768,14 +808,26 @@ pub fn prepare_meshlet_per_frame_resources(
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_back_meshlet_cull_dispatch"),
                 contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    },
             });
 
         let visibility_buffer_software_raster_indirect_args = render_device
             .create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("meshlet_visibility_buffer_software_raster_indirect_args"),
                 contents: DispatchIndirectArgs { x: 0, y: 1, z: 1 }.as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    },
             });
 
         let visibility_buffer_hardware_raster_indirect_args = render_device
@@ -788,7 +840,13 @@ pub fn prepare_meshlet_per_frame_resources(
                     first_instance: 0,
                 }
                 .as_bytes(),
-                usage: BufferUsages::STORAGE | BufferUsages::INDIRECT,
+                usage: BufferUsages::STORAGE
+                    | BufferUsages::INDIRECT
+                    | if cfg!(feature = "graphics_debug") {
+                        BufferUsages::COPY_SRC
+                    } else {
+                        BufferUsages::empty()
+                    },
             });
 
         let depth_pyramid = ViewDepthPyramid::new(

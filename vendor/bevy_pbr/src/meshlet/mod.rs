@@ -6,6 +6,8 @@ mod cutout;
 mod derived_cache;
 #[cfg(feature = "meshlet_processor")]
 mod from_mesh;
+#[cfg(feature = "graphics_debug")]
+pub mod graphics_debug;
 mod instance_manager;
 mod material_pipeline_prepare;
 mod material_shade_nodes;

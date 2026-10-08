@@ -1,4 +1,6 @@
 mod extract;
+#[cfg(feature = "graphics_debug")]
+pub mod graphics_debug;
 mod node;
 mod prepare;
 

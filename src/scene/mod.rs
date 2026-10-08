@@ -2,6 +2,8 @@ mod binder;
 mod blas;
 pub mod collimated;
 mod extract;
+#[cfg(feature = "graphics_debug")]
+pub mod graphics_debug;
 mod light_sampling;
 mod ray_settings;
 mod tlas;
