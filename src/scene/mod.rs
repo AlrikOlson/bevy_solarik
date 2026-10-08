@@ -62,6 +62,7 @@ impl Plugin for RaytracingScenePlugin {
         app.add_plugins(crate::gaussian::GaussianDielectricPlugin);
         app.add_plugins(crate::lommel::LommelSeeligerPlugin);
         app.add_plugins(crate::rings::RingPlugin);
+        crate::coarse_scene::load_shader(app);
         load_shader_library!(app, "brdf.wgsl");
         load_shader_library!(app, "light_medium.wgsl");
         load_shader_library!(app, "thin_glass.wgsl");
