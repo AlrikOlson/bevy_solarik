@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use super::Buffer;
+use super::{Buffer, StorageBufferUploadBatch};
 use crate::{
     render_resource::make_buffer_label,
     renderer::{RenderDevice, RenderQueue},
@@ -276,6 +276,22 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
         queue: &RenderQueue,
         indices: &[u32],
     ) -> StorageBufferUpload {
+        let mut batch = StorageBufferUploadBatch::default();
+        let upload = self.stage_buffer_indices(device, queue, indices, &mut batch);
+        batch.finish(device, queue);
+        upload
+    }
+
+    /// Stage exact changed records into an owning system's shared upload batch.
+    /// Initialization still uses one full write; sparse publications share a
+    /// bounded source allocation instead of allocating once per dirty range.
+    pub fn stage_buffer_indices(
+        &mut self,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+        indices: &[u32],
+        batch: &mut StorageBufferUploadBatch,
+    ) -> StorageBufferUpload {
         let stride = <Vec<T> as ShaderType>::METADATA.stride().get();
         let size = stride * self.value.len().max(1) as u64;
         let capacity = self.buffer.as_deref().map(wgpu::Buffer::size).unwrap_or(0);
@@ -295,7 +311,7 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
         self.last_uploaded.resize(size as usize, 0);
         let ranges = self.indexed_ranges(indices, stride as usize, known_size);
         self.last_written_size = BufferSize::new(size);
-        self.publish_ranges(queue, ranges)
+        self.publish_ranges(device, queue, ranges, batch)
     }
     fn initialize_indices(
         &mut self,
@@ -359,12 +375,16 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
     }
     fn publish_ranges(
         &self,
+        device: &RenderDevice,
         queue: &RenderQueue,
         ranges: Vec<core::ops::Range<usize>>,
+        batch: &mut StorageBufferUploadBatch,
     ) -> StorageBufferUpload {
         let mut upload = StorageBufferUpload::default();
         for range in ranges {
-            queue.write_buffer(
+            batch.push(
+                device,
+                queue,
                 self.buffer.as_ref().unwrap(),
                 range.start as u64,
                 &self.last_uploaded[range.clone()],

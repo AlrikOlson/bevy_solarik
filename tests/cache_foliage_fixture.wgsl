@@ -23,7 +23,7 @@ fn selected_world_cache_cell_count() -> u32 {
     return select(1u, 0u, config[0].z == 3.0);
 }
 var<private> world_cache_geometry_data: array<Geometry, 1>;
-var<private> world_cache_active_cells_new_radiance: array<vec3<f32>, 1>;
+var<private> world_cache_active_cells_new_radiance: array<vec4<f32>, 1>;
 var<private> query_count = 0u;
 var<private> trace_count = 0u;
 var<private> invalid_connection = 0u;
@@ -44,11 +44,11 @@ fn resolve_ray_hit_full(ray: Ray) -> Hit {
     return Hit(vec3(0.0, 0.0, 2.0), vec3(0.0, 0.0, config[0].y), Material(vec3(0.2, 0.5, 0.8), config[0].x));
 }
 fn sample_sky(d: vec3<f32>) -> vec3<f32> { return vec3(0.3, 0.6, 0.9); }
-fn query_world_cache(p: vec3<f32>, n: vec3<f32>, eye: vec3<f32>, ray_t: f32, life: u32, rng: ptr<function, u32>) -> vec3<f32> {
+fn query_world_cache_with_support(p: vec3<f32>, n: vec3<f32>, eye: vec3<f32>, ray_t: f32, life: u32, rng: ptr<function, u32>) -> vec4<f32> {
     query_count += 1u;
     *rng += 1u;
     if life != 7u || ray_t != 2.0 { life_mismatch += 1u; }
-    return select(config[3].rgb, config[2].rgb, n.z > 0.0);
+    return select(config[3], config[2], n.z > 0.0);
 }
 @compute @workgroup_size(1)
 fn probe() {
@@ -56,6 +56,7 @@ fn probe() {
     world_cache_active_cells_count = select(1u, 100000u, config[0].z == 3.0);
     atomicStore(&world_cache_life[0], 7u);
     sample_gi(vec3(0u), vec3(select(0u, 1u, config[0].z == 4.0), 0u, 0u));
-    output[0] = vec4(world_cache_active_cells_new_radiance[0], f32(query_count));
+    output[0] = vec4(world_cache_active_cells_new_radiance[0].rgb, f32(query_count));
     output[1] = vec4(f32(trace_count), f32(invalid_connection), f32(life_mismatch), 0.0);
+    output[2] = vec4(world_cache_active_cells_new_radiance[0].w, 0.0, 0.0, 0.0);
 }

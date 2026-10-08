@@ -4,6 +4,8 @@ use alloc::{sync::Arc, vec::Vec};
 use bevy_ecs::entity::{Entity, EntityHashMap};
 use core::sync::atomic::{AtomicU64, Ordering};
 
+const SLOT_PAGE: usize = 4096;
+
 /// A renderer address paired with its non-aliasing CPU generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SceneSlot {
@@ -72,16 +74,22 @@ impl SceneSlots {
         true
     }
     fn allocate(&mut self, entity: Entity) -> SceneSlot {
-        let index = self.free.pop().unwrap_or_else(|| {
-            let index = u32::try_from(self.entries.len()).expect("scene slot capacity");
-            self.entries.push(Entry {
+        if self.free.is_empty() {
+            // Match persistent GPU record allocation. Exact pages avoid both
+            // per-arrival CPU record growth and geometric Entry over-allocation.
+            let start = self.entries.len();
+            let end = start.checked_add(SLOT_PAGE).expect("scene slot capacity");
+            u32::try_from(end).expect("scene slot capacity");
+            self.entries.reserve_exact(SLOT_PAGE);
+            self.entries.resize_with(end, || Entry {
                 entity: None,
                 generation: 0,
                 seen: 0,
                 active: None,
             });
-            index
-        });
+            self.free.extend((start as u32..end as u32).rev());
+        }
+        let index = self.free.pop().unwrap();
         let entry = &mut self.entries[index as usize];
         entry.generation = entry
             .generation
@@ -184,6 +192,13 @@ impl SceneSlots {
     pub fn active_indices(&self) -> &[u32] {
         &self.active
     }
+    /// Live, reusable and GPU-retired addresses partition the allocated pages.
+    pub fn counts(&self) -> (usize, usize, usize) {
+        let counts = (self.entities.len(), self.free.len(), self.retired.len());
+        debug_assert_eq!(counts.0 + counts.1 + counts.2, self.entries.len());
+        counts
+    }
+
     /// Persistent address capacity, including holes and retirements.
     pub fn capacity(&self) -> usize {
         self.entries.len()
@@ -192,6 +207,48 @@ impl SceneSlots {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paged_slots_partition_addresses_and_reuse_only_completed_generations() {
+        let mut slots = SceneSlots::default();
+        slots.begin();
+        let mut rotating: Vec<_> = (1..=SLOT_PAGE as u32 + 1)
+            .map(|id| slots.touch(Entity::from_raw_u32(id).unwrap()))
+            .collect();
+        let capacity = slots.capacity();
+        assert_eq!(capacity, SLOT_PAGE * 2);
+        assert_eq!(slots.counts(), (SLOT_PAGE + 1, SLOT_PAGE - 1, 0));
+        let mut next_entity = SLOT_PAGE as u32 + 2;
+        for _ in 0..8 {
+            let retired = rotating.drain(..512).collect::<Vec<_>>();
+            slots.retire(&retired);
+            assert_eq!(slots.counts().2, 512);
+            let pending: Vec<_> = (0..512)
+                .map(|_| {
+                    let slot = slots.touch(Entity::from_raw_u32(next_entity).unwrap());
+                    next_entity += 1;
+                    assert!(!retired.iter().any(|old| old.index == slot.index));
+                    slot
+                })
+                .collect();
+            slots.completed.store(slots.fence, Ordering::Release);
+            slots.begin();
+            assert_eq!(slots.counts().2, 0);
+            for old in retired.iter().rev() {
+                let replacement = slots.touch(Entity::from_raw_u32(next_entity).unwrap());
+                next_entity += 1;
+                assert_eq!(replacement.index, old.index);
+                assert_eq!(replacement.generation, old.generation + 1);
+                assert!(!slots.touch_known(*old, slots.entity(old.index).unwrap()));
+                rotating.push(replacement);
+            }
+            slots.retire(&pending);
+            slots.completed.store(slots.fence, Ordering::Release);
+            slots.begin();
+            assert_eq!(slots.capacity(), capacity);
+            assert_eq!(slots.counts(), (SLOT_PAGE + 1, SLOT_PAGE - 1, 0));
+        }
+    }
+
     #[test]
     fn active_indirection_preserves_holes_and_readiness_identity() {
         let mut slots = SceneSlots::default();

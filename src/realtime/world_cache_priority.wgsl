@@ -22,6 +22,7 @@ const PRIORITY_SELECTED_REFRESH = 99u;
 const PRIORITY_OLDEST_AGE = 100u;
 const PRIORITY_UPDATED_COUNT = 101u;
 const PRIORITY_RESET = 102u;
+const PRIORITY_LOCAL_RESET = 103u;
 const PRIORITY_OFFSETS = 128u;
 const PRIORITY_SCRATCH_WORDS = 160u;
 const PRIORITY_REFRESH_RESERVE_DIVISOR = 5u;
@@ -97,7 +98,8 @@ fn budget_world_cache_priority() {
     }
     atomicStore(&world_cache_b[PRIORITY_SELECTED_COUNT], offset);
     atomicStore(&world_cache_b[PRIORITY_SELECTED_REFRESH], offset - first_light);
-    atomicStore(&world_cache_b[PRIORITY_RESET], constants.reset);
+    atomicStore(&world_cache_b[PRIORITY_RESET], constants.reset & 1u);
+    atomicStore(&world_cache_b[PRIORITY_LOCAL_RESET], (constants.reset >> 1u) & 1u);
     world_cache_active_cells_dispatch = vec3((offset + 63u) / 64u, 1u, 1u);
 }
 

@@ -581,36 +581,53 @@ pub fn prepare_meshlet_per_frame_resources(
         let dirty = core::mem::take(&mut instance_manager.dirty_indices);
         let active_dirty = core::mem::take(&mut instance_manager.active_dirty_indices);
         // TODO: Move this and the submit to a separate system and remove pub from the fields
+        let mut batch = StorageBufferUploadBatch::default();
         let uploads = [
-            instance_manager.active_indices.write_buffer_indices(
+            instance_manager.active_indices.stage_buffer_indices(
                 &render_device,
                 &render_queue,
                 &active_dirty,
+                &mut batch,
             ),
-            instance_manager.instance_cutouts.write_buffer_indices(
+            instance_manager.instance_cutouts.stage_buffer_indices(
                 &render_device,
                 &render_queue,
                 &dirty,
+                &mut batch,
             ),
-            instance_manager.instance_uniforms.write_buffer_indices(
+            instance_manager.instance_uniforms.stage_buffer_indices(
                 &render_device,
                 &render_queue,
                 &dirty,
+                &mut batch,
             ),
-            instance_manager.instance_aabbs.write_buffer_indices(
+            instance_manager.instance_aabbs.stage_buffer_indices(
                 &render_device,
                 &render_queue,
                 &dirty,
+                &mut batch,
             ),
-            instance_manager.instance_material_ids.write_buffer_indices(
+            instance_manager.instance_material_ids.stage_buffer_indices(
                 &render_device,
                 &render_queue,
                 &dirty,
+                &mut batch,
             ),
             instance_manager
                 .instance_bvh_root_nodes
-                .write_buffer_indices(&render_device, &render_queue, &dirty),
+                .stage_buffer_indices(&render_device, &render_queue, &dirty, &mut batch),
         ];
+        let (staging_bytes, staging_buffers) = batch.finish(&render_device, &render_queue);
+        bevy_render::diagnostic::profile_value(
+            "meshlet.staging_bytes",
+            staging_bytes as f64,
+            "bytes",
+        );
+        bevy_render::diagnostic::profile_value(
+            "meshlet.staging_buffers",
+            staging_buffers as f64,
+            "count",
+        );
         bevy_render::diagnostic::profile_value(
             "meshlet.upload_bytes",
             uploads.iter().map(|u| u.bytes as f64).sum(),

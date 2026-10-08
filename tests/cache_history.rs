@@ -64,6 +64,16 @@ fn probe() {
   decay_world_cache_cell(0u,reset==1u);
   output[reset+1u]=vec4(f32(world_cache_life[0]),f32(world_cache_checksums[0]),world_cache_radiance[0].x,world_cache_luminance_deltas[0]);
  }
+ output[3]=vec4(
+  f32(cache_support_is_valid(vec3(0.0),10.0,1000.0)),
+  f32(cache_support_is_valid(vec3(0.0),2000.0,1000.0)),
+  f32(cache_support_is_valid(vec3(900.0,0.0,0.0),100.0,1000.0)),
+  f32(cache_support_is_valid(vec3(0.0),bitcast<f32>(0x7f800000u),1000.0)));
+ output[4]=vec4(
+  f32(cache_support_is_valid(vec3(0.0),-1.0,1000.0)),
+  f32(cache_support_is_valid(vec3(0.0),bitcast<f32>(0x7fc00000u),1000.0)),
+  f32(cache_support_is_valid(vec3(0.0),0.0,0.0)),
+  f32(cache_support_is_valid(vec3(0.0),0.0,1.0)));
 }
 "#
         .to_owned();
@@ -71,6 +81,10 @@ fn probe() {
         source.push_str(&function(
             include_str!("../src/realtime/world_cache_compact.wgsl"),
             "decay_world_cache_cell",
+        ));
+        source.push_str(&function(
+            include_str!("../src/realtime/world_cache_compact.wgsl"),
+            "cache_support_is_valid",
         ));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production cache temporal response"),
@@ -86,7 +100,7 @@ fn probe() {
         });
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 3 * 16,
+            size: 5 * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -149,6 +163,16 @@ fn probe() {
                 "normal decay preserves live radiance"
             );
             assert_eq!(samples[2], [0.0; 4], "reset must discard all cache history");
+            assert_eq!(
+                samples[3],
+                [1.0, 0.0, 0.0, 0.0],
+                "bounded, long and boundary support"
+            );
+            assert_eq!(
+                samples[4],
+                [0.0, 0.0, 0.0, 1.0],
+                "unknown support fails closed"
+            );
             drop(data);
             readback.unmap();
         }

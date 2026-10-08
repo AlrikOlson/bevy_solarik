@@ -13,6 +13,7 @@ mod pipeline_specializer;
 mod sparse_buffer_vec;
 mod specializer;
 mod storage_buffer;
+mod storage_upload;
 mod texture;
 mod uniform_buffer;
 
@@ -30,6 +31,7 @@ pub use pipeline_specializer::*;
 pub use sparse_buffer_vec::*;
 pub use specializer::*;
 pub use storage_buffer::*;
+pub use storage_upload::*;
 pub use texture::*;
 pub use uniform_buffer::*;
 

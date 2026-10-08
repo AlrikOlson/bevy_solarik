@@ -2,6 +2,13 @@ mod binder;
 mod blas;
 pub mod collimated;
 mod extract;
+pub(crate) mod history;
+mod instance_changes;
+
+/// Enable full active-index receipts only for an explicit diagnostic capture.
+#[derive(bevy_ecs::resource::Resource)]
+pub struct CaptureSceneIndices;
+
 #[cfg(feature = "graphics_debug")]
 pub mod graphics_debug;
 mod light_sampling;

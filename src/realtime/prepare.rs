@@ -62,6 +62,7 @@ pub struct SolarikLightingResources {
     pub world_cache_active_cells_count: Buffer,
     pub world_cache_active_cells_dispatch: Buffer,
     pub view_size: UVec2,
+    pub(crate) history: crate::scene::history::ViewHistory,
 }
 
 pub fn prepare_solari_lighting_resources(
@@ -259,6 +260,7 @@ pub fn prepare_solari_lighting_resources(
             world_cache_active_cells_count,
             world_cache_active_cells_dispatch,
             view_size,
+            history: Default::default(),
         });
 
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]

@@ -103,6 +103,10 @@ pub struct RaytracingSceneBindings {
     pub(crate) glass_entities: HashSet<Entity>,
     /// Whether this frame's TLAS contains explicitly transmissive foliage.
     pub(crate) has_foliage: bool,
+    /// Region about the render origin untouched by this frame's geometry.
+    /// Infinity means unchanged; zero means unknown or global lighting change.
+    pub(crate) history_stable_radius: f32,
+    pub(crate) history_generation: u64,
     previous_frame_light_entities: Vec<Entity>,
     settle_light_history: bool,
     #[cfg(feature = "graphics_debug")]
@@ -117,6 +121,7 @@ pub(crate) struct SceneCache {
     tlas: super::tlas::SceneTlas,
     slots: bevy_render::scene_slots::SceneSlots,
     instance_inputs: Vec<Option<RayInstanceInput>>,
+    history_stable_radius: f32,
 }
 
 #[derive(Default)]
@@ -135,6 +140,7 @@ struct SceneStorage {
     sky: StorageBuffer<GpuSkyLight>,
     rings: StorageBuffer<crate::rings::RingData>,
 }
+#[derive(Clone)]
 struct RayInstanceInput {
     entity: Entity,
     mesh: AssetId<Mesh>,
@@ -186,6 +192,8 @@ fn update_instance_inputs(
     rows: &RayRows<'_, '_>,
     queue: &RenderQueue,
     dependencies: bool,
+    blas: &BlasManager,
+    materials: &StandardMaterialAssets,
 ) -> (Vec<u32>, usize) {
     cache.slots.begin();
     let mut dirty = Vec::new();
@@ -198,15 +206,61 @@ fn update_instance_inputs(
             transform: transform.affine(),
             previous: previous.map_or(transform.affine(), |t| t.0),
         };
+        let previous_input = cache
+            .slots
+            .get(entity)
+            .and_then(|slot| cache.instance_inputs[slot.index as usize].as_ref());
+        // Previous-transform settling does not change an occluder.
+        if previous_input.is_none_or(|old| !same_occluder(old, &input)) {
+            let previous_radius =
+                previous_input.map_or(f32::INFINITY, |old| history_distance(old, blas, materials));
+            cache.history_stable_radius = cache
+                .history_stable_radius
+                .min(previous_radius)
+                .min(history_distance(&input, blas, materials));
+        }
         added += usize::from(observe_instance(cache, input, dependencies, &mut dirty));
     }
     let removed = cache.slots.finish(queue);
     for slot in &removed {
+        if let Some(old) = &cache.instance_inputs[slot.index as usize] {
+            cache.history_stable_radius = cache
+                .history_stable_radius
+                .min(history_distance(old, blas, materials));
+        }
         cache.instance_inputs[slot.index as usize] = None;
     }
     profile_slots(cache, added, removed.len(), dirty.len());
     (dirty, removed.len())
 }
+fn same_occluder(old: &RayInstanceInput, new: &RayInstanceInput) -> bool {
+    old.entity == new.entity
+        && old.mesh == new.mesh
+        && old.material == new.material
+        && old.transform.to_cols_array().map(f32::to_bits)
+            == new.transform.to_cols_array().map(f32::to_bits)
+}
+
+fn history_distance(
+    input: &RayInstanceInput,
+    blas: &BlasManager,
+    materials: &StandardMaterialAssets,
+) -> f32 {
+    let Some(material) = materials.get(&input.material) else {
+        return 0.0;
+    };
+    // Moving an emitter can change selection probabilities and lighting anywhere.
+    if material.emissive.red != 0.0
+        || material.emissive.green != 0.0
+        || material.emissive.blue != 0.0
+    {
+        return 0.0;
+    }
+    blas.bounds
+        .get(&input.mesh)
+        .map_or(0.0, |bounds| bounds.stable_radius(input.transform))
+}
+
 fn observe_instance(
     cache: &mut SceneCache,
     input: RayInstanceInput,
@@ -226,6 +280,14 @@ fn observe_instance(
     fresh
 }
 fn profile_slots(cache: &SceneCache, added: usize, removed: usize, dirty: usize) {
+    let (live, free, retired) = cache.slots.counts();
+    for (name, count) in [
+        ("scene.slots_live", live),
+        ("scene.slots_free", free),
+        ("scene.slots_retired", retired),
+    ] {
+        bevy_render::diagnostic::profile_value(name, count as f64, "count");
+    }
     bevy_render::diagnostic::profile_value("scene.slots_added", added as f64, "count");
     bevy_render::diagnostic::profile_value("scene.slots_removed", removed as f64, "count");
     bevy_render::diagnostic::profile_value("scene.slots_changed", dirty as f64, "count");
@@ -237,7 +299,10 @@ fn profile_slots(cache: &SceneCache, added: usize, removed: usize, dirty: usize)
 }
 
 pub(crate) fn prepare_raytracing_scene_bindings(
-    instances_query: RayRows<'_, '_>,
+    (instances_query, mut input_changes): (
+        RayRows<'_, '_>,
+        super::instance_changes::RayInstanceChanges,
+    ),
     directional_lights_query: Query<(Entity, &ExtractedDirectionalLight)>,
     // Point and spot lights: bevy_pbr extracts both into ExtractedPointLight
     // (spot_light_angles tells them apart).
@@ -262,11 +327,12 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         Option<Res<crate::atmosphere::AtmosphereState>>,
         Res<crate::rings::RingShadow>,
     ),
-    (render_device, diagnostics, mut scene_cache, frame): (
+    (render_device, diagnostics, mut scene_cache, frame, _capture_indices): (
         Res<RenderDevice>,
         Option<Res<bevy_render::diagnostic::DiagnosticsRecorder>>,
         Local<SceneCache>,
         Option<Res<bevy_diagnostic::FrameCount>>,
+        Option<Res<super::CaptureSceneIndices>>,
     ),
     pipeline_cache: Res<PipelineCache>,
     render_queue: Res<RenderQueue>,
@@ -317,11 +383,46 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         || lommel.is_changed()
         || texture_assets.is_changed()
         || fallback_texture.is_changed();
-    let (mut dirty_indices, removed) = update_instance_inputs(
-        &mut scene_cache,
-        &instances_query,
-        &render_queue,
-        resources_changed,
+    let unchanged_inputs = input_changes.unchanged()
+        && instances_query.iter().len() == scene_cache.slots.active_indices().len()
+        && !resources_changed;
+    // Asset readiness/removal, light/material/sky changes and coordinate
+    // settings have dependencies wider than geometric membership.
+    scene_cache.history_stable_radius =
+        if resources_changed || scene_cache.inputs.as_ref() != Some(&inputs) {
+            0.0
+        } else {
+            f32::INFINITY
+        };
+    let (mut dirty_indices, removed) = if unchanged_inputs {
+        profile_slots(&scene_cache, 0, 0, 0);
+        (Vec::new(), 0)
+    } else {
+        update_instance_inputs(
+            &mut scene_cache,
+            &instances_query,
+            &render_queue,
+            resources_changed,
+            &blas_manager,
+            &material_assets,
+        )
+    };
+    if scene_cache.history_stable_radius.is_finite() {
+        raytracing_scene_bindings.history_stable_radius = scene_cache.history_stable_radius;
+        raytracing_scene_bindings.history_generation = raytracing_scene_bindings
+            .history_generation
+            .wrapping_add(1)
+            .max(1);
+    }
+    bevy_render::diagnostic::profile_value(
+        "scene.history_changed",
+        f64::from(scene_cache.history_stable_radius.is_finite()),
+        "count",
+    );
+    bevy_render::diagnostic::profile_value(
+        "scene.history_full_reset",
+        f64::from(scene_cache.history_stable_radius == 0.0),
+        "count",
     );
     let reused = dirty_indices.is_empty()
         && removed == 0
@@ -789,23 +890,47 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             material_ids.add_usages(BufferUsages::COPY_SRC);
         }
     }
+    let mut batch = StorageBufferUploadBatch::default();
     let uploads = [
-        active_indices.write_buffer_indices(&render_device, &render_queue, &active_dirty_indices),
+        active_indices.stage_buffer_indices(
+            &render_device,
+            &render_queue,
+            &active_dirty_indices,
+            &mut batch,
+        ),
         materials.write_buffer_changed(&render_device, &render_queue),
         detail_parameters.write_buffer_changed(&render_device, &render_queue),
-        transforms.write_buffer_indices(&render_device, &render_queue, &dirty_indices),
-        previous_frame_transforms.write_buffer_indices(
+        transforms.stage_buffer_indices(&render_device, &render_queue, &dirty_indices, &mut batch),
+        previous_frame_transforms.stage_buffer_indices(
             &render_device,
             &render_queue,
             &dirty_indices,
+            &mut batch,
         ),
-        geometry_ids.write_buffer_indices(&render_device, &render_queue, &dirty_indices),
-        material_ids.write_buffer_indices(&render_device, &render_queue, &dirty_indices),
+        geometry_ids.stage_buffer_indices(
+            &render_device,
+            &render_queue,
+            &dirty_indices,
+            &mut batch,
+        ),
+        material_ids.stage_buffer_indices(
+            &render_device,
+            &render_queue,
+            &dirty_indices,
+            &mut batch,
+        ),
         light_sources.write_buffer_changed(&render_device, &render_queue),
         directional_lights.write_buffer_changed(&render_device, &render_queue),
         local_lights.write_buffer_changed(&render_device, &render_queue),
         previous_frame_light_id_translations.write_buffer_changed(&render_device, &render_queue),
     ];
+    let (staging_bytes, staging_buffers) = batch.finish(&render_device, &render_queue);
+    bevy_render::diagnostic::profile_value("scene.staging_bytes", staging_bytes as f64, "bytes");
+    bevy_render::diagnostic::profile_value(
+        "scene.staging_buffers",
+        staging_buffers as f64,
+        "count",
+    );
     bevy_render::diagnostic::profile_value(
         "scene.upload_bytes",
         uploads.iter().map(|u| u.bytes as f64).sum(),
@@ -844,6 +969,9 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             material_change_tick: material_assets.last_changed().get(),
             tlas_capacity: tlas.get().len(),
             tlas_active: tlas.get().iter().filter(|i| i.is_some()).count(),
+            active_indices: _capture_indices
+                .as_ref()
+                .map_or_else(Vec::new, |_| active_indices.get().clone()),
         };
     }
 
@@ -988,6 +1116,8 @@ impl RaytracingSceneBindings {
             debug: super::graphics_debug::SceneSnapshot::default(),
             glass_entities: HashSet::default(),
             has_foliage: false,
+            history_stable_radius: 0.0,
+            history_generation: 0,
         }
     }
 }
@@ -1338,6 +1468,80 @@ fn tlas_transform(transform: &Mat4) -> [f32; 12] {
 mod tests {
     use super::*;
     use bevy_transform::components::Transform;
+
+    #[test]
+    fn history_scope_uses_authored_bounds_and_rejects_unknown_or_emitting_sources() {
+        use bevy_asset::{Assets, RenderAssetUsages};
+        let mut meshes = Assets::<Mesh>::default();
+        let mesh = meshes.add(
+            Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::MAIN_WORLD,
+            )
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[-1.0f32; 3], [1.0; 3]]),
+        );
+        let mut source = Assets::<StandardMaterial>::default();
+        let material = source.add(StandardMaterial::default());
+        let entity = bevy_ecs::world::World::new().spawn_empty().id();
+        let input = RayInstanceInput {
+            entity,
+            mesh: mesh.id(),
+            material: material.id(),
+            transform: Affine3A::from_translation(Vec3::X * 1000.0),
+            previous: Affine3A::IDENTITY,
+        };
+        let mut blas = BlasManager::default();
+        let materials = StandardMaterialAssets::extract_resource(&source);
+        assert_eq!(
+            history_distance(&input, &blas, &materials),
+            0.0,
+            "unknown geometry"
+        );
+        blas.bounds.insert(
+            mesh.id(),
+            super::super::history::Bounds::from_mesh(meshes.get(&mesh).unwrap()).unwrap(),
+        );
+        let radius = history_distance(&input, &blas, &materials);
+        assert!(
+            radius > 998.0 && radius < 999.0,
+            "full authored bounds, not root distance"
+        );
+        let mut settled = input.clone();
+        settled.previous = settled.transform;
+        assert!(
+            same_occluder(&input, &settled),
+            "previous-transform settling preserves history"
+        );
+        settled.transform.translation.x = 2.0;
+        assert!(!same_occluder(&input, &settled));
+        assert!(
+            history_distance(&settled, &blas, &materials) < 1.0,
+            "old and new positions both constrain validity"
+        );
+        settled.entity = bevy_ecs::world::World::new().spawn_empty().id();
+        settled.mesh = AssetId::from(bevy_asset::uuid::Uuid::from_u128(7));
+        assert!(!same_occluder(&input, &settled), "source replacement");
+        source.get_mut(&material).unwrap().emissive = LinearRgba::rgb(1.0, 0.0, 0.0);
+        assert_eq!(
+            history_distance(
+                &input,
+                &blas,
+                &StandardMaterialAssets::extract_resource(&source)
+            ),
+            0.0,
+            "emitter changes are global"
+        );
+        source.remove(material.id());
+        assert_eq!(
+            history_distance(
+                &input,
+                &blas,
+                &StandardMaterialAssets::extract_resource(&source)
+            ),
+            0.0,
+            "missing material fails closed"
+        );
+    }
 
     #[test]
     fn foliage_flags_restrict_and_quantize_authored_transmission() {

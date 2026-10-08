@@ -17,4 +17,6 @@ pub struct SceneSnapshot {
     pub tlas_capacity: usize,
     /// Nonempty current TLAS slots, excluding cleared tail and unavailable BLAS.
     pub tlas_active: usize,
+    /// Exact compact slot order, populated only with `super::CaptureSceneIndices`.
+    pub active_indices: Vec<u32>,
 }

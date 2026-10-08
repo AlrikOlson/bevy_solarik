@@ -7,6 +7,7 @@ enable wgpu_ray_query;
     world_cache_checksums,
     world_cache_radiance,
     world_cache_luminance_deltas,
+    world_cache_geometry_data,
     world_cache_a,
     world_cache_b,
     world_cache_active_cell_indices,
@@ -20,7 +21,17 @@ var<workgroup> w2: array<u32, 1024u>;
 
 @compute @workgroup_size(1024, 1, 1)
 fn decay_world_cache(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    decay_world_cache_cell(global_id.x, bool(constants.reset));
+    let geometry = world_cache_geometry_data[global_id.x];
+    let reset = (constants.reset & 1u) != 0u ||
+        ((constants.reset & 2u) != 0u && !cache_support_is_valid(
+            geometry.world_position, geometry.support_radius, constants.stable_radius));
+    decay_world_cache_cell(global_id.x, reset);
+}
+
+// Strict containment rejects nonfinite/unknown support and boundary contact.
+// The host publishes a lower bound to every old and new changed occluder.
+fn cache_support_is_valid(position: vec3<f32>, support_radius: f32, stable_radius: f32) -> bool {
+    return support_radius >= 0.0 && length(position) + support_radius < stable_radius;
 }
 
 // A reset discards world-space history too, including after coordinate rebasing.

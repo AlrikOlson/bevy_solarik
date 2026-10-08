@@ -402,19 +402,28 @@ fn shade_gi_connection(world_position: vec3<f32>, world_normal: vec3<f32>, endpo
 }
 
 // Connection energy and competing straight-through BSDF probability.
+struct ShadowTransmission {
+    energy: vec4<f32>,
+    // Furthest geometry position that could have affected this sample.
+    distance: f32,
+}
 fn trace_light_transmission(origin: vec3<f32>, light_position: vec4<f32>) -> vec4<f32> {
+    return trace_light_transmission_with_support(origin, light_position).energy;
+}
+fn trace_light_transmission_with_support(origin: vec3<f32>, light_position: vec4<f32>) -> ShadowTransmission {
     var direction = light_position.xyz;
     var distance = ray_max_distance();
     if light_position.w != LIGHT_SAMPLE_DIRECTIONAL {
         let delta = light_position.xyz - origin;
         distance = length(delta);
-        if distance <= RAY_T_MIN { return vec4(0.0); }
+        if distance <= RAY_T_MIN { return ShadowTransmission(vec4(0.0), 0.0); }
         direction = delta / distance;
-        return trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
+        return trace_shadow_transmission_with_support(origin, direction, distance - RAY_T_MIN, true);
     }
     // A directional light comes from beyond the air.
-    let shadow = trace_shadow_transmission(origin, direction, distance - RAY_T_MIN);
-    return vec4(shadow.rgb * directional_light_transmittance(origin, direction), shadow.a);
+    var shadow = trace_shadow_transmission_with_support(origin, direction, distance - RAY_T_MIN, true);
+    shadow.energy = vec4(shadow.energy.rgb * directional_light_transmittance(origin, direction), shadow.energy.a);
+    return shadow;
 }
 
 // RGB straight-through energy plus probability of the competing BSDF path.
@@ -425,21 +434,25 @@ fn trace_shadow_transmission(origin: vec3<f32>, direction: vec3<f32>, ray_t_max:
 
 // GI endpoint/visibility tracing already samples diffuse alpha coverage.
 fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t_max: f32, include_coverage: bool) -> vec4<f32> {
+    return trace_shadow_transmission_with_support(origin, direction, ray_t_max, include_coverage).energy;
+}
+fn trace_shadow_transmission_with_support(origin: vec3<f32>, direction: vec3<f32>, ray_t_max: f32, include_coverage: bool) -> ShadowTransmission {
     // Only actual admitted TLAS materials decide this shortcut. Mixed panes
     // and diffuse coverage retain the complete ordered transport below.
     if (sky_light.material_transport_flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) == 0u {
         // Both false callers have already traced visibility/the GI endpoint.
-        if !include_coverage || ray_t_max < RAY_T_MIN { return vec4(1.0); }
+        if !include_coverage || ray_t_max < RAY_T_MIN { return ShadowTransmission(vec4(1.0), max(ray_t_max, 0.0)); }
         let hit = trace_ray(origin, direction, RAY_T_MIN, ray_t_max, RAY_FLAG_TERMINATE_ON_FIRST_HIT);
-        return vec4(select(0.0, 1.0, hit.kind == RAY_QUERY_INTERSECTION_NONE));
+        return ShadowTransmission(vec4(select(0.0, 1.0, hit.kind == RAY_QUERY_INTERSECTION_NONE)),
+            select(hit.t, ray_t_max, hit.kind == RAY_QUERY_INTERSECTION_NONE));
     }
     var transmission = vec4(1.0);
     var ray_t_min = RAY_T_MIN;
     for (var panes = 0u; panes <= 32u; panes += 1u) {
-        if ray_t_max < ray_t_min { return transmission; }
+        if ray_t_max < ray_t_min { return ShadowTransmission(transmission, max(ray_t_max, 0.0)); }
         let ray = trace_glass_ray(origin, direction, ray_t_min, ray_t_max);
-        if ray.kind == RAY_QUERY_INTERSECTION_NONE { return transmission; }
-        if panes == 32u { return vec4(0.0); }
+        if ray.kind == RAY_QUERY_INTERSECTION_NONE { return ShadowTransmission(transmission, ray_t_max); }
+        if panes == 32u { return ShadowTransmission(vec4(0.0), ray.t); }
         let raw_material = materials[material_ids[ray.instance_custom_data]];
         let hit = resolve_ray_hit_full(ray);
         let alpha = clamp(resolve_material_alpha(raw_material, hit.uv), 0.0, 1.0);
@@ -450,12 +463,12 @@ fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t
         } else if (raw_material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
             if include_coverage { transmission *= 1.0 - alpha; }
         } else {
-            return vec4(0.0);
+            return ShadowTransmission(vec4(0.0), ray.t);
         }
-        if all(transmission.rgb <= vec3(0.0)) { return vec4(0.0); }
+        if all(transmission.rgb <= vec3(0.0)) { return ShadowTransmission(vec4(0.0), ray.t); }
         ray_t_min = ray.t + RAY_T_MIN;
     }
-    return vec4(0.0);
+    return ShadowTransmission(vec4(0.0), max(ray_t_max, 0.0));
 }
 // End shadow transport
 

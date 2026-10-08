@@ -7,6 +7,13 @@ use alloc::vec::Vec;
 use bevy_ecs::world::World;
 use bevy_render::render_resource::Buffer;
 
+/// Read the complete currently published CPU slot order for a requested capture.
+pub fn active_indices(world: &World) -> Vec<u32> {
+    world
+        .get_resource::<InstanceManager>()
+        .map_or_else(Vec::new, |instances| instances.active_indices.get().clone())
+}
+
 /// Return bounded-readback sources; callers own staging and exact frame correlation.
 pub fn buffers(world: &mut World) -> Vec<(&'static str, Buffer)> {
     let mut result = Vec::new();

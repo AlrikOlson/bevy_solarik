@@ -8,6 +8,7 @@ mod derived_cache;
 mod from_mesh;
 #[cfg(feature = "graphics_debug")]
 pub mod graphics_debug;
+mod instance_changes;
 mod instance_manager;
 mod material_pipeline_prepare;
 mod material_shade_nodes;

@@ -422,6 +422,17 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     // Preserve the stochastic seed; cache scheduling needs a separate clock.
     let frame_index = frame_count.0.wrapping_mul(5782582);
     let render_frame = frame_count.0;
+    let stable_radius = s.history.stable_radius(
+        scene_bindings.history_generation,
+        scene_bindings.history_stable_radius,
+    );
+    let reset_flags = if solarik_lighting.reset || stable_radius == 0.0 {
+        1u32
+    } else if stable_radius.is_finite() {
+        2u32
+    } else {
+        0u32
+    };
 
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
@@ -466,13 +477,19 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         if let Some(pipeline) = foliage_pipeline.filter(|_| scene_bindings.has_foliage) {
             let span = diagnostics.time_span(&mut pass, "solarik_lighting/primary_foliage");
             pass.set_pipeline(pipeline);
-            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32, render_frame]));
+            pass.set_immediates(
+                0,
+                bytemuck::cast_slice(&[frame_index, 0u32, render_frame, stable_radius.to_bits()]),
+            );
             pass.dispatch_workgroups(dx, dy, 1);
             span.end(&mut pass);
         }
         if let Some(pipeline) = primary_pipeline.filter(|_| owns_glass) {
             pass.set_pipeline(pipeline);
-            pass.set_immediates(0, bytemuck::cast_slice(&[frame_index, 0u32, render_frame]));
+            pass.set_immediates(
+                0,
+                bytemuck::cast_slice(&[frame_index, 0u32, render_frame, stable_radius.to_bits()]),
+            );
             pass.dispatch_workgroups(dx, dy, 1);
         }
         return;
@@ -496,7 +513,12 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(presample_light_tiles_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups(LIGHT_TILE_BLOCKS as u32, 1, 1);
     d.end(&mut pass);
@@ -508,7 +530,12 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(decay_world_cache_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups((WORLD_CACHE_SIZE / 1024) as u32, 1, 1);
 
@@ -535,7 +562,12 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(sample_di_for_world_cache_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups_indirect(
         &solarik_lighting_resources.world_cache_active_cells_dispatch,
@@ -545,7 +577,12 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(sample_gi_for_world_cache_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups_indirect(
         &solarik_lighting_resources.world_cache_active_cells_dispatch,
@@ -565,14 +602,24 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(di_initial_and_temporal_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
     pass.set_pipeline(di_spatial_and_shade_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
@@ -583,14 +630,24 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(gi_initial_and_temporal_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
     pass.set_pipeline(gi_spatial_and_shade_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
 
@@ -604,12 +661,20 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     pass.set_pipeline(specular_gi_pipeline);
     pass.set_immediates(
         0,
-        bytemuck::cast_slice(&[frame_index, solarik_lighting.reset as u32, render_frame]),
+        bytemuck::cast_slice(&[
+            frame_index,
+            reset_flags,
+            render_frame,
+            stable_radius.to_bits(),
+        ]),
     );
     pass.dispatch_workgroups(dx, dy, 1);
     d.end(&mut pass);
 
     drop(pass);
+    // Earlier returns (missing scene/pipelines and the primary compositor)
+    // leave both scene events and explicit full resets pending for this view.
+    s.history.rendered(scene_bindings.history_generation);
 
     diagnostics.record_u32(
         ctx.command_encoder(),
@@ -624,6 +689,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         (100, "world_cache_oldest_age"),
         (101, "world_cache_updated_cells"),
         (102, "world_cache_reset"),
+        (103, "world_cache_local_reset"),
     ] {
         diagnostics.record_u32(
             ctx.command_encoder(),
@@ -716,7 +782,7 @@ pub fn init_solari_lighting_pipelines(
         pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some(label.into()),
             layout,
-            immediate_size: 12,
+            immediate_size: 16,
             shader,
             shader_defs,
             entry_point: Some(entry_point.into()),

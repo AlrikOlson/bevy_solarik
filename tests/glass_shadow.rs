@@ -30,8 +30,14 @@ fn glass_shadow_gpu() {
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
+        let support = &sampling[sampling
+            .find("struct ShadowTransmission")
+            .expect("support struct")
+            ..sampling
+                .find("fn trace_light_transmission(")
+                .expect("light wrapper")];
         let source = format!(
-            "{glass}\n{}\n{}",
+            "{glass}\n{support}\n{}\n{}",
             &sampling[start..end],
             include_str!("glass_shadow_fixture.wgsl")
         );

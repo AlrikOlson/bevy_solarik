@@ -25,6 +25,7 @@ const MAX_COMPACTION_VERTICES_PER_FRAME: u32 = 400_000;
 #[derive(Resource, Default)]
 pub struct BlasManager {
     pub(crate) generation: u64,
+    pub(super) bounds: HashMap<AssetId<Mesh>, super::history::Bounds>,
     blas: HashMap<AssetId<Mesh>, Blas>,
     triangle_edges: HashMap<AssetId<Mesh>, Vec<[Vec3; 2]>>,
     compaction_queue: VecDeque<(AssetId<Mesh>, u32, bool)>,
@@ -117,11 +118,15 @@ pub fn prepare_raytracing_blas(
             blas_manager.generation = blas_manager.generation.wrapping_add(1);
         }
         blas_manager.triangle_edges.remove(asset_id);
+        blas_manager.bounds.remove(asset_id);
         blas_manager.opacity.forget(asset_id);
     }
 
     for (asset_id, mesh) in &extracted_meshes.extracted {
         if is_mesh_raytracing_compatible(mesh) {
+            if let Some(bounds) = super::history::Bounds::from_mesh(mesh) {
+                blas_manager.bounds.insert(*asset_id, bounds);
+            }
             blas_manager
                 .triangle_edges
                 .insert(*asset_id, triangle_edges(mesh));
@@ -208,10 +213,18 @@ pub fn prepare_raytracing_blas(
     render_queue.submit([command_encoder.finish()]);
 }
 
-pub fn compact_raytracing_blas(
-    mut blas_manager: ResMut<BlasManager>,
-    render_queue: Res<RenderQueue>,
-) {
+/// wgpu 29 compaction locks pending writes before command indices, while
+/// submission locks them in the opposite order. Run this bounded work alone
+/// in the render schedule, including against device-only asset uploads.
+pub fn compact_raytracing_blas(world: &mut bevy_ecs::world::World) {
+    world.resource_scope(
+        |world, mut manager: bevy_ecs::change_detection::Mut<BlasManager>| {
+            compact_ready_blas(&mut manager, world.resource::<RenderQueue>());
+        },
+    );
+}
+
+fn compact_ready_blas(blas_manager: &mut BlasManager, render_queue: &RenderQueue) {
     let queue_size = blas_manager.compaction_queue.len();
     let mut meshes_processed = 0;
     let mut vertices_compacted = 0;
@@ -296,6 +309,10 @@ fn is_mesh_raytracing_compatible(mesh: &Mesh) -> bool {
     let indexed_32 = matches!(mesh.indices(), Some(Indices::U32(..)));
     mesh.enable_raytracing && triangle_list && vertex_attributes && indexed_32
 }
+
+#[cfg(test)]
+#[path = "blas_compaction_tests.rs"]
+mod compaction_tests;
 
 #[cfg(test)]
 mod tests {

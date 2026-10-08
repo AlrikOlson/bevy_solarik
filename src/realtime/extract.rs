@@ -1,10 +1,14 @@
 use super::{SolarikLighting, prepare::SolarikLightingResources};
 use bevy_camera::Camera;
-use bevy_ecs::system::{Commands, ResMut};
+use bevy_ecs::system::{Commands, Query, ResMut};
 use bevy_pbr::deferred::SkipDeferredLighting;
 use bevy_render::{MainWorld, sync_world::RenderEntity};
 
-pub fn extract_solari_lighting(mut main_world: ResMut<MainWorld>, mut commands: Commands) {
+pub fn extract_solari_lighting(
+    mut main_world: ResMut<MainWorld>,
+    mut commands: Commands,
+    resources: Query<&SolarikLightingResources>,
+) {
     let mut cameras_3d =
         main_world.query::<(RenderEntity, &Camera, Option<&mut SolarikLighting>)>();
 
@@ -15,6 +19,11 @@ pub fn extract_solari_lighting(mut main_world: ResMut<MainWorld>, mut commands: 
         if let Some(mut solarik_lighting) = solarik_lighting
             && camera.is_active
         {
+            if solarik_lighting.reset
+                && let Ok(resources) = resources.get(entity)
+            {
+                resources.history.invalidate();
+            }
             entity_commands.insert((solarik_lighting.clone(), SkipDeferredLighting));
             solarik_lighting.reset = false;
         } else {

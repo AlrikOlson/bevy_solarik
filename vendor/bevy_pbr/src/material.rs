@@ -721,11 +721,14 @@ fn early_sweep_material_instances<M>(
     let last_change_tick = material_instances.current_change_tick;
 
     for entity in removed_materials_query.read() {
-        if let Entry::Occupied(occupied_entry) = material_instances.instances.entry(entity.into()) {
-            // Only sweep the entry if it wasn't updated this frame.
-            if occupied_entry.get().last_change_tick != last_change_tick {
-                occupied_entry.remove();
-            }
+        // A material of another type inserted this frame owns the membership.
+        let entity = MainEntity::from(entity);
+        if material_instances
+            .instances
+            .get(&entity)
+            .is_some_and(|instance| instance.last_change_tick != last_change_tick)
+        {
+            material_instances.instances.remove(&entity);
         }
     }
 }
@@ -743,13 +746,14 @@ pub fn late_sweep_material_instances(
     let last_change_tick = material_instances.current_change_tick;
 
     for entity in removed_meshes_query.read() {
-        if let Entry::Occupied(occupied_entry) = material_instances.instances.entry(entity.into()) {
-            // Only sweep the entry if it wasn't updated this frame. It's
-            // possible that a `ViewVisibility` component was removed and
-            // re-added in the same frame.
-            if occupied_entry.get().last_change_tick != last_change_tick {
-                occupied_entry.remove();
-            }
+        // A material of another type inserted this frame owns the membership.
+        let entity = MainEntity::from(entity);
+        if material_instances
+            .instances
+            .get(&entity)
+            .is_some_and(|instance| instance.last_change_tick != last_change_tick)
+        {
+            material_instances.instances.remove(&entity);
         }
     }
 

@@ -48,7 +48,7 @@ const WORLD_CACHE_MAX_TEMPORAL_SAMPLES = 32.0;
 @group(0) @binding(4) var<storage,read_write> world_cache_radiance:array<vec4<f32>>;
 @group(0) @binding(5) var<storage,read_write> world_cache_active_cell_indices:array<u32>;
 @group(0) @binding(6) var<storage,read_write> world_cache_active_cells_count:u32;
-@group(0) @binding(7) var<storage,read_write> world_cache_active_cells_new_radiance:array<vec3<f32>>;
+@group(0) @binding(7) var<storage,read_write> world_cache_active_cells_new_radiance:array<vec4<f32>>;
 @group(0) @binding(8) var<storage,read_write> world_cache_luminance_deltas:array<f32>;
 fn luminance(v:vec3<f32>)->f32 {{ return dot(v,vec3(0.2126,0.7152,0.0722)); }}
 {}

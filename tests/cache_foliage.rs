@@ -122,7 +122,7 @@ fn cache_foliage_propagation_gpu() {
     let mut source = include_str!("cache_foliage_fixture.wgsl").to_owned();
     source.push_str(&function(
         include_str!("../src/realtime/world_cache_query.wgsl"),
-        "query_two_sided_world_cache",
+        "query_two_sided_world_cache_with_support",
     ));
     source.push_str(
         &function(cache, "sample_gi")
@@ -136,8 +136,8 @@ fn cache_foliage_propagation_gpu() {
                 inputs.push([
                     [t, normal, 0.0, 0.0],
                     connection,
-                    [2.0, 4.0, 8.0, 0.0],
-                    [10.0, 6.0, 3.0, 0.0],
+                    [2.0, 4.0, 8.0, 17.0],
+                    [10.0, 6.0, 3.0, 101.0],
                 ]);
             }
         }
@@ -179,6 +179,30 @@ fn cache_foliage_propagation_gpu() {
             2.0
         };
         assert_eq!(result[0][3], queries, "only query supported lobes");
+        let expected_support = if mode == 0.0 {
+            let (front, back) = if normal > 0.0 {
+                (input[2][3], input[3][3])
+            } else {
+                (input[3][3], input[2][3])
+            };
+            2.0 + if t == 0.0 {
+                front
+            } else if t == 1.0 {
+                back
+            } else {
+                front.max(back)
+            }
+        } else if mode == 1.0 {
+            100000.0
+        } else if mode == 2.0 {
+            51.001
+        } else {
+            0.0
+        };
+        assert!(
+            (result[2][0] - expected_support).abs() < 0.02,
+            "transitive/sky support: {input:?}, {result:?}"
+        );
         assert_eq!(
             result[1],
             [if mode >= 3.0 { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0],
@@ -218,7 +242,7 @@ fn cache_foliage_identity_gpu() {
 @group(0) @binding(1) var<storage, read_write> output: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> world_cache_life: array<atomic<u32>>;
 var<workgroup> world_cache_checksums: array<atomic<u32>, 64>;
-struct Geometry { world_position: vec3<f32>, last_traced_frame: u32, world_normal: vec3<f32> }
+struct Geometry { world_position: vec3<f32>, last_traced_frame: u32, world_normal: vec3<f32>, support_radius: f32 }
 var<private> world_cache_geometry_data: array<Geometry, 64>;
 var<private> world_cache_radiance: array<vec4<f32>, 64>;
 const WORLD_CACHE_POSITION_BASE_CELL_SIZE = 0.15;
@@ -266,6 +290,7 @@ fn probe() {
     for name in [
         "query_two_sided_world_cache",
         "query_world_cache",
+        "query_world_cache_with_support",
         "get_cell_size",
         "quantize_position",
         "quantize_normal",

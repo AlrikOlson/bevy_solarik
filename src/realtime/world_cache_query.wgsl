@@ -56,7 +56,26 @@ fn query_two_sided_world_cache(world_position: vec3<f32>, world_normal: vec3<f32
     return irradiance + diffuse_transmission * query_world_cache(world_position, -world_normal, view_position, ray_t, cell_lifetime, rng);
 }
 
+// Radius is relative to the requested endpoint, including cache quantization
+// and jitter. Transitive irradiance carries its complete previous support.
+fn query_two_sided_world_cache_with_support(world_position: vec3<f32>, world_normal: vec3<f32>, diffuse_transmission: f32, view_position: vec3<f32>, ray_t: f32, cell_lifetime: u32, rng: ptr<function, u32>) -> vec4<f32> {
+    if diffuse_transmission == 0.0 {
+        return query_world_cache_with_support(world_position, world_normal, view_position, ray_t, cell_lifetime, rng);
+    }
+    var front = vec4(0.0);
+    if diffuse_transmission < 1.0 {
+        front = query_world_cache_with_support(world_position, world_normal, view_position, ray_t, cell_lifetime, rng);
+        front = vec4((1.0 - diffuse_transmission) * front.rgb, front.w);
+    }
+    let back = query_world_cache_with_support(world_position, -world_normal, view_position, ray_t, cell_lifetime, rng);
+    return vec4(front.rgb + diffuse_transmission * back.rgb, max(front.w, back.w));
+}
+
 fn query_world_cache(world_position_in: vec3<f32>, world_normal: vec3<f32>, view_position: vec3<f32>, ray_t: f32, cell_lifetime: u32, rng: ptr<function, u32>) -> vec3<f32> {
+    return query_world_cache_with_support(world_position_in, world_normal, view_position, ray_t, cell_lifetime, rng).rgb;
+}
+
+fn query_world_cache_with_support(world_position_in: vec3<f32>, world_normal: vec3<f32>, view_position: vec3<f32>, ray_t: f32, cell_lifetime: u32, rng: ptr<function, u32>) -> vec4<f32> {
     var world_position = world_position_in;
     var cell_size = get_cell_size(world_position, view_position, rng);
 
@@ -95,20 +114,23 @@ fn query_world_cache(world_position_in: vec3<f32>, world_normal: vec3<f32>, view
 
         if existing_checksum == checksum {
             // Cache entry already exists - get radiance
-            return world_cache_radiance[key].rgb;
+            let geometry = world_cache_geometry_data[key];
+            return vec4(world_cache_radiance[key].rgb,
+                geometry.support_radius + distance(world_position_in, geometry.world_position));
         } else if existing_checksum == WORLD_CACHE_EMPTY_CELL {
             // Cell is empty - initialize it
             world_cache_geometry_data[key].world_position = world_position;
             world_cache_geometry_data[key].world_normal = world_normal;
             world_cache_geometry_data[key].last_traced_frame = 0u;
-            return vec3(0.0);
+            world_cache_geometry_data[key].support_radius = 0.0;
+            return vec4(0.0);
         } else {
             // Collision - linear probe to next entry
             key = wrap_key(key + 1u);
         }
     }
 
-    return vec3(0.0);
+    return vec4(0.0);
 }
 #endif
 

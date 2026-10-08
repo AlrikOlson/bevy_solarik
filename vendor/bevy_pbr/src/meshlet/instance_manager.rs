@@ -38,7 +38,7 @@ pub(crate) struct InstanceInput {
     mesh: AssetId<MeshletMesh>,
     transform: [u32; 12],
     previous: [u32; 12],
-    slot_generation: u32,
+    slot: SceneSlot,
     layers: RenderLayers,
     not_shadow_receiver: bool,
     not_shadow_caster: bool,
@@ -59,7 +59,7 @@ type InstanceRow<'a> = (
 );
 
 impl InstanceInput {
-    fn from_row(row: InstanceRow<'_>, slot_generation: u32) -> Self {
+    fn from_row(row: InstanceRow<'_>, slot: SceneSlot) -> Self {
         let (entity, mesh, transform, previous, layers, receiver, caster, cutout, double_sided) =
             row;
         Self {
@@ -70,7 +70,7 @@ impl InstanceInput {
                 .map_or(transform.affine(), |t| t.0)
                 .to_cols_array()
                 .map(f32::to_bits),
-            slot_generation,
+            slot,
             layers: layers.cloned().unwrap_or_default(),
             not_shadow_receiver: receiver,
             not_shadow_caster: caster,
@@ -121,10 +121,13 @@ pub struct InstanceManager {
     /// Per-view per-instance visibility bit. Used for [`RenderLayers`] and [`NotShadowCaster`] support.
     pub view_instance_visibility: EntityHashMap<StorageBuffer<Vec<u32>>>,
 
+    // Exact receipts follow ECS query order for sequential stationary reads.
     inputs: Vec<Option<InstanceInput>>,
     query_slots: Vec<SceneSlot>,
+    input_positions: Vec<usize>,
     query_publication: u64,
     material_receipt: (u64, u64),
+    material_changes: Vec<bool>,
     binding_receipt: HashMap<UntypedAssetId, u32>,
     pub(crate) slots: SceneSlots,
     pub active_indices: StorageBuffer<Vec<u32>>,
@@ -192,8 +195,10 @@ impl InstanceManager {
 
             inputs: Vec::new(),
             query_slots: Vec::new(),
+            input_positions: Vec::new(),
             query_publication: 0,
             material_receipt: (0, 0),
+            material_changes: Vec::new(),
             binding_receipt: HashMap::default(),
             slots: SceneSlots::default(),
             active_indices: {
@@ -273,7 +278,6 @@ impl InstanceManager {
 
         let i = slot.index as usize;
         extend_to(&mut self.instances, i, None);
-        extend_to(&mut self.inputs, i, None);
         extend_to(&mut self.binding_slots, i, 0);
         extend_to(&mut self.bvh_depths, i, 0);
         extend_to(
@@ -328,19 +332,16 @@ impl InstanceManager {
             return false;
         }
         let unchanged_slots = self.query_publication == self.slots.publication;
-        let mut slots = self.query_slots.iter();
+        let mut inputs = self.inputs.iter().zip(&self.query_slots);
         rows.into_iter().all(|row| {
-            slots.next().is_some_and(|slot| {
-                self.inputs
-                    .get(slot.index as usize)
-                    .and_then(Option::as_ref)
-                    .is_some_and(|input| {
-                        input.slot_generation == slot.generation
-                            && (unchanged_slots || self.slots.is_active(*slot))
-                            && input.matches(row)
-                    })
+            inputs.next().is_some_and(|(input, slot)| {
+                input.as_ref().is_some_and(|input| {
+                    input.slot == *slot
+                        && (unchanged_slots || self.slots.is_active(*slot))
+                        && input.matches(row)
+                })
             })
-        }) && slots.next().is_none()
+        }) && inputs.next().is_none()
     }
 
     fn scene_matches<'a>(
@@ -348,10 +349,27 @@ impl InstanceManager {
         rows: impl Iterator<Item = InstanceRow<'a>>,
         materials: &RenderMaterialInstances,
         bindings: &RenderMaterialBindings,
+        unchanged_inputs: bool,
     ) -> bool {
         self.material_receipt == materials.instances.receipt()
             && binding_slots_match(&self.binding_receipt, bindings)
-            && self.query_matches(rows)
+            && (unchanged_inputs || self.query_matches(rows))
+    }
+
+    // Resolve only the bounded changed-owner journal to persistent addresses.
+    // Retained instances then use a direct indexed flag instead of a hash lookup.
+    fn changed_materials(&mut self, materials: &RenderMaterialInstances) -> bool {
+        let Some(changes) = materials.instances.changes_since(self.material_receipt) else {
+            return true;
+        };
+        self.material_changes.resize(self.slots.capacity(), false);
+        self.material_changes.fill(false);
+        for entity in changes {
+            if let Some(slot) = self.slots.get(entity.id()) {
+                self.material_changes[slot.index as usize] = true;
+            }
+        }
+        false
     }
 
     fn observe_query(&mut self, position: usize, entity: Entity) -> SceneSlot {
@@ -359,18 +377,31 @@ impl InstanceManager {
         let slot = retained
             .filter(|slot| self.slots.touch_known(*slot, entity))
             .unwrap_or_else(|| self.slots.touch(entity));
-        if let Some(previous) = self.query_slots.get_mut(position) {
-            *previous = slot;
-        } else {
-            self.query_slots.push(slot);
-        }
+        self.order_input(position, slot);
         slot
+    }
+
+    fn order_input(&mut self, position: usize, slot: SceneSlot) {
+        extend_to(&mut self.input_positions, slot.index as usize, usize::MAX);
+        let previous = self.input_positions[slot.index as usize];
+        let previous = if previous == usize::MAX {
+            self.query_slots.push(slot);
+            self.inputs.push(None);
+            self.query_slots.len() - 1
+        } else {
+            previous
+        };
+        self.query_slots.swap(position, previous);
+        self.inputs.swap(position, previous);
+        self.query_slots[position] = slot;
+        self.input_positions[self.query_slots[previous].index as usize] = previous;
+        self.input_positions[slot.index as usize] = position;
     }
 
     fn finish_extract(&mut self, queue: &RenderQueue) -> usize {
         let removed = self.slots.finish(queue);
         for slot in &removed {
-            self.inputs[slot.index as usize] = None;
+            self.input_positions[slot.index as usize] = usize::MAX;
             if let Some(row) = self.instances.get_mut(slot.index as usize) {
                 *row = None;
             }
@@ -419,6 +450,7 @@ pub fn extract_meshlet_mesh_entities(
                 Res<MeshletCutoutAtlas>,
                 Res<Assets<Image>>,
                 MessageReader<AssetEvent<Image>>,
+                super::instance_changes::InstanceChanges<'static, 'static>,
             )>,
         >,
     >,
@@ -442,6 +474,7 @@ pub fn extract_meshlet_mesh_entities(
         atlas,
         images,
         mut image_events,
+        mut input_changes,
     ) = system_state.get_mut(&mut main_world).unwrap();
 
     // View layer/shadow bits are cheap and depend on this frame's views.
@@ -481,17 +514,24 @@ pub fn extract_meshlet_mesh_entities(
         instance_manager.material_receipt != mesh_material_ids.instances.receipt();
     let bindings_changed =
         !binding_slots_match(&instance_manager.binding_receipt, &render_material_bindings);
+    let unchanged_inputs = input_changes.unchanged()
+        && instances_query.iter().len() == instance_manager.query_slots.len()
+        && instance_manager.query_publication == instance_manager.slots.publication
+        && instance_manager.query_slots.len() == instance_manager.slots.active_indices().len();
     if !force_rebuild
         && instance_manager.scene_matches(
             instances_query.iter(),
             &mesh_material_ids,
             &render_material_bindings,
+            unchanged_inputs,
         )
     {
         instance_manager.query_publication = instance_manager.slots.publication;
         record_extraction(&instance_manager, 0, 0, 0, true);
         return;
     }
+    let all_materials_changed =
+        material_changed && instance_manager.changed_materials(&mesh_material_ids);
     instance_manager.material_receipt = mesh_material_ids.instances.receipt();
     if bindings_changed {
         instance_manager.binding_receipt.clear();
@@ -544,9 +584,16 @@ pub fn extract_meshlet_mesh_entities(
         let known = instance_manager.slots.is_active(slot)
             && instance_manager
                 .inputs
-                .get(i)
+                .get(query_position)
                 .and_then(Option::as_ref)
-                .is_some_and(|input| input.entity == instance);
+                .is_some_and(|input| input.entity == instance && input.slot == slot);
+        let material_changed = material_changed
+            && (all_materials_changed
+                || instance_manager
+                    .material_changes
+                    .get(i)
+                    .copied()
+                    .unwrap_or(true));
         let material = if material_changed || !known {
             mesh_material_ids.mesh_material(instance.into())
         } else {
@@ -566,7 +613,7 @@ pub fn extract_meshlet_mesh_entities(
             && known
             && instance_manager
                 .inputs
-                .get(i)
+                .get(query_position)
                 .and_then(Option::as_ref)
                 .is_some_and(|old| old.matches(row))
             && instance_manager.instance_material_assets.get(i) == Some(&material)
@@ -574,7 +621,7 @@ pub fn extract_meshlet_mesh_entities(
         if reused {
             continue;
         }
-        let input = InstanceInput::from_row(row, slot.generation);
+        let input = InstanceInput::from_row(row, slot);
         changed += 1;
         let alpha = *alpha_metadata
             .entry((input.cutout, double_sided))
@@ -584,8 +631,7 @@ pub fn extract_meshlet_mesh_entities(
                     value
                 })
             });
-        extend_to(&mut instance_manager.inputs, i, None);
-        instance_manager.inputs[i] = Some(input);
+        instance_manager.inputs[query_position] = Some(input);
         let Some(cutout) = alpha else {
             instance_manager.slots.deactivate(slot);
             continue;
@@ -622,8 +668,9 @@ pub fn extract_meshlet_mesh_entities(
             cutout,
         );
     }
-    instance_manager.query_slots.truncate(query_count);
     let removed = instance_manager.finish_extract(&render_queue);
+    instance_manager.query_slots.truncate(query_count);
+    instance_manager.inputs.truncate(query_count);
     let reused =
         previous_publication == instance_manager.slots.publication && changed == 0 && removed == 0;
     record_extraction(&instance_manager, added, changed, removed, reused);
@@ -642,6 +689,9 @@ fn record_extraction(
         ("meshlet.slots_removed", removed),
         ("meshlet.slots_changed", changed),
         ("meshlet.slot_capacity", manager.slots.capacity()),
+        ("meshlet.slots_live", manager.slots.counts().0),
+        ("meshlet.slots_free", manager.slots.counts().1),
+        ("meshlet.slots_retired", manager.slots.counts().2),
     ] {
         bevy_render::diagnostic::profile_value(name, value as f64, "count");
     }

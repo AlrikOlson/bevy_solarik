@@ -1,4 +1,80 @@
 //! Exercise the production receipt against actual ECS mutations and removals.
+
+#[test]
+fn changed_material_owners_follow_slots_through_reorder_and_unknown_mutation() {
+    let mut world = World::new();
+    let a = spawn_meshlet(&mut world);
+    let b = spawn_meshlet(&mut world);
+    let mut manager = capture(&mut world);
+    let sa = manager.slots.get(a).unwrap();
+    let sb = manager.slots.get(b).unwrap();
+    let mut materials = RenderMaterialInstances::default();
+    insert_material(&mut materials, a.into());
+    insert_material(&mut materials, b.into());
+    manager.material_receipt = materials.instances.receipt();
+    insert_material(&mut materials, b.into());
+    manager.observe_query(0, b);
+    manager.observe_query(1, a);
+    assert!(!manager.changed_materials(&materials));
+    assert!(!manager.material_changes[sa.index as usize]);
+    assert!(manager.material_changes[sb.index as usize]);
+    manager.material_receipt = materials.instances.receipt();
+    materials.instances.remove(&a.into());
+    assert!(!manager.changed_materials(&materials));
+    assert!(manager.material_changes[sa.index as usize]);
+    assert!(!manager.material_changes[sb.index as usize]);
+    manager.material_receipt = materials.instances.receipt();
+    assert!(!manager.changed_materials(&materials));
+    assert!(!manager.material_changes.iter().any(|changed| *changed));
+    materials
+        .instances
+        .get_mut(&MainEntity::from(b))
+        .unwrap()
+        .last_change_tick
+        .set(12);
+    assert!(manager.changed_materials(&materials));
+    manager.material_receipt = materials.instances.receipt();
+    materials.instances = crate::material_instances::MaterialInstanceMap::default();
+    assert!(manager.changed_materials(&materials));
+}
+
+#[test]
+fn query_order_receipts_follow_real_reorder_without_changing_scene_slots() {
+    let mut world = World::new();
+    let entities: Vec<_> = (0..8).map(|_| spawn_meshlet(&mut world)).collect();
+    let mut manager = capture(&mut world);
+    let original_slots = manager.query_slots.clone();
+    manager.slots.begin();
+    for (position, &entity) in entities.iter().rev().enumerate() {
+        let slot = manager.observe_query(position, entity);
+        assert_eq!(slot, original_slots[7 - position]);
+        assert_eq!(manager.inputs[position].as_ref().unwrap().entity, entity);
+    }
+    let publication = manager.slots.publication;
+    assert!(!matches(&mut world, &manager));
+    for (position, &entity) in entities.iter().enumerate() {
+        manager.observe_query(position, entity);
+    }
+    assert!(matches(&mut world, &manager));
+    assert_eq!(manager.slots.publication, publication);
+    // Inserting a new row ahead of retained receipts must move, not overwrite,
+    // the previous first receipt and its reverse slot address.
+    let newcomer = spawn_meshlet(&mut world);
+    let slot = manager.observe_query(0, newcomer);
+    manager.inputs[0] = Some(InstanceInput::from_row(
+        world.query::<Data>().get(&world, newcomer).unwrap(),
+        slot,
+    ));
+    for (position, &entity) in entities.iter().enumerate() {
+        manager.observe_query(position + 1, entity);
+        assert_eq!(
+            manager.inputs[position + 1].as_ref().unwrap().entity,
+            entity
+        );
+    }
+    assert_eq!(manager.inputs.len(), 9);
+}
+
 use super::*;
 use bevy_ecs::world::World;
 use bevy_math::{Affine3A, Vec3};
@@ -20,8 +96,7 @@ fn capture(world: &mut World) -> InstanceManager {
     manager.slots.begin();
     for (position, row) in world.query::<Data>().iter(world).enumerate() {
         let slot = manager.observe_query(position, row.0);
-        extend_to(&mut manager.inputs, slot.index as usize, None);
-        manager.inputs[slot.index as usize] = Some(InstanceInput::from_row(row, slot.generation));
+        manager.inputs[position] = Some(InstanceInput::from_row(row, slot));
         manager.slots.activate(slot);
     }
     manager.query_publication = manager.slots.publication;
@@ -148,7 +223,12 @@ fn scene_matches(
     materials: &RenderMaterialInstances,
     bindings: &RenderMaterialBindings,
 ) -> bool {
-    manager.scene_matches(world.query::<Data>().iter(world), materials, bindings)
+    manager.scene_matches(
+        world.query::<Data>().iter(world),
+        materials,
+        bindings,
+        false,
+    )
 }
 
 fn insert_material(materials: &mut RenderMaterialInstances, entity: MainEntity) {

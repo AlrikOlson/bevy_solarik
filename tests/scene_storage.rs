@@ -1,4 +1,56 @@
 //! Read exact production std430 publications back through shader arrayLength.
+
+#[test]
+fn packed_publication_shares_staging_and_preserves_queued_source_lifetimes() {
+    use bevy_render::render_resource::StorageBufferUploadBatch;
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        let mut a = StorageBuffer::from(vec![11u32; 16_384]);
+        let mut b = StorageBuffer::from(vec![u32::MAX; 16_384]);
+        a.write_buffer_indices(&device, &queue, &[]);
+        b.write_buffer_indices(&device, &queue, &[]);
+        let indices: Vec<_> = (0..16_384).step_by(4).collect();
+        for generation in 0..8u32 {
+            let mut batch = StorageBufferUploadBatch::default();
+            for &i in &indices {
+                a.get_mut()[i as usize] = generation * 100_000 + i;
+                b.get_mut()[i as usize] = generation * 100_000 + i + 1;
+            }
+            let first = a.stage_buffer_indices(&device, &queue, &indices, &mut batch);
+            let second = b.stage_buffer_indices(&device, &queue, &indices, &mut batch);
+            assert_eq!(first.ranges + second.ranges, 8192);
+            assert_eq!(batch.finish(&device, &queue), (32_768, 1));
+        }
+        // No CPU/GPU wait between generations: submitted copies must retain
+        // their own data, and later writes must win for every destination.
+        assert_eq!(read(&device, &queue, &a)[1..], *a.get());
+        assert_eq!(read(&device, &queue, &b)[1..], *b.get());
+        let mut batch = StorageBufferUploadBatch::default();
+        a.stage_buffer_indices(&device, &queue, &indices, &mut batch);
+        assert_eq!(batch.finish(&device, &queue), (0, 0));
+    });
+}
+
+#[test]
+fn packed_publication_splits_large_ranges_without_losing_boundaries() {
+    use bevy_render::render_resource::{STORAGE_UPLOAD_BATCH_BYTES, StorageBufferUploadBatch};
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        let count = STORAGE_UPLOAD_BATCH_BYTES / 4 + 17;
+        let mut values = StorageBuffer::from(vec![0u32; count]);
+        values.write_buffer_indices(&device, &queue, &[]);
+        for (i, value) in values.get_mut().iter_mut().enumerate() {
+            *value = i as u32 + 31;
+        }
+        let indices: Vec<_> = (0..count as u32).collect();
+        let mut batch = StorageBufferUploadBatch::default();
+        let upload = values.stage_buffer_indices(&device, &queue, &indices, &mut batch);
+        assert_eq!(upload.ranges, 1);
+        assert_eq!(batch.finish(&device, &queue), (count as u64 * 4, 2));
+        assert_eq!(read(&device, &queue, &values)[1..], *values.get());
+    });
+}
+
 use bevy_platform::sync::Arc;
 use bevy_render::{
     render_resource::{ShaderType, StorageBuffer},
