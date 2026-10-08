@@ -1,5 +1,6 @@
 //! Conservative perspective queue admission, independent of occlusion and frustum culling.
-use super::asset::{BvhNode, MeshletMesh};
+use super::asset::{BvhNode, MeshletCullData, MeshletMesh};
+use alloc::sync::Arc;
 use bevy_math::Mat4;
 
 /// Sorted distance thresholds for a shared prototype's possible queue writes.
@@ -9,6 +10,7 @@ pub struct MeshletWorkset {
     thresholds: Vec<(f64, u64)>,
     lower_thresholds: Vec<(f64, u64)>,
     full: u64,
+    root_slots: u64,
     root_radius: f64,
 }
 
@@ -58,6 +60,55 @@ impl MeshletMesh {
             .sum()
     }
 
+    /// Keep only shared admission bounds after packed render geometry is uploaded.
+    pub fn workset_source(&self) -> MeshletWorksetSource {
+        MeshletWorksetSource {
+            bvh: self.bvh.clone(),
+            meshlet_cull_data: self.meshlet_cull_data.clone(),
+        }
+    }
+    /// See [MeshletWorksetSource::workset_profile_range].
+    pub fn workset_profile_range(
+        &self,
+        root_from_mesh: Mat4,
+        minimum_scale: f64,
+        maximum_scale: f64,
+        focal_pixels: f64,
+        near_plane: f64,
+    ) -> Option<MeshletWorkset> {
+        self.workset_source().workset_profile_range(
+            root_from_mesh,
+            minimum_scale,
+            maximum_scale,
+            focal_pixels,
+            near_plane,
+        )
+    }
+    /// See [MeshletWorksetSource::workset_profile].
+    pub fn workset_profile(
+        &self,
+        root_from_mesh: Mat4,
+        maximum_scale: f64,
+        focal_pixels: f64,
+    ) -> Option<MeshletWorkset> {
+        self.workset_source()
+            .workset_profile(root_from_mesh, maximum_scale, focal_pixels)
+    }
+}
+
+/// Immutable CPU admission metadata. Does not retain vertex, index, tangent,
+/// or meshlet draw payloads, and supports later projection changes.
+#[derive(Clone, Default)]
+pub struct MeshletWorksetSource {
+    bvh: Arc<[BvhNode]>,
+    meshlet_cull_data: Arc<[MeshletCullData]>,
+}
+impl MeshletWorksetSource {
+    /// Shared payload bytes retained on the CPU, excluding Arc/allocation headers.
+    pub fn storage_bytes(&self) -> usize {
+        self.bvh.len() * size_of::<BvhNode>()
+            + self.meshlet_cull_data.len() * size_of::<MeshletCullData>()
+    }
     /// Bound candidates after early own-LOD rejection for a known scale range.
     /// The near plane is required because the shader clamps perspective distance.
     pub fn workset_profile_range(
@@ -144,6 +195,39 @@ impl MeshletMesh {
 }
 
 impl MeshletWorkset {
+    /// Merge additive bounds once for parts sharing an instance root and scale.
+    /// Threshold comparisons and queue costs remain exact, including ties.
+    pub fn combined(parts: &[Self]) -> Option<Self> {
+        let mut result = Self {
+            thresholds: Vec::new(),
+            lower_thresholds: Vec::new(),
+            full: 0,
+            root_slots: 0,
+            root_radius: 0.0,
+        };
+        for part in parts {
+            result.full = result.full.checked_add(part.full)?;
+            result.root_slots = result.root_slots.checked_add(part.root_slots)?;
+            result.root_radius = result.root_radius.max(part.root_radius);
+            for (source, destination) in [
+                (&part.thresholds, &mut result.thresholds),
+                (&part.lower_thresholds, &mut result.lower_thresholds),
+            ] {
+                for (index, &(limit, suffix)) in source.iter().enumerate() {
+                    let next = source.get(index + 1).map_or(0, |(_, cost)| *cost);
+                    destination.push((limit, suffix.checked_sub(next)?));
+                }
+            }
+        }
+        // Each list is bounded by the checked sum of all per-part full costs.
+        suffix_costs(&mut result.thresholds);
+        suffix_costs(&mut result.lower_thresholds);
+        Some(result)
+    }
+    /// Root queue reservation after conservative whole-instance frustum rejection.
+    pub fn root_slots(&self) -> u64 {
+        self.root_slots
+    }
     /// Encloses every active BVH AABB corner after part transform and maximum
     /// instance scale. A separating frustum plane therefore rejects all children.
     pub fn root_radius(&self) -> f64 {
@@ -173,7 +257,7 @@ impl MeshletWorkset {
         let first = self
             .thresholds
             .partition_point(|(limit, _)| *limit < distance_metres);
-        2 + self.thresholds.get(first).map_or(0, |(_, slots)| *slots)
+        self.root_slots + self.thresholds.get(first).map_or(0, |(_, slots)| *slots)
     }
 
     /// Bound without any projection or distance assumptions.
@@ -207,6 +291,7 @@ fn profile(nodes: &[BvhNode], transform: Mat4, scale: f64, focal: f64) -> Option
         thresholds,
         lower_thresholds: Vec::new(),
         full: sum + 2,
+        root_slots: 2,
         root_radius: root_radius(nodes, transform, scale)?,
     })
 }
@@ -307,6 +392,72 @@ mod tests {
     use super::*;
     use bevy_math::Vec3;
 
+    #[test]
+    fn combined_profiles_equal_part_sum_at_every_boundary_and_invalid_interval() {
+        let mesh = interval_mesh();
+        for near in [0.01, 1000.0] {
+            let parts: Vec<_> = [0.0, 1.0, 3.0, 3.0, 7.0]
+                .into_iter()
+                .map(|x| {
+                    mesh.workset_profile_range(
+                        Mat4::from_translation(Vec3::X * x),
+                        0.5,
+                        1.5,
+                        1303.6753,
+                        near,
+                    )
+                    .unwrap()
+                })
+                .collect();
+            let combined = MeshletWorkset::combined(&parts).unwrap();
+            assert_eq!(combined.root_slots(), 2 * parts.len() as u64);
+            assert_eq!(
+                combined.all_lod_slots(),
+                parts.iter().map(MeshletWorkset::all_lod_slots).sum()
+            );
+            let mut distances = vec![0.0, 1.0, 100.0, 1e8];
+            for part in &parts {
+                for &(edge, _) in part.thresholds.iter().chain(&part.lower_thresholds) {
+                    distances.extend([(edge - 1e-8).max(0.0), edge, edge + 1e-8]);
+                }
+            }
+            for &min in &distances {
+                assert_eq!(
+                    combined.slots(min),
+                    parts.iter().map(|p| p.slots(min)).sum()
+                );
+                for &max in &distances {
+                    assert_eq!(
+                        combined.slots_in_range(min, max),
+                        parts.iter().map(|p| p.slots_in_range(min, max)).sum()
+                    );
+                }
+            }
+            for (min, max) in [
+                (f64::NAN, 1.0),
+                (0.0, f64::INFINITY),
+                (-1.0, 0.0),
+                (5.0, 1.0),
+            ] {
+                assert_eq!(
+                    combined.slots_in_range(min, max),
+                    parts.iter().map(|p| p.slots_in_range(min, max)).sum()
+                );
+            }
+            let nested = MeshletWorkset::combined(&[combined.clone(), combined.clone()]).unwrap();
+            assert_eq!(
+                nested.slots_in_range(100.0, 200.0),
+                2 * combined.slots_in_range(100.0, 200.0)
+            );
+            let mut overflow = combined.clone();
+            overflow.full = u64::MAX;
+            assert!(MeshletWorkset::combined(&[overflow, combined]).is_none());
+        }
+        let empty = MeshletWorkset::combined(&[]).unwrap();
+        assert_eq!(empty.slots_in_range(0.0, 1.0), 0);
+        assert_eq!(empty.slots(f64::NAN), 0);
+    }
+
     fn interval_mesh() -> MeshletMesh {
         use super::super::asset::{
             MeshletAabb, MeshletAabbErrorOffset, MeshletBoundingSphere, MeshletCullData,
@@ -340,6 +491,38 @@ mod tests {
                 })
                 .into(),
         }
+    }
+
+    #[test]
+    fn admission_metadata_survives_geometry_release_and_projection_changes() {
+        let mut mesh = interval_mesh();
+        mesh.vertex_positions = vec![1, 2, 3, 4].into();
+        let vertices = Arc::downgrade(&mesh.vertex_positions);
+        let bounds = Arc::downgrade(&mesh.bvh);
+        let retained = mesh.workset_source();
+        let configs = [(640.0, 0.01), (1303.6753, 0.1), (2600.0, 1000.0)];
+        let expected: Vec<_> = configs
+            .iter()
+            .map(|&(focal, near)| {
+                mesh.workset_profile_range(Mat4::IDENTITY, 0.85, 1.15, focal, near)
+                    .unwrap()
+            })
+            .collect();
+        assert!(retained.storage_bytes() < mesh.storage_bytes());
+        drop(mesh);
+        assert!(vertices.upgrade().is_none());
+        assert!(bounds.upgrade().is_some());
+        for ((focal, near), expected) in configs.into_iter().zip(expected) {
+            let actual = retained
+                .workset_profile_range(Mat4::IDENTITY, 0.85, 1.15, focal, near)
+                .unwrap();
+            assert_eq!(actual.thresholds, expected.thresholds);
+            assert_eq!(actual.lower_thresholds, expected.lower_thresholds);
+            assert_eq!(actual.full, expected.full);
+            assert_eq!(actual.root_radius, expected.root_radius);
+        }
+        drop(retained);
+        assert!(bounds.upgrade().is_none());
     }
 
     #[test]

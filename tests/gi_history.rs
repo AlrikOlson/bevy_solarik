@@ -25,6 +25,29 @@ fn function(source: &str, name: &str) -> String {
 #[test]
 #[ignore = "requires Vulkan; run separately from builds and captures"]
 fn gi_history_gpu() {
+    for regional in [false, true] {
+        run(regional);
+    }
+}
+
+fn preprocess(source: &str, regional: bool) -> String {
+    let mut output = String::new();
+    let mut enabled = true;
+    for line in source.lines() {
+        match line.trim() {
+            "#ifdef REGIONAL_HISTORY" => enabled = regional,
+            "#endif" => enabled = true,
+            _ if enabled => {
+                output.push_str(line);
+                output.push('\n');
+            }
+            _ => {}
+        }
+    }
+    output
+}
+
+fn run(regional: bool) {
     futures_lite::future::block_on(async {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
@@ -62,7 +85,7 @@ fn gi_history_gpu() {
         }
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production GI connection reuse"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: wgpu::ShaderSource::Wgsl(preprocess(&source, regional).into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -74,7 +97,7 @@ fn gi_history_gpu() {
         });
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 3 * 16,
+            size: 4 * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -149,6 +172,17 @@ fn gi_history_gpu() {
             assert_eq!(samples[2][3], 0.0, "expired history still emits light");
             for value in &samples[1][..3] {
                 assert!((*value - 1.0).abs() < 2e-4, "endpoint changed: {samples:?}");
+            }
+            if regional {
+                assert!(
+                    samples[3][0] >= samples[3][1] - 1e-5,
+                    "lost canonical support: {samples:?}"
+                );
+                assert!(
+                    samples[3][0] >= samples[3][2] - 1e-5,
+                    "lost reused support: {samples:?}"
+                );
+                assert_eq!(samples[3][3], 0.0, "empty support not initialized");
             }
             drop(data);
             readback.unmap();

@@ -32,14 +32,41 @@ fn item<'a>(source: &'a str, name: &str) -> &'a str {
     panic!("unterminated item");
 }
 
-fn shader() -> String {
+fn preprocess(source: &str, adaptive: bool) -> String {
+    let mut include = true;
+    source
+        .lines()
+        .filter_map(|line| match line.trim() {
+            "#ifdef ADAPTIVE_CACHE_BUDGET" => {
+                include = adaptive;
+                None
+            }
+            "#else" => {
+                include = !include;
+                None
+            }
+            "#endif" => {
+                include = true;
+                None
+            }
+            _ if include => Some(line),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+fn shader(adaptive: bool) -> String {
     let priority = include_str!("../src/realtime/world_cache_priority.wgsl");
     let update = include_str!("../src/realtime/world_cache_update.wgsl");
     let bindings = include_str!("../src/realtime/realtime_bindings.wgsl");
-    format!(
+    let code = format!(
         r#"
 const WORLD_CACHE_CELL_UPDATES_SOFT_CAP = 40000u;
 const WORLD_CACHE_MAX_TEMPORAL_SAMPLES = 32.0;
+struct FixtureView {{ world_position: vec3f, clip_from_view: mat4x4f, viewport: vec4f }}
+var<private> view = FixtureView(vec3f(0.0),
+    mat4x4f(vec4f(1,0,0,0), vec4f(0,1,0,0), vec4f(0,0,1,0), vec4f(0,0,0,1)),
+    vec4f(0,0,1920,1080));
 {}
 @group(0) @binding(0) var<uniform> constants:PushConstants;
 @group(0) @binding(1) var<storage,read_write> world_cache_a:array<u32>;
@@ -64,7 +91,8 @@ fn luminance(v:vec3<f32>)->f32 {{ return dot(v,vec3(0.2126,0.7152,0.0722)); }}
             .expect("scheduler")..],
         item(update, "fn cache_blend_amount("),
         item(update, "fn blend_new_samples(")
-    )
+    );
+    preprocess(&code, adaptive)
 }
 
 struct Fixture {
@@ -105,7 +133,7 @@ fn layout_entry(binding: u32, uniform: bool) -> wgpu::BindGroupLayoutEntry {
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    async fn new(adaptive: bool) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -125,10 +153,10 @@ impl Fixture {
             })
             .await
             .expect("device");
-        Self::create(device, queue)
+        Self::create(device, queue, adaptive)
     }
 
-    fn create(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+    fn create(device: wgpu::Device, queue: wgpu::Queue, adaptive: bool) -> Self {
         let storage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST;
@@ -195,7 +223,7 @@ impl Fixture {
                 resource: buffers[DISPATCH].as_entire_binding(),
             }],
         });
-        let pipelines = Self::pipelines(&device, &group_layout, &empty, &dispatch_layout);
+        let pipelines = Self::pipelines(&device, &group_layout, &empty, &dispatch_layout, adaptive);
         let readback = buffer(
             &device,
             (BUDGET + 64) * 4 + 4096 + CAPACITY * 48,
@@ -218,10 +246,11 @@ impl Fixture {
         group: &wgpu::BindGroupLayout,
         empty: &wgpu::BindGroupLayout,
         dispatch: &wgpu::BindGroupLayout,
+        adaptive: bool,
     ) -> Vec<wgpu::ComputePipeline> {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production radiance cache priority and blending"),
-            source: wgpu::ShaderSource::Wgsl(shader().into()),
+            source: wgpu::ShaderSource::Wgsl(shader(adaptive).into()),
         });
         [
             "clear_world_cache_priority",
@@ -258,7 +287,7 @@ impl Fixture {
     fn initialize(&self, unlit: usize, old: usize, last_frame: u32) {
         let count = unlit + old;
         let geometry = (0..count)
-            .map(|_| [0, 0, 0, last_frame, 0, 0, 0, 0])
+            .map(|_| [1000.0f32.to_bits(), 0, 0, last_frame, 0, 0, 0, 0])
             .collect::<Vec<_>>();
         let radiance: Vec<[f32; 4]> = (0..count)
             .map(|i| {
@@ -408,6 +437,94 @@ impl Fixture {
     }
 }
 
+#[test]
+#[ignore = "requires Vulkan; serialize with Cargo builds and native captures"]
+fn adaptive_priority_retains_budget_new_first_and_monotonic_age_classes() {
+    futures_lite::future::block_on(async {
+        let f = Fixture::new(true).await;
+        for (unlit, old) in [(0, 0), (7, 0), (70003, 0), (0, 70003), (40000, 60003)] {
+            f.initialize(unlit, old, 0);
+            let r = f.frame(8, unlit + old);
+            assert_eq!(r.metrics[104], 1);
+            assert_eq!(
+                r.metrics[98] as usize,
+                unlit.min(BUDGET - old.min(BUDGET / 5))
+            );
+        }
+        f.initialize(0, 80000, 0);
+        f.queue.write_buffer(
+            &f.buffers[DELTAS],
+            40000 * 4,
+            bytemuck::cast_slice(&vec![10.0f32; 40000]),
+        );
+        let r = f.frame(8, 80000);
+        assert!(
+            r.keys.iter().all(|k| *k >= 40000),
+            "changing equally aged cells win over stable cells"
+        );
+        let r = f.frame(33, 80000);
+        assert_eq!(r.metrics[105], 40000);
+        assert!(
+            r.keys.iter().all(|k| *k < 40000),
+            "aged cells beat younger error boost"
+        );
+        // Regression: ages 707 and 32 previously collapsed into bucket 31.
+        for younger_age in [1, 32, 255] {
+            f.initialize(0, 80000, 0);
+            let younger = vec![[1.0f32.to_bits(), 0, 0, 707 - younger_age, 0, 0, 0, 0]; 40000];
+            f.queue.write_buffer(
+                &f.buffers[GEOMETRY],
+                40000 * 32,
+                bytemuck::cast_slice(&younger),
+            );
+            f.queue.write_buffer(
+                &f.buffers[DELTAS],
+                40000 * 4,
+                bytemuck::cast_slice(&vec![10.0f32; 40000]),
+            );
+            let r = f.frame(707, 80000);
+            assert_eq!(r.metrics[100], 707);
+            assert!(
+                r.keys.iter().all(|k| *k < 40000),
+                "old stable cells beat younger error and footprint"
+            );
+        }
+        // At equal ages, a large projected footprint wins the tie.
+        f.initialize(0, 80000, 0);
+        let close = vec![[1.0f32.to_bits(), 0, 0, 0, 0, 0, 0, 0]; 40000];
+        f.queue.write_buffer(
+            &f.buffers[GEOMETRY],
+            40000 * 32,
+            bytemuck::cast_slice(&close),
+        );
+        assert!(f.frame(8, 80000).keys.iter().all(|k| *k >= 40000));
+        // Sparse indices remain the only source of schedulable cells.
+        f.initialize(0, 80000, 0);
+        let active: Vec<_> = (0..80000u32).step_by(2).collect();
+        f.queue
+            .write_buffer(&f.buffers[ACTIVE], 0, bytemuck::cast_slice(&active));
+        f.queue
+            .write_buffer(&f.buffers[COUNT], 0, bytemuck::bytes_of(&40000u32));
+        let r = f.frame(8, 80000);
+        assert!(r.keys.iter().all(|k| k % 2 == 0));
+        // Sustained fully lit work must eventually service the entire fixture.
+        f.initialize(0, 80000, 0);
+        for frame in 1..=4 {
+            let r = f.frame(frame, 80000);
+            if frame == 4 {
+                assert!(r.last_traced.iter().all(|t| *t > 0));
+            }
+        }
+        f.initialize(100000, 0, 0);
+        for frame in 1..=3 {
+            let r = f.frame(frame, 100000);
+            if frame == 3 {
+                assert_eq!(r.unlit_remaining, 0);
+            }
+        }
+    });
+}
+
 struct Report {
     metrics: Vec<u32>,
     keys: Vec<u32>,
@@ -419,7 +536,7 @@ struct Report {
 #[ignore = "requires Vulkan; serialize with Cargo builds and native captures"]
 fn production_priority_budget_and_recovery_gpu() {
     futures_lite::future::block_on(async {
-        let f = Fixture::new().await;
+        let f = Fixture::new(false).await;
         for (unlit, old) in [
             (0, 0),
             (7, 0),

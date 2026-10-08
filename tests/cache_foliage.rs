@@ -1,4 +1,6 @@
 //! Production cache recurrence with controlled hemisphere irradiance and ray transport.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -37,7 +39,7 @@ async fn probe(source: String, inputs: &[[[f32; 4]; 4]]) -> Vec<Vec<[f32; 4]>> {
         .expect("device");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("production foliage cache"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: wgpu::ShaderSource::Wgsl(preprocess::select(&source, &[]).into()),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,

@@ -49,17 +49,18 @@ pub fn init_pathtracer_pipelines(
             bind_group_layout.clone(),
         ],
         shader: load_embedded_asset!(asset_server.as_ref(), "pathtracer.wgsl"),
-        shader_defs: if std::env::var("SOLARIK_PATHTRACER_DEBUG_SAMPLE_COUNT").is_ok() {
-            vec![
+        shader_defs: {
+            let mut defs = vec![
                 "BINDLESS_SURFACE_DETAIL".into(),
                 "FOLIAGE_TRANSMISSION".into(),
-                "PATHTRACER_DEBUG_SAMPLE_COUNT".into(),
-            ]
-        } else {
-            vec![
-                "FOLIAGE_TRANSMISSION".into(),
-                "BINDLESS_SURFACE_DETAIL".into(),
-            ]
+            ];
+            if std::env::var("SOLARIK_PATHTRACER_DEBUG_SAMPLE_COUNT").is_ok() {
+                defs.push("PATHTRACER_DEBUG_SAMPLE_COUNT".into());
+            }
+            if std::env::var("SOLARIK_RAY_MATERIAL_FILTERING").is_ok_and(|v| v == "1") {
+                defs.push("RAY_MATERIAL_FOOTPRINTS".into());
+            }
+            defs
         },
         ..default()
     });

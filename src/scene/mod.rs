@@ -1,6 +1,11 @@
+mod assembly;
+mod input_roots;
+mod instance_rows;
+pub use assembly::{RaytracingAssembly3d, RaytracingAssemblyPart};
 mod binder;
 mod blas;
 pub mod collimated;
+mod dependencies;
 mod extract;
 pub(crate) mod history;
 mod instance_changes;
@@ -62,6 +67,8 @@ impl Plugin for RaytracingScenePlugin {
 
         // The sky is optional; the resource exists so the binder can read it
         // (no image = no sky, upstream behaviour).
+        app.add_systems(bevy_app::First, assembly::previous_transforms);
+        app.init_resource::<bevy_render::scene_readiness::SceneGeometryReadiness>();
         app.init_resource::<SolarikSkyLight>();
         app.init_resource::<SolarikAlphaTesting>();
         app.init_resource::<SolarikRaySettings>();
@@ -79,6 +86,11 @@ impl Plugin for RaytracingScenePlugin {
             return;
         }
 
+        let readiness = app
+            .world()
+            .resource::<bevy_render::scene_readiness::SceneGeometryReadiness>()
+            .clone();
+        app.sub_app_mut(RenderApp).insert_resource(readiness);
         app.add_plugins((
             ExtractResourcePlugin::<StandardMaterialAssets>::default(),
             ExtractResourcePlugin::<SolarikSkyLight>::default(),
@@ -100,7 +112,10 @@ impl Plugin for RaytracingScenePlugin {
             .init_gpu_resource::<BlasManager>()
             .init_gpu_resource::<StandardMaterialAssets>()
             .insert_resource(RaytracingSceneBindings::new())
-            .add_systems(ExtractSchedule, extract_raytracing_scene)
+            .add_systems(
+                ExtractSchedule,
+                (extract_raytracing_scene, assembly::extract),
+            )
             .add_systems(
                 Render,
                 (
@@ -112,6 +127,9 @@ impl Plugin for RaytracingScenePlugin {
                         .in_set(RenderSystems::PrepareAssets)
                         .after(prepare_raytracing_blas),
                     prepare_raytracing_scene_bindings.in_set(RenderSystems::PrepareResources),
+                    blas::publish_readiness
+                        .in_set(RenderSystems::PrepareResources)
+                        .after(prepare_raytracing_scene_bindings),
                 ),
             );
     }

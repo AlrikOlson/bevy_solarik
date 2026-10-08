@@ -354,9 +354,13 @@ fn completed_gpu_retirement_reuses_generations_and_readiness_without_stale_membe
         assert_eq!(read(&device, &queue, &active), [1, sb.index]);
         slots.activate(sa);
         assert_eq!(slots.touch(a), sa);
-        slots.begin();
-        slots.touch(b);
-        assert_eq!(slots.finish(&queue), [sa]);
+        slots.begin(); // Delta retirement must preserve unvisited b.
+        assert_eq!(
+            slots.remove_parts(&queue, [(a.into(), sa), (a.into(), sa)]),
+            [sa]
+        );
+        assert!(slots.is_active(sb));
+        assert!(slots.remove_parts(&queue, [(b.into(), sa)]).is_empty());
         device
             .wgpu_device()
             .poll(wgpu::PollType::wait_indefinitely())

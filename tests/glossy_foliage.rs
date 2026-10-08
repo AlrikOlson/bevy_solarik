@@ -1,23 +1,10 @@
 //! Production glossy-to-foliage transport with deterministic scene I/O.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn shader_body(source: &str, rr: bool) -> String {
-    let mut excluded = false;
-    source
-        .lines()
-        .filter(|line| {
-            if line.starts_with("#ifdef") {
-                excluded = !rr;
-                return false;
-            }
-            if line.starts_with("#endif") {
-                excluded = false;
-                return false;
-            }
-            !excluded && !line.starts_with('#') && !line.starts_with("enable ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    preprocess::select(source, if rr { &["DLSS_RR_GUIDE_BUFFERS"] } else { &[] })
 }
 
 #[test]
@@ -41,7 +28,7 @@ fn glossy_foliage_gpu() {
             .find("fn trace_glossy_path(")
             .expect("production path");
         let end = glossy
-            .find("// https://en.wikipedia.org/wiki/Householder_transformation")
+            .find("#ifdef DLSS_RR_GUIDE_BUFFERS\n// https://en.wikipedia.org/wiki/Householder_transformation")
             .expect("PSR helpers");
         let samples = 32768usize;
         for rr in [false, true] {

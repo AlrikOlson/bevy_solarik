@@ -218,7 +218,11 @@ pub struct PreviousGlobalTransform(pub Affine3A);
 #[cfg(not(feature = "meshlet"))]
 type PreviousMeshFilter = With<Mesh3d>;
 #[cfg(feature = "meshlet")]
-type PreviousMeshFilter = Or<(With<Mesh3d>, With<MeshletMesh3d>)>;
+type PreviousMeshFilter = Or<(
+    With<Mesh3d>,
+    With<MeshletMesh3d>,
+    With<crate::meshlet::MeshletAssembly3d>,
+)>;
 
 pub fn update_mesh_previous_global_transforms(
     mut commands: Commands,

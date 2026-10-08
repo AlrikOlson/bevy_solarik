@@ -9,8 +9,20 @@ use bevy_ecs::{
     world::World,
 };
 use bevy_render::render_resource::*;
-use bevy_shader::Shader;
+use bevy_shader::{Shader, ShaderDefVal};
 use bevy_utils::default;
+
+pub(super) fn early_visibility_enabled() -> bool {
+    std::env::var("MESHLET_EARLY_VISIBILITY_TEST").is_ok_and(|value| value == "1")
+}
+
+fn early_visibility_definition() -> ShaderDefVal {
+    if early_visibility_enabled() {
+        "MESHLET_EARLY_VISIBILITY_TEST".into()
+    } else {
+        "".into()
+    }
+}
 
 #[derive(Resource)]
 pub struct MeshletPipelines {
@@ -121,7 +133,10 @@ pub fn init_meshlet_pipelines(
             layout: vec![clear_visibility_buffer_bind_group_layout],
             immediate_size: 8,
             shader: clear_visibility_buffer.clone(),
-            shader_defs: vec!["MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT".into()],
+            shader_defs: vec![
+                "MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT".into(),
+                early_visibility_definition(),
+            ],
             ..default()
         }),
 
@@ -131,6 +146,7 @@ pub fn init_meshlet_pipelines(
                 layout: vec![clear_visibility_buffer_shadow_view_bind_group_layout],
                 immediate_size: 8,
                 shader: clear_visibility_buffer,
+                shader_defs: vec![early_visibility_definition()],
                 ..default()
             },
         ),
@@ -265,6 +281,7 @@ pub fn init_meshlet_pipelines(
                 shader: visibility_buffer_software_raster.clone(),
                 shader_defs: vec![
                     "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                    early_visibility_definition(),
                     "MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT".into(),
                     if remap_1d_to_2d_dispatch_layout.is_some() {
                         "MESHLET_2D_DISPATCH"
@@ -287,6 +304,7 @@ pub fn init_meshlet_pipelines(
                 shader: visibility_buffer_software_raster,
                 shader_defs: vec![
                     "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                    early_visibility_definition(),
                     if remap_1d_to_2d_dispatch_layout.is_some() {
                         "MESHLET_2D_DISPATCH"
                     } else {
@@ -307,6 +325,7 @@ pub fn init_meshlet_pipelines(
                     shader: visibility_buffer_hardware_raster.clone(),
                     shader_defs: vec![
                         "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                        early_visibility_definition(),
                         "MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT".into(),
                     ],
                     ..default()
@@ -315,6 +334,7 @@ pub fn init_meshlet_pipelines(
                     shader: visibility_buffer_hardware_raster.clone(),
                     shader_defs: vec![
                         "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                        early_visibility_definition(),
                         "MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT".into(),
                     ],
                     targets: vec![Some(ColorTargetState {
@@ -337,12 +357,18 @@ pub fn init_meshlet_pipelines(
                 immediate_size: 4,
                 vertex: VertexState {
                     shader: visibility_buffer_hardware_raster.clone(),
-                    shader_defs: vec!["MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into()],
+                    shader_defs: vec![
+                        "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                        early_visibility_definition(),
+                    ],
                     ..default()
                 },
                 fragment: Some(FragmentState {
                     shader: visibility_buffer_hardware_raster.clone(),
-                    shader_defs: vec!["MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into()],
+                    shader_defs: vec![
+                        "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                        early_visibility_definition(),
+                    ],
                     targets: vec![Some(ColorTargetState {
                         format: TextureFormat::R8Uint,
                         blend: None,
@@ -364,12 +390,18 @@ pub fn init_meshlet_pipelines(
                 immediate_size: 4,
                 vertex: VertexState {
                     shader: visibility_buffer_hardware_raster.clone(),
-                    shader_defs: vec!["MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into()],
+                    shader_defs: vec![
+                        "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                        early_visibility_definition(),
+                    ],
                     ..default()
                 },
                 fragment: Some(FragmentState {
                     shader: visibility_buffer_hardware_raster,
-                    shader_defs: vec!["MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into()],
+                    shader_defs: vec![
+                        "MESHLET_VISIBILITY_BUFFER_RASTER_PASS".into(),
+                        early_visibility_definition(),
+                    ],
                     targets: vec![Some(ColorTargetState {
                         format: TextureFormat::R8Uint,
                         blend: None,

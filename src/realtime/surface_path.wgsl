@@ -1,4 +1,8 @@
 enable wgpu_ray_query;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+#import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, scatter_ray_cone, resolve_ray_hit_filtered}
+#endif
+
 #define_import_path bevy_solarik::surface_path
 
 #import bevy_pbr::utils::rand_f
@@ -18,6 +22,9 @@ fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: p
 // point adds only scattering, so a secondary handoff cannot count it twice.
 fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: ptr<function, u32>) -> vec3<f32> {
     var hit = initial;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+    var cone = initial.ray_cone;
+#endif
     var wo = initial_wo;
     var throughput = vec3(1.0);
     var radiance = vec3(0.0);
@@ -41,6 +48,9 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
         if next.pdf <= 0.0 { break; }
         throughput *= next.throughput;
         if all(throughput <= vec3(0.0)) { break; }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+        cone = scatter_ray_cone(cone, hit.normal_spread, next.sampled_roughness);
+#endif
         var previous_position = hit.world_position;
         var wi = next.wi;
         var path_pdf = next.pdf;
@@ -53,7 +63,12 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
             if ray.kind == RAY_QUERY_INTERSECTION_NONE {
                 return radiance + throughput * sample_sky(wi);
             }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+            cone = advance_ray_cone(cone, ray.t);
+            let candidate = resolve_ray_hit_filtered(ray, wi, cone);
+#else
             let candidate = resolve_ray_hit_full(ray);
+#endif
             let raw = materials[material_ids[ray.instance_custom_data]];
             let glass = (raw.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
             let coverage = (raw.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u;
@@ -80,6 +95,9 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
                 if !branch.reflected { path_pdf *= 1.0 - weights.a; }
                 delta = delta || branch.reflected;
                 if branch.reflected { previous_position = candidate.world_position; }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+                if branch.reflected { cone = scatter_ray_cone(cone, candidate.normal_spread, 0.0); }
+#endif
                 wi = branch.wi;
                 origin = offset_thin_glass_ray(candidate.world_position, candidate.geometric_world_normal, wi, RAY_T_MIN);
                 continue;

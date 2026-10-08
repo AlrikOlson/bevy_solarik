@@ -13,6 +13,8 @@
         get_meshlet_vertex_position,
         get_meshlet_vertex_uv,
         meshlet_cutout_visible,
+        meshlet_visibility_may_win,
+        meshlet_publish_early_depth,
         meshlet_double_sided,
     },
     mesh_functions::mesh_position_local_to_world,
@@ -65,14 +67,16 @@ fn fragment(vertex_output: VertexOutput, @builtin(front_facing) front_facing: bo
     // Match software visibility rasterization: opposed surfaces must not
     // compete at identical depth and select the back-facing material normal.
     if !front_facing && !meshlet_double_sided(vertex_output.instance_id) { discard; }
-    if !meshlet_cutout_visible(vertex_output.instance_id, vertex_output.uv) { discard; }
     let depth = bitcast<u32>(vertex_output.position.z);
+    if !meshlet_visibility_may_win(vertex_output.instance_id, vec2<u32>(vertex_output.position.xy), depth) { discard; }
+    if !meshlet_cutout_visible(vertex_output.instance_id, vertex_output.uv) { discard; }
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
     let visibility = (u64(depth) << 32u) | u64(vertex_output.packed_ids);
 #else
     let visibility = depth;
 #endif
     textureAtomicMax(meshlet_visibility_buffer, vec2<u32>(vertex_output.position.xy), visibility);
+    meshlet_publish_early_depth(vec2<u32>(vertex_output.position.xy), depth);
 }
 
 fn dummy_vertex() -> VertexOutput {

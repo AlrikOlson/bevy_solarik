@@ -1,6 +1,11 @@
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod input_tests;
+
 use super::collimated::CollimatedMaterials;
+use super::instance_rows::SceneRows;
 use super::{
-    RaytracingMesh3d, SolarikRaySettings,
+    SolarikRaySettings,
     blas::BlasManager,
     extract::StandardMaterialAssets,
     light_sampling::{build_alias_table, local_flux, luminance},
@@ -11,7 +16,7 @@ use bevy_asset::{AssetId, Handle};
 use bevy_color::{ColorToComponents, LinearRgba};
 use bevy_ecs::{
     change_detection::DetectChanges,
-    entity::{Entity, EntityHashMap},
+    entity::Entity,
     resource::Resource,
     system::{Local, Query, Res, ResMut},
 };
@@ -19,14 +24,12 @@ use bevy_image::Image;
 use bevy_material::AlphaMode;
 use bevy_math::{Affine3A, Mat4, UVec4, Vec3, Vec4, ops::cos};
 use bevy_mesh::Mesh;
-use bevy_pbr::{
-    DfgLut, ExtractedDirectionalLight, ExtractedPointLight, MeshMaterial3d,
-    PreviousGlobalTransform, StandardMaterial,
-};
+use bevy_pbr::{DfgLut, ExtractedDirectionalLight, ExtractedPointLight, StandardMaterial};
 use bevy_platform::{
     collections::{HashMap, HashSet},
     hash::FixedHasher,
 };
+use bevy_render::scene_slots::SceneInstance;
 use bevy_render::{
     extract_resource::ExtractResource,
     mesh::allocator::MeshAllocator,
@@ -35,7 +38,6 @@ use bevy_render::{
     renderer::{RenderDevice, RenderQueue},
     texture::{FallbackImage, GpuImage},
 };
-use bevy_transform::components::GlobalTransform;
 use core::{
     f32::consts::{PI, TAU},
     hash::Hash,
@@ -107,7 +109,9 @@ pub struct RaytracingSceneBindings {
     /// Infinity means unchanged; zero means unknown or global lighting change.
     pub(crate) history_stable_radius: f32,
     pub(crate) history_generation: u64,
-    previous_frame_light_entities: Vec<Entity>,
+    pub(crate) history_regional: bool,
+    history_regions: StorageBuffer<Vec<Vec4>>,
+    previous_frame_light_entities: Vec<SceneInstance>,
     settle_light_history: bool,
     #[cfg(feature = "graphics_debug")]
     /// Capture-only prepared scene generations and readback handles.
@@ -121,7 +125,11 @@ pub(crate) struct SceneCache {
     tlas: super::tlas::SceneTlas,
     slots: bevy_render::scene_slots::SceneSlots,
     instance_inputs: Vec<Option<RayInstanceInput>>,
+    input_roots: super::input_roots::InputRoots,
     history_stable_radius: f32,
+    regions: super::history::Regions,
+    dependencies: super::dependencies::Dependencies,
+    blas_generation: u64,
 }
 
 #[derive(Default)]
@@ -141,12 +149,12 @@ struct SceneStorage {
     rings: StorageBuffer<crate::rings::RingData>,
 }
 #[derive(Clone)]
-struct RayInstanceInput {
-    entity: Entity,
-    mesh: AssetId<Mesh>,
-    material: AssetId<StandardMaterial>,
-    transform: Affine3A,
-    previous: Affine3A,
+pub(super) struct RayInstanceInput {
+    pub(super) entity: SceneInstance,
+    pub(super) mesh: AssetId<Mesh>,
+    pub(super) material: AssetId<StandardMaterial>,
+    pub(super) transform: Affine3A,
+    pub(super) previous: Affine3A,
 }
 impl PartialEq for RayInstanceInput {
     fn eq(&self, other: &Self) -> bool {
@@ -172,66 +180,107 @@ struct SceneInputs {
     weather: Option<AssetId<Image>>,
     dfg: AssetId<Image>,
     rings: crate::rings::RingData,
-    blas_generation: u64,
 }
-
-type RayRows<'a, 'b> = Query<
-    'a,
-    'b,
-    (
-        Entity,
-        &'static RaytracingMesh3d,
-        &'static MeshMaterial3d<StandardMaterial>,
-        &'static GlobalTransform,
-        Option<&'static PreviousGlobalTransform>,
-    ),
->;
 
 fn update_instance_inputs(
     cache: &mut SceneCache,
-    rows: &RayRows<'_, '_>,
+    rows: &SceneRows<'_, '_>,
     queue: &RenderQueue,
-    dependencies: bool,
+    (dependencies, roots): (bool, Option<&HashSet<Entity>>),
     blas: &BlasManager,
     materials: &StandardMaterialAssets,
+    changes: &super::dependencies::Changes,
 ) -> (Vec<u32>, usize) {
+    let _profile = bevy_render::diagnostic::profile_scope("scene.prepare_inputs");
     cache.slots.begin();
     let mut dirty = Vec::new();
     let mut added = 0usize;
-    for (entity, mesh, material, transform, previous) in rows {
-        let input = RayInstanceInput {
-            entity,
-            mesh: mesh.id(),
-            material: material.id(),
-            transform: transform.affine(),
-            previous: previous.map_or(transform.affine(), |t| t.0),
-        };
-        let previous_input = cache
-            .slots
-            .get(entity)
-            .and_then(|slot| cache.instance_inputs[slot.index as usize].as_ref());
-        // Previous-transform settling does not change an occluder.
-        if previous_input.is_none_or(|old| !same_occluder(old, &input)) {
-            let previous_radius =
-                previous_input.map_or(f32::INFINITY, |old| history_distance(old, blas, materials));
-            cache.history_stable_radius = cache
-                .history_stable_radius
-                .min(previous_radius)
-                .min(history_distance(&input, blas, materials));
+    let mut visited = 0usize;
+    let (removed, roots_visited) = if let Some(roots) = roots {
+        let mut retiring = Vec::new();
+        for &root in roots {
+            let inputs = rows.for_root(root);
+            for part in cache.input_roots.replace(root, &inputs) {
+                if let Some(slot) = cache.slots.get_part(part) {
+                    retiring.push((part, slot));
+                }
+            }
+            visited += inputs.len();
+            for input in inputs {
+                update_input_history(cache, &input, blas, materials, changes);
+                added += usize::from(observe_instance(cache, input, dependencies, &mut dirty));
+            }
         }
-        added += usize::from(observe_instance(cache, input, dependencies, &mut dirty));
-    }
-    let removed = cache.slots.finish(queue);
+        (cache.slots.remove_parts(queue, retiring), roots.len())
+    } else {
+        cache.input_roots.clear();
+        for input in rows.iter() {
+            cache.input_roots.observe(&input);
+            update_input_history(cache, &input, blas, materials, changes);
+            added += usize::from(observe_instance(cache, input, dependencies, &mut dirty));
+            visited += 1;
+        }
+        (cache.slots.finish(queue), cache.input_roots.len())
+    };
+    profile_inputs(roots.is_some(), roots_visited, visited);
     for slot in &removed {
         if let Some(old) = &cache.instance_inputs[slot.index as usize] {
-            cache.history_stable_radius = cache
-                .history_stable_radius
-                .min(history_distance(old, blas, materials));
+            cache.regions.record(
+                changes.old_bounds(old, history_bounds(old, blas, materials)),
+                old.transform,
+            );
+            cache.history_stable_radius = cache.history_stable_radius.min(
+                changes
+                    .old_bounds(old, history_bounds(old, blas, materials))
+                    .map_or(0.0, |bounds| bounds.stable_radius(old.transform)),
+            );
         }
         cache.instance_inputs[slot.index as usize] = None;
     }
     profile_slots(cache, added, removed.len(), dirty.len());
     (dirty, removed.len())
+}
+fn profile_inputs(partial: bool, roots: usize, parts: usize) {
+    bevy_render::diagnostic::profile_value(
+        "scene.partial_input_update",
+        f64::from(partial),
+        "count",
+    );
+    bevy_render::diagnostic::profile_value("scene.input_roots_visited", roots as f64, "count");
+    bevy_render::diagnostic::profile_value("scene.input_parts_visited", parts as f64, "count");
+}
+fn update_input_history(
+    cache: &mut SceneCache,
+    input: &RayInstanceInput,
+    blas: &BlasManager,
+    materials: &StandardMaterialAssets,
+    changes: &super::dependencies::Changes,
+) {
+    let previous_input = cache
+        .slots
+        .get_part(input.entity)
+        .and_then(|slot| cache.instance_inputs[slot.index as usize].as_ref());
+    // Previous-transform settling does not change an occluder.
+    if changes.affects(input) || previous_input.is_none_or(|old| !same_occluder(old, input)) {
+        if let Some(old) = previous_input {
+            cache.regions.record(
+                changes.old_bounds(old, history_bounds(old, blas, materials)),
+                old.transform,
+            );
+        }
+        cache
+            .regions
+            .record(history_bounds(input, blas, materials), input.transform);
+        let previous_radius = previous_input.map_or(f32::INFINITY, |old| {
+            changes
+                .old_bounds(old, history_bounds(old, blas, materials))
+                .map_or(0.0, |bounds| bounds.stable_radius(old.transform))
+        });
+        cache.history_stable_radius = cache
+            .history_stable_radius
+            .min(previous_radius)
+            .min(history_distance(input, blas, materials));
+    }
 }
 fn same_occluder(old: &RayInstanceInput, new: &RayInstanceInput) -> bool {
     old.entity == new.entity
@@ -239,6 +288,21 @@ fn same_occluder(old: &RayInstanceInput, new: &RayInstanceInput) -> bool {
         && old.material == new.material
         && old.transform.to_cols_array().map(f32::to_bits)
             == new.transform.to_cols_array().map(f32::to_bits)
+}
+
+fn history_bounds(
+    input: &RayInstanceInput,
+    blas: &BlasManager,
+    materials: &StandardMaterialAssets,
+) -> Option<super::history::Bounds> {
+    let material = materials.get(&input.material)?;
+    if material.emissive.red != 0.0
+        || material.emissive.green != 0.0
+        || material.emissive.blue != 0.0
+    {
+        return None;
+    }
+    blas.bounds.get(&input.mesh).copied()
 }
 
 fn history_distance(
@@ -267,8 +331,8 @@ fn observe_instance(
     dependencies: bool,
     dirty: &mut Vec<u32>,
 ) -> bool {
-    let fresh = cache.slots.get(input.entity).is_none();
-    let slot = cache.slots.touch(input.entity);
+    let fresh = cache.slots.get_part(input.entity).is_none();
+    let slot = cache.slots.touch_part(input.entity);
     let index = slot.index as usize;
     if cache.instance_inputs.len() <= index {
         cache.instance_inputs.resize_with(index + 1, || None);
@@ -300,7 +364,7 @@ fn profile_slots(cache: &SceneCache, added: usize, removed: usize, dirty: usize)
 
 pub(crate) fn prepare_raytracing_scene_bindings(
     (instances_query, mut input_changes): (
-        RayRows<'_, '_>,
+        SceneRows<'_, '_>,
         super::instance_changes::RayInstanceChanges,
     ),
     directional_lights_query: Query<(Entity, &ExtractedDirectionalLight)>,
@@ -320,12 +384,13 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
     sky_light: Res<SolarikSkyLight>,
-    (alpha_testing, ray_settings, planet, atmosphere, rings): (
+    (alpha_testing, ray_settings, planet, atmosphere, rings, readiness): (
         Res<SolarikAlphaTesting>,
         Res<SolarikRaySettings>,
         Option<Res<crate::atmosphere::PlanetaryAtmosphere>>,
         Option<Res<crate::atmosphere::AtmosphereState>>,
         Res<crate::rings::RingShadow>,
+        Res<bevy_render::scene_readiness::SceneGeometryReadiness>,
     ),
     (render_device, diagnostics, mut scene_cache, frame, _capture_indices): (
         Res<RenderDevice>,
@@ -342,9 +407,34 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     let _cpu_profile = bevy_render::diagnostic::profile_scope("scene.prepare");
     bevy_render::diagnostic::profile_value(
         "scene.ray_instances",
-        instances_query.iter().len() as f64,
+        instances_query.len() as f64,
         "count",
     );
+
+    // Meshes with an alpha-masked or blended material on any instance need a
+    // BLAS the shader can alpha-test; the manager rebuilds the ones built the
+    // other way (they are missing from the TLAS for the frame it takes).
+    let opacity_profile = bevy_render::diagnostic::profile_scope("scene.prepare_opacity");
+    let changed_roots = input_changes.collect();
+    let instance_inputs_unchanged = changed_roots.is_empty();
+    if !instance_inputs_unchanged || material_assets.is_changed() || alpha_testing.is_changed() {
+        let mut non_opaque_meshes: HashSet<AssetId<Mesh>> = instances_query
+            .iter()
+            .filter(|input| {
+                alpha_testing.0
+                    && material_assets
+                        .get(&input.material)
+                        .is_some_and(|material| {
+                            material_alpha(material).flags & MATERIAL_FLAG_OPAQUE == 0
+                        })
+            })
+            .map(|input| input.mesh)
+            .collect();
+        non_opaque_meshes.extend(readiness.alpha_requested::<Mesh>());
+        blas_manager.set_non_opaque_meshes(non_opaque_meshes);
+    }
+
+    drop(opacity_profile);
     let weather = planet
         .as_deref()
         .filter(|p| p.cloud_coverage > 0.0)
@@ -373,9 +463,11 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         weather: weather.map(Handle::id),
         dfg: dfg_lut.texture.id(),
         rings: rings.0.clone(),
-        blas_generation: blas_manager.generation,
     };
-    let resources_changed = mesh_allocator.is_changed()
+    let blas_changed = scene_cache.blas_generation != blas_manager.generation;
+    scene_cache.blas_generation = blas_manager.generation;
+    let resources_changed = blas_changed
+        || mesh_allocator.is_changed()
         || material_assets.is_changed()
         || collimated.is_changed()
         || detailed.is_changed()
@@ -383,32 +475,66 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         || lommel.is_changed()
         || texture_assets.is_changed()
         || fallback_texture.is_changed();
-    let unchanged_inputs = input_changes.unchanged()
-        && instances_query.iter().len() == scene_cache.slots.active_indices().len()
-        && !resources_changed;
-    // Asset readiness/removal, light/material/sky changes and coordinate
-    // settings have dependencies wider than geometric membership.
-    scene_cache.history_stable_radius =
-        if resources_changed || scene_cache.inputs.as_ref() != Some(&inputs) {
-            0.0
-        } else {
-            f32::INFINITY
-        };
+    // Pending geometry retains ownership but needs another full readiness pass.
+    // Count retained inputs before applying membership deltas, not the new query.
+    let full_inputs = resources_changed
+        || !scene_cache.input_roots.initialized
+        || scene_cache.slots.counts().0 != scene_cache.slots.active_indices().len();
+    let unchanged_inputs = instance_inputs_unchanged && !full_inputs;
+    let dependency_profile = bevy_render::diagnostic::profile_scope("scene.prepare_dependencies");
+    let changes = if unchanged_inputs {
+        super::dependencies::Changes::default()
+    } else {
+        scene_cache.dependencies.observe(
+            instances_query.iter(),
+            &blas_manager,
+            &material_assets,
+            &texture_assets,
+            (&detailed, &gaussian),
+            [inputs.sky, inputs.weather, Some(inputs.dfg)],
+        )
+    };
+    drop(dependency_profile);
+    // Asset arrivals and BLAS compaction are publication events, not global
+    // lighting changes. Used geometry/material dependencies invalidate their
+    // old/new support; emitter, environment and unknown extensions remain global.
+    let global_history_change = changes.global
+        || scene_cache.inputs.as_ref() != Some(&inputs)
+        || collimated.is_changed()
+        || detailed.is_changed()
+        || gaussian.is_changed()
+        || lommel.is_changed()
+        || fallback_texture.is_changed();
+    scene_cache.history_stable_radius = if global_history_change {
+        0.0
+    } else {
+        f32::INFINITY
+    };
+    scene_cache.regions.clear(global_history_change);
     let (mut dirty_indices, removed) = if unchanged_inputs {
         profile_slots(&scene_cache, 0, 0, 0);
+        profile_inputs(false, 0, 0);
         (Vec::new(), 0)
     } else {
         update_instance_inputs(
             &mut scene_cache,
             &instances_query,
             &render_queue,
-            resources_changed,
+            (resources_changed, (!full_inputs).then_some(&changed_roots)),
             &blas_manager,
             &material_assets,
+            &changes,
         )
     };
     if scene_cache.history_stable_radius.is_finite() {
         raytracing_scene_bindings.history_stable_radius = scene_cache.history_stable_radius;
+        raytracing_scene_bindings.history_regional = !scene_cache.regions.global;
+        raytracing_scene_bindings
+            .history_regions
+            .set(scene_cache.regions.packed());
+        raytracing_scene_bindings
+            .history_regions
+            .write_buffer_changed(&render_device, &render_queue);
         raytracing_scene_bindings.history_generation = raytracing_scene_bindings
             .history_generation
             .wrapping_add(1)
@@ -449,32 +575,17 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     }
     raytracing_scene_bindings.has_foliage = false;
 
-    let mut this_frame_entity_to_light_id = EntityHashMap::<u32>::default();
+    let mut this_frame_entity_to_light_id = HashMap::<SceneInstance, u32>::default();
     let previous_frame_light_entities: Vec<_> = raytracing_scene_bindings
         .previous_frame_light_entities
         .drain(..)
         .collect();
 
-    if instances_query.iter().len() == 0 {
+    if instances_query.len() == 0 {
         scene_cache.tlas.prepare(&render_device, 0);
         scene_cache.storage.active_indices.get_mut().clear();
         return;
     }
-
-    // Meshes with an alpha-masked or blended material on any instance need a
-    // BLAS the shader can alpha-test; the manager rebuilds the ones built the
-    // other way (they are missing from the TLAS for the frame it takes).
-    let non_opaque_meshes: HashSet<AssetId<Mesh>> = instances_query
-        .iter()
-        .filter(|(_, _, material, _, _)| {
-            alpha_testing.0
-                && material_assets.get(&material.id()).is_some_and(|material| {
-                    material_alpha(material).flags & MATERIAL_FLAG_OPAQUE == 0
-                })
-        })
-        .map(|(_, mesh, _, _, _)| mesh.id())
-        .collect();
-    blas_manager.set_non_opaque_meshes(non_opaque_meshes);
 
     let mut vertex_buffers = CachedBindingArray::new();
     let mut index_buffers = CachedBindingArray::new();
@@ -484,12 +595,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         storage,
         tlas,
         slots,
+        instance_inputs,
         ..
     } = &mut *scene_cache;
     let slot_capacity = slots.capacity();
-    let candidate_entities: Vec<_> = (0..slot_capacity as u32)
-        .filter_map(|i| slots.entity(i))
-        .collect();
     storage
         .transforms
         .get_mut()
@@ -503,7 +612,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         .get_mut()
         .resize(slot_capacity, GpuInstanceGeometryIds::default());
     storage.material_ids.get_mut().resize(slot_capacity, 0);
-    let (tlas, tlas_reused) = tlas.prepare(&render_device, instances_query.iter().len());
+    let (tlas, tlas_reused) = tlas.prepare(&render_device, instances_query.len());
     bevy_render::diagnostic::profile_value(
         "scene.tlas_allocation_reused",
         f64::from(tlas_reused),
@@ -554,6 +663,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             None => Some(TEXTURE_MAP_NONE),
         }
     };
+    let materials_profile = bevy_render::diagnostic::profile_scope("scene.prepare_materials");
     for (asset_id, material) in material_assets.iter() {
         if material_alpha(material).flags
             & (MATERIAL_FLAG_OPAQUE
@@ -657,6 +767,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         material_id += 1;
     }
 
+    drop(materials_profile);
     if material_id == 0 {
         return;
     }
@@ -666,29 +777,22 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         samplers.push(fallback_texture.d2.sampler.deref());
     }
 
+    let instances_profile = bevy_render::diagnostic::profile_scope("scene.prepare_instances");
     let mut instance_id = 0;
     let mut material_transport_flags = 0;
-    for entity in candidate_entities {
-        let Ok((_, mesh, material, transform, previous_frame_transform)) =
-            instances_query.get(entity)
-        else {
+    // Invocation-local: allocator slabs and BLAS handles cannot outlive this
+    // resource snapshot. Missing sources are cached only until the next call.
+    let mut mesh_sources: HashMap<AssetId<Mesh>, Option<(&Blas, GpuInstanceGeometryIds)>> =
+        HashMap::default();
+    for (index, input) in instance_inputs.iter().enumerate() {
+        let Some(input) = input else {
             continue;
         };
-        let slot = slots.get(entity).unwrap();
-        let index = slot.index as usize;
-        let Some(blas) = blas_manager.get(&mesh.id()) else {
-            slots.deactivate(slot);
-            continue;
-        };
-        let Some(vertex_slice) = mesh_allocator.mesh_vertex_slice(&mesh.id()) else {
-            slots.deactivate(slot);
-            continue;
-        };
-        let Some(index_slice) = mesh_allocator.mesh_index_slice(&mesh.id()) else {
-            slots.deactivate(slot);
-            continue;
-        };
-        let Some(material_id) = material_id_map.get(&material.id()).copied() else {
+        let entity = input.entity;
+        let mesh = input.mesh;
+        let material = input.material;
+        let slot = slots.get_part(entity).expect("retained ray part");
+        let Some(material_id) = material_id_map.get(&material).copied() else {
             slots.deactivate(slot);
             continue;
         };
@@ -697,14 +801,49 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             continue;
         };
 
+        // Resolve bindings at the first material-ready use, preserving the
+        // original binding-array insertion order for every eligible source.
+        let Some((blas, geometry)) = mesh_sources
+            .entry(mesh)
+            .or_insert_with(|| {
+                let blas = blas_manager.get(&mesh)?;
+                let vertex_slice = mesh_allocator.mesh_vertex_slice(&mesh)?;
+                let index_slice = mesh_allocator.mesh_index_slice(&mesh)?;
+                let (vertex_buffer_id, _) = vertex_buffers.push_if_absent(
+                    vertex_slice.buffer.as_entire_buffer_binding(),
+                    vertex_slice.buffer.id(),
+                );
+                let (index_buffer_id, _) = index_buffers.push_if_absent(
+                    index_slice.buffer.as_entire_buffer_binding(),
+                    index_slice.buffer.id(),
+                );
+                Some((
+                    blas,
+                    GpuInstanceGeometryIds {
+                        vertex_buffer_id,
+                        vertex_buffer_offset: vertex_slice.range.start,
+                        index_buffer_id,
+                        index_buffer_offset: index_slice.range.start,
+                        triangle_count: (index_slice.range.len() / 3) as u32,
+                        light_probability: 0.0,
+                    },
+                ))
+            })
+            .as_ref()
+        else {
+            slots.deactivate(slot);
+            continue;
+        };
         material_transport_flags |= material.flags;
         raytracing_scene_bindings.has_foliage |= alpha_testing.0 && (material.flags >> 16) != 0;
         if alpha_testing.0
             && material.flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND) != 0
         {
-            raytracing_scene_bindings.glass_entities.insert(entity);
+            raytracing_scene_bindings
+                .glass_entities
+                .insert(entity.entity);
         }
-        let transform = transform.to_matrix();
+        let transform = Mat4::from(input.transform);
         *tlas.get_mut_single(instance_id).unwrap() = Some(TlasInstance::new(
             blas,
             tlas_transform(&transform),
@@ -714,35 +853,16 @@ pub(crate) fn prepare_raytracing_scene_bindings(
 
         assert!(slot.index < (1 << 24), "TLAS custom slot capacity");
         transforms.get_mut()[index] = transform;
-        previous_frame_transforms.get_mut()[index] = previous_frame_transform
-            .map(|t| Mat4::from(t.0))
-            .unwrap_or(transform);
+        previous_frame_transforms.get_mut()[index] = Mat4::from(input.previous);
         slots.activate(slot);
         if active_indices.set_index(instance_id, slot.index) {
             active_dirty_indices.push(u32::try_from(instance_id).expect("active index capacity"));
         }
 
-        let (vertex_buffer_id, _) = vertex_buffers.push_if_absent(
-            vertex_slice.buffer.as_entire_buffer_binding(),
-            vertex_slice.buffer.id(),
-        );
-        let (index_buffer_id, _) = index_buffers.push_if_absent(
-            index_slice.buffer.as_entire_buffer_binding(),
-            index_slice.buffer.id(),
-        );
-
-        let geometry = GpuInstanceGeometryIds {
-            vertex_buffer_id,
-            vertex_buffer_offset: vertex_slice.range.start,
-            index_buffer_id,
-            index_buffer_offset: index_slice.range.start,
-            triangle_count: (index_slice.range.len() / 3) as u32,
-            light_probability: 0.0,
-        };
-        if geometry_ids.get()[index] != geometry || material_ids.get()[index] != material_id {
+        if geometry_ids.get()[index] != *geometry || material_ids.get()[index] != material_id {
             dirty_indices.push(slot.index);
         }
-        geometry_ids.get_mut()[index] = geometry;
+        geometry_ids.get_mut()[index] = geometry.clone();
         material_ids.get_mut()[index] = material_id;
 
         if material.emissive != Vec3::ZERO {
@@ -750,7 +870,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             // material factor is a power estimate; PDFs remain exact.
             light_fluxes.push(
                 luminance(material.emissive)
-                    * blas_manager.mesh_world_area(&mesh.id(), transform)
+                    * blas_manager.mesh_world_area(&mesh, transform)
                     * f64::from(PI)
                     * if material.emission_cone.w > 0.0 {
                         let radius = f64::from(material.emission_cone.w);
@@ -763,18 +883,30 @@ pub(crate) fn prepare_raytracing_scene_bindings(
                 .get_mut()
                 .push(GpuLightSource::new_emissive_mesh_light(
                     slot.index,
-                    (index_slice.range.len() / 3) as u32,
+                    geometry.triangle_count,
                 ));
 
-            this_frame_entity_to_light_id.insert(entity, light_sources.get().len() as u32 - 1);
+            this_frame_entity_to_light_id
+                .insert(entity.into(), light_sources.get().len() as u32 - 1);
             raytracing_scene_bindings
                 .previous_frame_light_entities
-                .push(entity);
+                .push(entity.into());
         }
 
         instance_id += 1;
     }
 
+    bevy_render::diagnostic::profile_value(
+        "scene.mesh_sources_resolved",
+        mesh_sources.len() as f64,
+        "count",
+    );
+    bevy_render::diagnostic::profile_value(
+        "scene.mesh_source_instances",
+        instance_id as f64,
+        "count",
+    );
+    drop(instances_profile);
     active_indices.get_mut().truncate(instance_id);
     if instance_id == 0 {
         return;
@@ -796,10 +928,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             .get_mut()
             .push(GpuLightSource::new_directional_light(directional_light_id));
 
-        this_frame_entity_to_light_id.insert(entity, light_sources.get().len() as u32 - 1);
+        this_frame_entity_to_light_id.insert(entity.into(), light_sources.get().len() as u32 - 1);
         raytracing_scene_bindings
             .previous_frame_light_entities
-            .push(entity);
+            .push(entity.into());
     }
 
     // Point and spot lights are sphere lights of the light's radius, in the
@@ -827,10 +959,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
                 GpuLightSource::new_point_light(local_light_id)
             });
 
-        this_frame_entity_to_light_id.insert(entity, light_sources.get().len() as u32 - 1);
+        this_frame_entity_to_light_id.insert(entity.into(), light_sources.get().len() as u32 - 1);
         raytracing_scene_bindings
             .previous_frame_light_entities
-            .push(entity);
+            .push(entity.into());
     }
 
     raytracing_scene_bindings.settle_light_history =
@@ -964,7 +1096,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             .into_iter()
             .filter_map(|(role, buffer)| buffer.map(|b| (role, b.clone())))
             .collect(),
-            instances: instances_query.iter().len(),
+            instances: instances_query.len(),
             blas_generation: blas_manager.generation,
             material_change_tick: material_assets.last_changed().get(),
             tlas_capacity: tlas.get().len(),
@@ -1067,6 +1199,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             scan_samplers.as_slice(),
             detail_parameters.binding().unwrap(),
             ring_buffer.binding().unwrap(),
+            raytracing_scene_bindings.history_regions.binding().unwrap(),
         )),
     ));
 }
@@ -1107,6 +1240,7 @@ impl RaytracingSceneBindings {
                         sampler(SamplerBindingType::Filtering).count(MAX_SCAN_ATLASES),
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only::<crate::rings::RingData>(false),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -1118,6 +1252,8 @@ impl RaytracingSceneBindings {
             has_foliage: false,
             history_stable_radius: 0.0,
             history_generation: 0,
+            history_regional: false,
+            history_regions: StorageBuffer::default(),
         }
     }
 }
@@ -1467,6 +1603,7 @@ fn tlas_transform(transform: &Mat4) -> [f32; 12] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_transform::components::GlobalTransform;
     use bevy_transform::components::Transform;
 
     #[test]
@@ -1484,7 +1621,7 @@ mod tests {
         let material = source.add(StandardMaterial::default());
         let entity = bevy_ecs::world::World::new().spawn_empty().id();
         let input = RayInstanceInput {
-            entity,
+            entity: entity.into(),
             mesh: mesh.id(),
             material: material.id(),
             transform: Affine3A::from_translation(Vec3::X * 1000.0),
@@ -1518,7 +1655,7 @@ mod tests {
             history_distance(&settled, &blas, &materials) < 1.0,
             "old and new positions both constrain validity"
         );
-        settled.entity = bevy_ecs::world::World::new().spawn_empty().id();
+        settled.entity = bevy_ecs::world::World::new().spawn_empty().id().into();
         settled.mesh = AssetId::from(bevy_asset::uuid::Uuid::from_u128(7));
         assert!(!same_occluder(&input, &settled), "source replacement");
         source.get_mut(&material).unwrap().emissive = LinearRgba::rgb(1.0, 0.0, 0.0);

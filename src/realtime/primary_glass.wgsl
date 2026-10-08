@@ -1,4 +1,8 @@
 enable wgpu_ray_query;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+#import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, resolve_ray_hit_filtered}
+#endif
+
 #define_import_path bevy_solarik::primary_glass
 
 #import bevy_solarik::thin_glass::{thin_glass_weights, offset_thin_glass_ray}
@@ -37,6 +41,9 @@ fn primary_glass(@builtin(global_invocation_id) id: vec3<u32>) {
 // the already shaded opaque/sky pixel. Inputs and output are scene radiance.
 fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: vec3f, max_distance: f32, background: vec3f, rng: ptr<function, u32>) -> vec4f {
     var origin = initial_origin;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+    var cone = primary_ray_cone(view.clip_from_view, view.main_pass_viewport.zw, distance(initial_origin, view.world_position));
+#endif
     var transmission = vec3(1.0);
     var radiance = vec3(0.0);
     var has_glass = 0.0;
@@ -46,12 +53,19 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
         let ray = trace_glass_ray(origin, direction, RAY_T_MIN, remaining);
         if ray.kind == RAY_QUERY_INTERSECTION_NONE { return vec4(radiance + transmission * background, has_glass); }
         let material = materials[material_ids[ray.instance_custom_data]];
+#ifdef RAY_MATERIAL_FOOTPRINTS
+        cone = advance_ray_cone(cone, ray.t);
+#endif
         if (material.flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) == 0u {
             // Raster depth bounds this query. An earlier opaque hit was omitted
             // by raster (e.g. a building's back-facing wall), so sky/background
             // cannot stand in for its radiance. Preserve nonglass pixels.
             if has_glass == 0.0 { return vec4(background, 0.0); }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+            let hidden = resolve_ray_hit_filtered(ray, direction, cone);
+#else
             let hidden = resolve_ray_hit_full(ray);
+#endif
             var opaque_radiance = vec3(0.0);
             for (var sample = 0u; sample < 4u; sample += 1u) {
                 opaque_radiance += shade_surface_path(hidden, -direction, rng);
@@ -60,7 +74,11 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
         }
         if i == 32u { break; }
         has_glass = 1.0;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+        let hit = resolve_ray_hit_filtered(ray, direction, cone);
+#else
         let hit = resolve_ray_hit_full(ray);
+#endif
         let alpha = clamp(resolve_material_alpha(material, hit.uv), 0.0, 1.0);
         if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
             var surface_radiance = vec3(0.0);

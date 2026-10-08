@@ -1,4 +1,8 @@
 enable wgpu_ray_query;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+#import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, scatter_ray_cone, resolve_ray_hit_filtered}
+#endif
+
 
 #define_import_path bevy_solarik::specular_gi
 
@@ -91,6 +95,11 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
     var p_bounce = initial_p_bounce;
     var previous_scatter_position = primary_surface.world_position;
     var path_roughness = primary_surface.material.roughness;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+    var cone = scatter_ray_cone(
+        primary_ray_cone(view.clip_from_view, view.main_pass_viewport.zw, initial_ray_t),
+        0.0, primary_surface.material.roughness);
+#endif
     var glass_interactions = 0u;
     var delta_reflection = false;
     var analytic_owned = primary_surface.material.roughness <= SPECULAR_GI_FOR_DI_ROUGHNESS_THRESHOLD;
@@ -113,7 +122,12 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             radiance += throughput * sample_sky(wi);
             break;
         }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+        cone = advance_ray_cone(cone, ray.t);
+        let ray_hit = resolve_ray_hit_filtered(ray, wi, cone);
+#else
         let ray_hit = resolve_ray_hit_full(ray);
+#endif
         let material = materials[material_ids[ray.instance_custom_data]];
         if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
 #ifdef DLSS_RR_GUIDE_BUFFERS
@@ -143,6 +157,9 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
                 ray_hit.material.base_color, alpha, ray_hit.material.reflectance, rand_f(rng));
             throughput *= next.throughput;
             if all(throughput <= vec3(0.0)) { break; }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+            if next.reflected { cone = scatter_ray_cone(cone, ray_hit.normal_spread, 0.0); }
+#endif
             wi = next.wi;
             ray_origin = offset_thin_glass_ray(ray_hit.world_position,
                 ray_hit.geometric_world_normal, wi, RAY_T_MIN);
@@ -216,6 +233,9 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
             radiance += throughput * mis_weight * direct_lighting.radiance * direct_lighting.inverse_pdf * direct_lighting_brdf;
         }
 
+#ifdef RAY_MATERIAL_FOOTPRINTS
+        cone = scatter_ray_cone(cone, ray_hit.normal_spread, ray_hit.material.roughness);
+#endif
         // Sample new ray direction from the GGX BRDF for next bounce
         let wi_tangent = sample_ggx_vndf(wo_tangent, ray_hit.material.roughness, rng);
         if ggx_vndf_sample_invalid(wi_tangent) { break; }

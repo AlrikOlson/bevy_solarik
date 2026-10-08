@@ -1,4 +1,8 @@
 enable wgpu_ray_query;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+#import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, resolve_ray_hit_filtered}
+#endif
+
 
 #import bevy_solarik::foliage_math::foliage_depth_matches
 #import bevy_solarik::surface_path::shade_surface_path
@@ -20,7 +24,12 @@ fn primary_foliage(@builtin(global_invocation_id) id: vec3<u32>) {
     let distance_to_surface = distance(near, raster.world_position);
     let ray = trace_ray(near, direction, 0.0, distance_to_surface + max(0.002, distance_to_surface * 0.00001), RAY_FLAG_NONE);
     if ray.kind == RAY_QUERY_INTERSECTION_NONE { return; }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+    let cone = primary_ray_cone(view.clip_from_view, view.main_pass_viewport.zw, ray.t + distance(near, view.world_position));
+    let hit = resolve_ray_hit_filtered(ray, direction, cone);
+#else
     let hit = resolve_ray_hit_full(ray);
+#endif
     if hit.material.diffuse_transmission <= 0.0 { return; }
     if !foliage_depth_matches(raster.world_position, hit.world_position, raster.world_normal, hit.world_normal, distance_to_surface) { return; }
     var rng = id.x + id.y * u32(view.main_pass_viewport.z) + constants.frame_index;

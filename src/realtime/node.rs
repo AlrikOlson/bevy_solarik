@@ -426,8 +426,14 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         scene_bindings.history_generation,
         scene_bindings.history_stable_radius,
     );
-    let reset_flags = if solarik_lighting.reset || stable_radius == 0.0 {
+    let regional = std::env::var("SOLARIK_REGIONAL_HISTORY").is_ok_and(|v| v == "1")
+        && scene_bindings.history_regional
+        && s.history
+            .has_one_pending_event(scene_bindings.history_generation);
+    let reset_flags = if solarik_lighting.reset || (stable_radius == 0.0 && !regional) {
         1u32
+    } else if regional {
+        6u32
     } else if stable_radius.is_finite() {
         2u32
     } else {
@@ -690,6 +696,9 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         (101, "world_cache_updated_cells"),
         (102, "world_cache_reset"),
         (103, "world_cache_local_reset"),
+        (104, "world_cache_adaptive_allocator"),
+        (105, "world_cache_starved_candidates"),
+        (106, "world_cache_high_priority_candidates"),
     ] {
         diagnostics.record_u32(
             ctx.command_encoder(),
@@ -778,6 +787,15 @@ pub fn init_solari_lighting_pipelines(
         )];
         shader_defs.extend_from_slice(&extra_shader_defs);
         shader_defs.push("BINDLESS_SURFACE_DETAIL".into());
+        if std::env::var("SOLARIK_ADAPTIVE_CACHE_BUDGET").is_ok_and(|v| v == "1") {
+            shader_defs.push("ADAPTIVE_CACHE_BUDGET".into());
+        }
+        if std::env::var("SOLARIK_REGIONAL_HISTORY").is_ok_and(|v| v == "1") {
+            shader_defs.push("REGIONAL_HISTORY".into());
+        }
+        if std::env::var("SOLARIK_RAY_MATERIAL_FILTERING").is_ok_and(|v| v == "1") {
+            shader_defs.push("RAY_MATERIAL_FOOTPRINTS".into());
+        }
 
         pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some(label.into()),

@@ -1,11 +1,13 @@
 //! Detect renderer input mutations before walking persistent ray scene slots.
-use super::RaytracingMesh3d;
+use super::{RaytracingAssembly3d, RaytracingMesh3d};
 use bevy_ecs::{
+    entity::Entity,
     lifecycle::RemovedComponents,
     query::{Changed, Or, With},
     system::{Query, SystemParam},
 };
 use bevy_pbr::{MeshMaterial3d, PreviousGlobalTransform, StandardMaterial};
+use bevy_platform::collections::HashSet;
 use bevy_transform::components::GlobalTransform;
 
 type Material = MeshMaterial3d<StandardMaterial>;
@@ -21,7 +23,7 @@ pub(super) struct RayInstanceChanges<'w, 's> {
     changed: Query<
         'w,
         's,
-        (),
+        Entity,
         (
             With<RaytracingMesh3d>,
             With<Material>,
@@ -29,20 +31,42 @@ pub(super) struct RayInstanceChanges<'w, 's> {
             ChangedInputs,
         ),
     >,
+    assembly_changed: Query<
+        'w,
+        's,
+        Entity,
+        (
+            With<RaytracingAssembly3d>,
+            Or<(
+                Changed<RaytracingAssembly3d>,
+                Changed<GlobalTransform>,
+                Changed<PreviousGlobalTransform>,
+            )>,
+        ),
+    >,
+    assembly_removed: RemovedComponents<'w, 's, RaytracingAssembly3d>,
     mesh: RemovedComponents<'w, 's, RaytracingMesh3d>,
     material: RemovedComponents<'w, 's, Material>,
     transform: RemovedComponents<'w, 's, GlobalTransform>,
     previous: RemovedComponents<'w, 's, PreviousGlobalTransform>,
 }
 impl RayInstanceChanges<'_, '_> {
-    pub(super) fn unchanged(&mut self) -> bool {
-        let removed = [
-            self.mesh.read().count(),
-            self.material.read().count(),
-            self.transform.read().count(),
-            self.previous.read().count(),
-        ];
-        removed.iter().all(|&count| count == 0) && self.changed.is_empty()
+    pub(super) fn collect(&mut self) -> HashSet<Entity> {
+        let mut roots: HashSet<_> = self
+            .changed
+            .iter()
+            .chain(self.assembly_changed.iter())
+            .collect();
+        roots.extend(self.assembly_removed.read());
+        roots.extend(self.mesh.read());
+        roots.extend(self.material.read());
+        roots.extend(self.transform.read());
+        roots.extend(self.previous.read());
+        roots
+    }
+    #[cfg(test)]
+    fn unchanged(&mut self) -> bool {
+        self.collect().is_empty()
     }
 }
 

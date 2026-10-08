@@ -15,6 +15,8 @@
         get_meshlet_vertex_position,
         get_meshlet_vertex_uv,
         meshlet_cutout_visible,
+        meshlet_visibility_may_win,
+        meshlet_publish_early_depth,
         meshlet_double_sided,
     },
     mesh_functions::mesh_position_local_to_world,
@@ -178,15 +180,17 @@ fn rasterize_cluster(
 }
 
 fn write_visibility_buffer_pixel(x: f32, y: f32, z: f32, packed_ids: u32, instance_id: u32, w: vec3f, uv_0: vec3f, uv_1: vec3f, uv_2: vec3f) {
+    let depth = bitcast<u32>(z);
+    if !meshlet_visibility_may_win(instance_id, vec2(u32(x), u32(y)), depth) { return; }
     let weighted_uv = w.x * uv_0 + w.y * uv_1 + w.z * uv_2;
     if !meshlet_cutout_visible(instance_id, weighted_uv.xy / weighted_uv.z) { return; }
-    let depth = bitcast<u32>(z);
 #ifdef MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT
     let visibility = (u64(depth) << 32u) | u64(packed_ids);
 #else
     let visibility = depth;
 #endif
     textureAtomicMax(meshlet_visibility_buffer, vec2(u32(x), u32(y)), visibility);
+    meshlet_publish_early_depth(vec2(u32(x), u32(y)), depth);
 }
 
 fn edge_function(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>) -> f32 {

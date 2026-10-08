@@ -33,6 +33,13 @@ const RESOLVED_LIGHT_SAMPLE_STRUCT_SIZE: u64 = 36;
 
 /// Size of the GI `Reservoir` shader struct in bytes.
 const GI_RESERVOIR_STRUCT_SIZE: u64 = 48;
+fn gi_reservoir_size() -> u64 {
+    if std::env::var("SOLARIK_REGIONAL_HISTORY").is_ok_and(|v| v == "1") {
+        64
+    } else {
+        GI_RESERVOIR_STRUCT_SIZE
+    }
+}
 
 pub const LIGHT_TILE_BLOCKS: u64 = 128;
 pub const LIGHT_TILE_SAMPLES_PER_BLOCK: u64 = 1024;
@@ -149,7 +156,7 @@ pub fn prepare_solari_lighting_resources(
         let gi_reservoirs = |name| {
             render_device.create_buffer(&BufferDescriptor {
                 label: Some(name),
-                size: (view_size.x * view_size.y) as u64 * GI_RESERVOIR_STRUCT_SIZE,
+                size: (view_size.x * view_size.y) as u64 * gi_reservoir_size(),
                 usage: BufferUsages::STORAGE,
                 mapped_at_creation: false,
             })

@@ -386,7 +386,7 @@ fn first_cull(
         .as_deref()
         .filter(|_| bevy_render::diagnostic::profile_enabled());
     let span = diagnostics.time_span(ctx.command_encoder(), "early_instance_cull");
-    let workgroups = meshlet_view_resources.scene_instance_count.div_ceil(128);
+    let workgroups = meshlet_view_resources.assembly_group_count.div_ceil(128);
     cull_pass(
         "meshlet_first_instance_cull",
         ctx,
@@ -394,7 +394,7 @@ fn first_cull(
         view_offset,
         previous_view_offset,
         first_instance_cull_pipeline,
-        &[meshlet_view_resources.scene_instance_count],
+        &[meshlet_view_resources.assembly_group_count],
     )
     .dispatch_workgroups(workgroups, 1, 1);
     span.end(ctx.command_encoder());
@@ -500,7 +500,7 @@ fn second_cull(
         view_offset,
         previous_view_offset,
         second_instance_cull_pipeline,
-        &[meshlet_view_resources.scene_instance_count],
+        &[meshlet_view_resources.assembly_group_count],
     )
     .dispatch_workgroups_indirect(&meshlet_view_resources.second_pass_dispatch, 0);
     span.end(ctx.command_encoder());

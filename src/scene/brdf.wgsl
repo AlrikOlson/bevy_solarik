@@ -16,6 +16,7 @@ struct EvaluateAndSampleBrdfResult {
     wi: vec3<f32>,
     throughput: vec3<f32>,
     pdf: f32,
+    sampled_roughness: f32,
 }
 
 // A surface point seen from `wo` faces `wo`. Interpolated and mapped shading
@@ -37,7 +38,7 @@ fn evaluate_and_sample_brdf(
 ) -> EvaluateAndSampleBrdfResult {
     let world_normal = view_facing_normal(shading_normal, wo);
     let NdotV = dot(world_normal, wo);
-    if NdotV < 0.0001 { return EvaluateAndSampleBrdfResult(vec3(0.0), vec3(0.0), 0.0); }
+    if NdotV < 0.0001 { return EvaluateAndSampleBrdfResult(vec3(0.0), vec3(0.0), 0.0, 0.0); }
     let F0 = calculate_F0(material.base_color, material.metallic, vec3(material.reflectance));
     let df = select(1.0 - luminance(specular_albedo(F0, NdotV, material.perceptual_roughness)), 1.0, material.lommel);
 
@@ -65,13 +66,13 @@ fn evaluate_and_sample_brdf(
     } else {
         wi_tangent = sample_ggx_vndf(wo_tangent, material.roughness, rng);
         if ggx_vndf_sample_invalid(wi_tangent) {
-            return EvaluateAndSampleBrdfResult(vec3(0.0), vec3(0.0), 0.0);
+            return EvaluateAndSampleBrdfResult(vec3(0.0), vec3(0.0), 0.0, 0.0);
         }
         wi = wi_tangent.x * T + wi_tangent.y * B + wi_tangent.z * N;
     }
 
     let pdf = evaluate_brdf_pdf(wo, wi, world_normal, material);
-    if pdf <= 0.0 { return EvaluateAndSampleBrdfResult(wi, vec3(0.0), 0.0); }
+    if pdf <= 0.0 { return EvaluateAndSampleBrdfResult(wi, vec3(0.0), 0.0, 0.0); }
 
     var throughput = evaluate_brdf(wo, wi, world_normal, material);
     if diffuse_selected || material.roughness > MIRROR_ROUGHNESS_THRESHOLD {
@@ -80,7 +81,7 @@ fn evaluate_and_sample_brdf(
         throughput /= specular_weight;
     }
 
-    return EvaluateAndSampleBrdfResult(wi, throughput, pdf);
+    return EvaluateAndSampleBrdfResult(wi, throughput, pdf, select(material.roughness, 1.0, diffuse_selected));
 }
 
 fn evaluate_brdf(

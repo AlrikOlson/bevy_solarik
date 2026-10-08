@@ -1,4 +1,9 @@
 //! Real ray queries plus production cache support rejection after scene edits.
+#[expect(
+    dead_code,
+    unused_imports,
+    reason = "shared production history module; this ray fixture covers its bounded subset"
+)]
 #[path = "../src/scene/history.rs"]
 mod history;
 #[path = "../src/scene/tlas.rs"]

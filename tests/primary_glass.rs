@@ -1,4 +1,6 @@
 //! Numerical primary-pane compositing with production WGSL and synthetic scene I/O.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 #[test]
@@ -35,7 +37,7 @@ fn primary_glass_gpu() {
             source: wgpu::ShaderSource::Wgsl(
                 format!(
                     "{glass}\n{}\n{}",
-                    &production[start..],
+                    preprocess::select(&production[start..], &[]),
                     include_str!("primary_glass_fixture.wgsl")
                 )
                 .into(),

@@ -46,6 +46,7 @@ fn cache_history_gpu() {
 const WORLD_CACHE_MAX_TEMPORAL_SAMPLES=32.0;
 const WORLD_CACHE_EMPTY_CELL=0u;
 var<private> world_cache_life:array<u32,1>;
+var<private> scene_history_regions:array<vec4f,16>;
 var<private> world_cache_checksums:array<u32,1>;
 var<private> world_cache_radiance:array<vec4<f32>,1>;
 var<private> world_cache_luminance_deltas:array<f32,1>;
@@ -69,6 +70,14 @@ fn probe() {
   f32(cache_support_is_valid(vec3(0.0),2000.0,1000.0)),
   f32(cache_support_is_valid(vec3(900.0,0.0,0.0),100.0,1000.0)),
   f32(cache_support_is_valid(vec3(0.0),bitcast<f32>(0x7f800000u),1000.0)));
+ scene_history_regions[0]=vec4f(100.,-2.,-2.,1.);
+ scene_history_regions[1]=vec4f(102.,2.,2.,1.);
+ output[5]=vec4f(f32(scene_support_is_valid(vec3f(0.),50.)),
+  f32(scene_support_is_valid(vec3f(99.,0.,0.),1.)),
+  f32(scene_support_is_valid(vec3f(101.,0.,0.),0.)),
+  f32(scene_support_is_valid(vec3f(0.),bitcast<f32>(0x7fc00000u))));
+ output[6]=vec4f(f32(scene_support_is_valid(vec3f(bitcast<f32>(0x7fc00000u),0.,0.),1.)),
+  f32(scene_support_is_valid(vec3f(0.),-1.)),0.,0.);
  output[4]=vec4(
   f32(cache_support_is_valid(vec3(0.0),-1.0,1000.0)),
   f32(cache_support_is_valid(vec3(0.0),bitcast<f32>(0x7fc00000u),1000.0)),
@@ -86,6 +95,10 @@ fn probe() {
             include_str!("../src/realtime/world_cache_compact.wgsl"),
             "cache_support_is_valid",
         ));
+        source.push_str(&function(
+            include_str!("../src/scene/raytracing_scene_bindings.wgsl"),
+            "scene_support_is_valid",
+        ));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production cache temporal response"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -100,7 +113,7 @@ fn probe() {
         });
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 5 * 16,
+            size: 7 * 16,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -172,6 +185,15 @@ fn probe() {
                 samples[4],
                 [0.0, 0.0, 0.0, 1.0],
                 "unknown support fails closed"
+            );
+            assert_eq!(
+                samples[5],
+                [1., 0., 0., 0.],
+                "regional support preserves remote cells and rejects boundary/intersection/unknown"
+            );
+            assert_eq!(
+                samples[6], [0.; 4],
+                "nonfinite positions and negative support cannot be reused"
             );
             drop(data);
             readback.unmap();

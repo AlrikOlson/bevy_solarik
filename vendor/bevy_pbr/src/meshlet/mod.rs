@@ -1,5 +1,7 @@
 //! Render high-poly 3d meshes using an efficient GPU-driven method. See [`MeshletPlugin`] and [`MeshletMesh`] for details.
 
+mod assembly;
+pub use assembly::{MeshletAssembly3d, MeshletAssemblyPart};
 mod asset;
 mod cutout;
 #[cfg(feature = "meshlet_processor")]
@@ -19,7 +21,7 @@ mod pipelines;
 mod resource_manager;
 mod visibility_buffer_raster_node;
 mod workset;
-pub use workset::MeshletWorkset;
+pub use workset::{MeshletWorkset, MeshletWorksetSource};
 
 pub(crate) use self::{
     instance_manager::{InstanceManager, queue_material_meshlet_meshes},
@@ -163,6 +165,14 @@ impl Plugin for MeshletPlugin {
         embedded_asset!(app, "remap_1d_to_2d_dispatch.wgsl");
         embedded_asset!(app, "fill_counts.wgsl");
 
+        app.init_resource::<bevy_render::scene_readiness::SceneGeometryReadiness>();
+        let readiness = app
+            .world()
+            .resource::<bevy_render::scene_readiness::SceneGeometryReadiness>()
+            .clone();
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.insert_resource(readiness);
+        }
         app.init_resource::<MeshletCutoutAtlas>()
             .add_plugins(ExtractResourcePlugin::<MeshletCutoutAtlas>::default())
             .init_asset::<MeshletMesh>()

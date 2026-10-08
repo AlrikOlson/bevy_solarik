@@ -5,7 +5,7 @@ enable wgpu_ray_query;
 #import bevy_solarik::world_cache::WORLD_CACHE_CELL_UPDATES_SOFT_CAP
 #import bevy_solarik::realtime_bindings::{
     constants, world_cache_a, world_cache_b,
-    world_cache_geometry_data, world_cache_radiance,
+    world_cache_geometry_data, world_cache_radiance, world_cache_luminance_deltas, view,
     world_cache_active_cell_indices, world_cache_active_cells_count,
 }
 
@@ -23,6 +23,10 @@ const PRIORITY_OLDEST_AGE = 100u;
 const PRIORITY_UPDATED_COUNT = 101u;
 const PRIORITY_RESET = 102u;
 const PRIORITY_LOCAL_RESET = 103u;
+// Optional allocator receipts fit the existing scratch allocation.
+const PRIORITY_ADAPTIVE = 104u;
+const PRIORITY_STARVED = 105u;
+const PRIORITY_HIGH_PRIORITY = 106u;
 const PRIORITY_OFFSETS = 128u;
 const PRIORITY_SCRATCH_WORDS = 160u;
 const PRIORITY_REFRESH_RESERVE_DIVISOR = 5u;
@@ -42,7 +46,33 @@ fn world_cache_cell_age(cell: u32) -> u32 {
 
 fn world_cache_priority_bucket(cell: u32) -> u32 {
     if world_cache_radiance[cell].a == 0.0 { return 0u; }
-    return 1u + min(firstLeadingBit(max(world_cache_cell_age(cell), 1u)), 30u);
+    let age = world_cache_cell_age(cell);
+#ifdef ADAPTIVE_CACHE_BUDGET
+    // Two strata per logarithmic age class: footprint/error only break ties
+    // inside a class. Ages >= 32768 saturate; this is not a per-cell deadline.
+    // Selected cells still trace complete diffuse work.
+    let base = 1u + 2u * min(firstLeadingBit(max(age, 1u)), 15u);
+    let radiance = world_cache_radiance[cell].rgb;
+    let delta = abs(world_cache_luminance_deltas[cell]);
+    let intensity = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+    let distance_to_eye = distance(view.world_position, world_cache_geometry_data[cell].world_position);
+    if !(delta >= 0.0 && delta < 3.4e38 && intensity >= 0.0 && intensity < 3.4e38
+        && distance_to_eye >= 0.0 && distance_to_eye < 3.4e38) {
+        return min(base + 1u, 31u); // Unknown error wins only within its age class.
+    }
+    // Existing signed luminance-delta EMA is an instability indicator, not a
+    // variance estimate. It cannot move a cell into an older age class.
+    let relative_error = clamp(delta / max(intensity, 0.001), 0.0, 1.0);
+    let error_boost = u32(ceil(6.0 * sqrt(relative_error)));
+    // Upper envelope of distance-quantized cache-cell diameter in output pixels.
+    let diameter = 0.30 * (1.0 + distance_to_eye / 15.0);
+    let pixel_diameter = diameter * abs(view.clip_from_view[1][1]) * view.viewport.w
+        * 0.5 / max(distance_to_eye, 0.01);
+    let footprint_boost = u32(clamp(floor(log2(max(pixel_diameter, 1.0))) - 3.0, 0.0, 3.0));
+    return min(base + u32(error_boost + footprint_boost != 0u), 31u);
+#else
+    return 1u + min(firstLeadingBit(max(age, 1u)), 30u);
+#endif
 }
 
 @compute @workgroup_size(32)
@@ -50,7 +80,13 @@ fn clear_world_cache_priority(@builtin(global_invocation_id) id: vec3<u32>) {
     for (var i = id.x; i < PRIORITY_SCRATCH_WORDS; i += PRIORITY_BUCKET_COUNT) {
         atomicStore(&world_cache_b[i], 0u);
     }
-    if id.x == 0u { world_cache_active_cells_dispatch = vec3(0u, 1u, 1u); }
+    if id.x == 0u {
+        world_cache_active_cells_dispatch = vec3(0u, 1u, 1u);
+    }
+    storageBarrier();
+#ifdef ADAPTIVE_CACHE_BUDGET
+    if id.x == 0u { atomicStore(&world_cache_b[PRIORITY_ADAPTIVE], 1u); }
+#endif
 }
 
 @compute @workgroup_size(256)
@@ -97,6 +133,20 @@ fn budget_world_cache_priority() {
         offset += atomicLoad(&world_cache_b[PRIORITY_QUOTAS + bucket]);
     }
     atomicStore(&world_cache_b[PRIORITY_SELECTED_COUNT], offset);
+#ifdef ADAPTIVE_CACHE_BUDGET
+    // Receipt 105 retains its age >=32 meaning, not an absolute starvation bound.
+    var aged = 0u;
+    for (var bucket = 11u; bucket < PRIORITY_BUCKET_COUNT; bucket += 1u) {
+        aged += atomicLoad(&world_cache_b[bucket]);
+    }
+    atomicStore(&world_cache_b[PRIORITY_STARVED], aged);
+    // Even buckets are the boosted half of unsaturated age classes.
+    var high_priority = 0u;
+    for (var bucket = 2u; bucket < 31u; bucket += 2u) {
+        high_priority += atomicLoad(&world_cache_b[bucket]);
+    }
+    atomicStore(&world_cache_b[PRIORITY_HIGH_PRIORITY], high_priority);
+#endif
     atomicStore(&world_cache_b[PRIORITY_SELECTED_REFRESH], offset - first_light);
     atomicStore(&world_cache_b[PRIORITY_RESET], constants.reset & 1u);
     atomicStore(&world_cache_b[PRIORITY_LOCAL_RESET], (constants.reset >> 1u) & 1u);

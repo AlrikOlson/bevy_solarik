@@ -48,7 +48,7 @@ enable wgpu_ray_query;
 #endif
 
 // frame_index retains the renderer's scrambled RNG seed. It is not a clock.
-// reset bit 0: all history; bit 1: screen reservoirs only.
+// reset bit 0: all history; bit 1: geometry changed; bit 2: regional support available.
 // A finite stable_radius bounds the region untouched by changed occluders.
 struct PushConstants { frame_index: u32, reset: u32, render_frame: u32, stable_radius: f32 }
 var<immediate> constants: PushConstants;
@@ -77,6 +77,10 @@ struct Reservoir {
     confidence_weight: f32,
     sample_point_world_normal: vec3<f32>,
     unbiased_contribution_weight: f32,
+#ifdef REGIONAL_HISTORY
+    // Sphere about sample_point_world_position enclosing retained dependencies.
+    support_radius: f32,
+#endif
 }
 
 struct WorldCacheGeometryData {

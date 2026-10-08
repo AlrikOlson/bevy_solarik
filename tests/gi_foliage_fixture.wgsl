@@ -17,7 +17,7 @@ struct Reservoir {
     radiance: vec3<f32>, sample_age: f32,
 }
 struct ReservoirMergeResult { merged_reservoir: Reservoir, selected_sample_radiance: vec3<f32>, wi: vec3<f32> }
-struct Material { base_color: vec3<f32>, emissive: vec3<f32>, diffuse_transmission: f32 }
+struct Material { base_color: vec3<f32>, emissive: vec3<f32>, diffuse_transmission: f32, lommel: bool }
 struct Hit { world_position: vec3<f32>, world_normal: vec3<f32>, geometric_world_normal: vec3<f32>, triangle_world_normal: vec3<f32>, material: Material }
 struct Ray { kind: u32, t: f32 }
 struct Direction { direction: vec3<f32>, inverse_pdf: f32 }
@@ -40,8 +40,10 @@ fn resolve_ray_hit_full(ray: Ray) -> Hit {
     let n = vec3(0.0, 0.0, -config[0].y);
     return Hit(-2.0 * n, normalize(n + vec3(config[0].w, 0.0, 0.0)), n,
         vec3(0.0, 0.0, 1.0), Material(vec3(0.2, 0.5, 0.8),
-        select(vec3(0.0), vec3(1.0), config[0].z == 3.0), config[0].x));
+        select(vec3(0.0), vec3(1.0), config[0].z == 3.0), config[0].x, false));
 }
+// All fixture materials are foliage, with particulate scattering explicitly disabled.
+fn shade_surface_scattering(hit: Hit, wo: vec3f, rng: ptr<function,u32>) -> vec3f { return vec3f(0.0); }
 fn sample_sky(d: vec3<f32>) -> vec3<f32> { return vec3(0.3, 0.6, 0.9); }
 fn query_world_cache(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, t: f32, life: u32, rng: ptr<function, u32>) -> vec3<f32> {
     queries += 1u;

@@ -133,7 +133,9 @@ fn load_temporal_reservoir(pixel_id: vec2<u32>, depth: f32, world_position: vec3
     let temporal_pixel_id_float = round(vec2<f32>(pixel_id) - (motion_vector * view.main_pass_viewport.zw));
     var point_temporal_pixel_id = vec2<u32>(temporal_pixel_id_float);
 
-    if bool(constants.reset) {
+    // DI reservoirs retain unoccluded weights; final visibility is traced now.
+    // Global events and the legacy radius path keep their full fallback.
+    if (constants.reset & 1u) != 0u || (constants.reset & 6u) == 2u {
         return NeighborInfo(empty_reservoir(), vec3(0.0), vec3(0.0), vec3(0.0));
     }
 

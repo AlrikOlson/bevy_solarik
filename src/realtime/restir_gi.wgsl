@@ -1,5 +1,9 @@
 // https://intro-to-restir.cwyman.org/presentations/2023ReSTIR_Course_Notes.pdf
 enable wgpu_ray_query;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+#import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, resolve_ray_hit_filtered}
+#endif
+
 
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
 #import bevy_pbr::prepass_bindings::PreviousViewUniforms
@@ -86,8 +90,17 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(view_output, global_id.xy, pixel_color);
 }
 
+#ifdef REGIONAL_HISTORY
+#import bevy_solarik::scene_bindings::scene_support_is_valid
+#import bevy_solarik::world_cache::query_two_sided_world_cache_with_support
+#endif
+
 fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>, rng: ptr<function, u32>) -> Reservoir {
     var reservoir = empty_reservoir();
+#ifdef REGIONAL_HISTORY
+    // Unknown path transport fails closed for bounded regional reuse.
+    reservoir.support_radius = ray_max_distance();
+#endif
 
     let direction_sample = sample_sky_mixture(world_normal, rng);
     let ray_direction = direction_sample.direction;
@@ -114,7 +127,12 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
         return reservoir;
     }
 
+#ifdef RAY_MATERIAL_FOOTPRINTS
+    let cone = primary_ray_cone(view.clip_from_view, view.main_pass_viewport.zw, distance(world_position, view.world_position) + ray.t);
+    let sample_point = resolve_ray_hit_filtered(ray, ray_direction, cone);
+#else
     let sample_point = resolve_ray_hit_full(ray);
+#endif
 
     if any(sample_point.material.emissive != vec3(0.0)) {
         return reservoir;
@@ -154,9 +172,17 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
 #else
     // Cache entries are incident hemisphere irradiance; only the endpoint
     // consumes material weights, before the existing albedo / PI below.
+#ifdef REGIONAL_HISTORY
+    let cached = query_two_sided_world_cache_with_support(sample_point.world_position,
+        sample_point.geometric_world_normal, sample_point.material.diffuse_transmission,
+        view.world_position, ray.t, WORLD_CACHE_CELL_LIFETIME, rng);
+    reservoir.radiance = cached.rgb;
+    reservoir.support_radius = max(ray.t + RAY_T_MIN, cached.w) * 1.00001 + 0.01;
+#else
     reservoir.radiance = query_two_sided_world_cache(sample_point.world_position,
         sample_point.geometric_world_normal, sample_point.material.diffuse_transmission,
         view.world_position, ray.t, WORLD_CACHE_CELL_LIFETIME, rng);
+#endif
     reservoir.unbiased_contribution_weight = direction_sample.inverse_pdf;
 #endif
 
@@ -171,7 +197,7 @@ fn load_temporal_reservoir(pixel_id: vec2<u32>, depth: f32, world_position: vec3
     let temporal_pixel_id_float = round(vec2<f32>(pixel_id) - (motion_vector * view.main_pass_viewport.zw));
     var point_temporal_pixel_id = vec2<u32>(temporal_pixel_id_float);
 
-    if bool(constants.reset) {
+    if (constants.reset & 1u) != 0u || (constants.reset & 6u) == 2u {
         return NeighborInfo(empty_reservoir(), vec3(0.0), vec3(0.0), vec3(0.0));
     }
 
@@ -208,6 +234,11 @@ fn load_temporal_reservoir_inner(temporal_pixel_id: vec2<u32>, depth: f32, world
 
     let temporal_pixel_index = temporal_pixel_id.x + temporal_pixel_id.y * u32(view.main_pass_viewport.z);
     let temporal_reservoir = gi_reservoirs_a[temporal_pixel_index];
+#ifdef REGIONAL_HISTORY
+    if (constants.reset & 4u) != 0u && !scene_support_is_valid(temporal_reservoir.sample_point_world_position, temporal_reservoir.support_radius) {
+        return NeighborInfo(empty_reservoir(), vec3f(0.0), vec3f(0.0), vec3f(0.0));
+    }
+#endif
 
     return NeighborInfo(temporal_reservoir, temporal_surface.world_position, temporal_surface.world_normal, temporal_diffuse_brdf);
 }
@@ -272,6 +303,9 @@ fn empty_reservoir() -> Reservoir {
         0.0,
         vec3(0.0),
         0.0,
+#ifdef REGIONAL_HISTORY
+        0.0,
+#endif
     );
 }
 
@@ -355,6 +389,10 @@ fn merge_reservoirs(
         combined_reservoir.sample_point_world_normal = other_reservoir.sample_point_world_normal;
         combined_reservoir.radiance = other_reservoir.radiance;
         combined_reservoir.sample_age = other_reservoir.sample_age;
+#ifdef REGIONAL_HISTORY
+        combined_reservoir.support_radius = max(other_reservoir.support_radius,
+            canonical_reservoir.support_radius + distance(canonical_reservoir.sample_point_world_position, other_reservoir.sample_point_world_position));
+#endif
 
         let inverse_target_function = select(0.0, 1.0 / canonical_target_function_other_sample, canonical_target_function_other_sample > 0.0);
         combined_reservoir.unbiased_contribution_weight = weight_sum * inverse_target_function;
@@ -365,6 +403,10 @@ fn merge_reservoirs(
         combined_reservoir.sample_point_world_normal = canonical_reservoir.sample_point_world_normal;
         combined_reservoir.radiance = canonical_reservoir.radiance;
         combined_reservoir.sample_age = canonical_reservoir.sample_age;
+#ifdef REGIONAL_HISTORY
+        combined_reservoir.support_radius = max(canonical_reservoir.support_radius,
+            other_reservoir.support_radius + distance(canonical_reservoir.sample_point_world_position, other_reservoir.sample_point_world_position));
+#endif
 
         let inverse_target_function = select(0.0, 1.0 / canonical_target_function_canonical_sample, canonical_target_function_canonical_sample > 0.0);
         combined_reservoir.unbiased_contribution_weight = weight_sum * inverse_target_function;

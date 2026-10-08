@@ -1,6 +1,87 @@
 //! Exercise the production receipt against actual ECS mutations and removals.
 
 #[test]
+fn assembly_only_materials_reach_preparation_and_queue_through_lifecycle() {
+    use crate::StandardMaterial;
+    use bevy_ecs::system::RunSystemOnce;
+    use bevy_render::scene_slots::SceneInstance;
+    let mut assets = Assets::<StandardMaterial>::default();
+    let handles: Vec<_> = (0..3)
+        .map(|_| assets.add(StandardMaterial::default()))
+        .collect();
+    let ids: Vec<_> = handles.iter().map(|h| h.id().untyped()).collect();
+    let mut manager = InstanceManager::new();
+    let root = Entity::from_bits(71);
+    manager.slots.begin();
+    let parts: Vec<_> = (1..=3)
+        .map(|part| {
+            manager
+                .slots
+                .touch_part(SceneInstance { entity: root, part })
+        })
+        .collect();
+    manager
+        .instance_material_assets
+        .resize(manager.slots.capacity(), DUMMY_MESH_MATERIAL.untyped());
+    manager.bvh_depths.resize(manager.slots.capacity(), 1);
+    manager
+        .instance_material_ids
+        .get_mut()
+        .resize(manager.slots.capacity(), 0);
+    for (&slot, &material) in parts.iter().zip(&ids) {
+        manager.instance_material_assets[slot.index as usize] = material;
+    }
+    // Only the first and third sparse addresses are ready; no MeshMaterial3d
+    // or RenderMaterialInstances owner exists for any of these shared parts.
+    for &index in &[0, 2] {
+        manager.update_slot_metadata(parts[index], ids[index], 1);
+        manager.slots.activate(parts[index]);
+    }
+    manager.refresh_scene_metadata();
+    let mut ordinary = RenderMaterialInstances::default();
+    let sources = manager.material_assets_for_pipeline(&ordinary);
+    assert_eq!(sources, HashSet::from_iter([ids[0], ids[2]]));
+    for source in sources {
+        manager.get_material_id(source);
+    }
+    let mut world = World::new();
+    world.insert_resource(manager);
+    world
+        .run_system_once(queue_material_meshlet_meshes)
+        .unwrap();
+    let mut manager = world.remove_resource::<InstanceManager>().unwrap();
+    assert_eq!(manager.unresolved_material_instances, 0);
+    for &slot in &[parts[0], parts[2]] {
+        assert_ne!(manager.instance_material_ids.get()[slot.index as usize], 0);
+    }
+
+    // Same live count, different ready member: stale source A must disappear.
+    manager.deactivate_slot(parts[0]);
+    manager.update_slot_metadata(parts[1], ids[1], 1);
+    manager.slots.activate(parts[1]);
+    manager.refresh_scene_metadata();
+    assert_eq!(
+        manager.material_assets_for_pipeline(&ordinary),
+        HashSet::from_iter([ids[1], ids[2]])
+    );
+    insert_material(&mut ordinary, root.into());
+    let ordinary_id = ordinary.instances.values().next().unwrap().asset_id;
+    assert_eq!(
+        manager.material_assets_for_pipeline(&ordinary),
+        HashSet::from_iter([ids[1], ids[2], ordinary_id])
+    );
+    manager.deactivate_slot(parts[1]);
+    manager.deactivate_slot(parts[2]);
+    manager.refresh_scene_metadata();
+    assert_eq!(
+        manager.material_assets_for_pipeline(&ordinary),
+        HashSet::from_iter([ordinary_id])
+    );
+    assert_eq!(manager.scene_instance_count, 0);
+    assert_eq!(manager.max_bvh_depth, 0);
+}
+
+#[test]
 fn changed_material_owners_follow_slots_through_reorder_and_unknown_mutation() {
     let mut world = World::new();
     let a = spawn_meshlet(&mut world);
@@ -73,6 +154,83 @@ fn query_order_receipts_follow_real_reorder_without_changing_scene_slots() {
         );
     }
     assert_eq!(manager.inputs.len(), 9);
+}
+
+#[test]
+fn material_journal_matches_full_reference_after_delta_mapping_and_readiness() {
+    let mut assets = Assets::<crate::StandardMaterial>::default();
+    let handles: Vec<_> = (0..3)
+        .map(|_| assets.add(crate::StandardMaterial::default()))
+        .collect();
+    let ids: Vec<_> = handles.iter().map(|h| h.id().untyped()).collect();
+    let mut manager = InstanceManager::new();
+    manager.slots.begin();
+    let slots: Vec<_> = (1..=1024)
+        .map(|i| manager.slots.touch(Entity::from_bits(i)))
+        .collect();
+    manager
+        .instance_material_assets
+        .resize(manager.slots.capacity(), ids[0]);
+    manager.bvh_depths.resize(manager.slots.capacity(), 1);
+    manager
+        .instance_material_ids
+        .get_mut()
+        .resize(manager.slots.capacity(), 0);
+    for &slot in &slots {
+        manager.update_slot_metadata(slot, ids[0], 1);
+        manager.slots.activate(slot);
+    }
+    manager.get_material_id(ids[0]);
+    manager.get_material_id(ids[1]);
+    assert_eq!(manager.refresh_material_ids(), 1024);
+    let compare = |m: &InstanceManager| {
+        let mut present = HashSet::default();
+        let mut unresolved = 0;
+        for &slot in m.slots.active_indices() {
+            let id = m
+                .material_id_lookup
+                .get(&m.instance_material_assets[slot as usize])
+                .copied()
+                .unwrap_or(0);
+            assert_eq!(m.instance_material_ids.get()[slot as usize], id);
+            if id == 0 {
+                unresolved += 1;
+            } else {
+                present.insert(id);
+            }
+        }
+        assert_eq!(present, m.material_ids_present_in_scene);
+        assert_eq!(unresolved, m.unresolved_material_instances);
+    };
+    compare(&manager);
+    manager.dirty_indices.clear();
+    let changed = slots[7];
+    manager.update_slot_metadata(changed, ids[1], 4);
+    manager.instance_material_assets[changed.index as usize] = ids[1];
+    manager.bvh_depths[changed.index as usize] = 4;
+    manager.dirty_indices.push(changed.index);
+    assert_eq!(manager.refresh_material_ids(), 1);
+    compare(&manager);
+    manager.dirty_indices.clear();
+    manager.deactivate_slot(slots[0]);
+    assert_eq!(manager.refresh_material_ids(), 0);
+    compare(&manager);
+    manager.update_slot_metadata(changed, ids[2], 4);
+    manager.instance_material_assets[changed.index as usize] = ids[2];
+    manager.dirty_indices.push(changed.index);
+    manager.refresh_material_ids();
+    compare(&manager);
+    assert_eq!(manager.unresolved_material_instances, 1);
+    manager.dirty_indices.clear();
+    manager.get_material_id(ids[2]);
+    assert_eq!(manager.refresh_material_ids(), 1023);
+    compare(&manager);
+    for &slot in &slots {
+        manager.deactivate_slot(slot);
+    }
+    manager.dirty_indices.clear();
+    assert_eq!(manager.refresh_material_ids(), 0);
+    compare(&manager);
 }
 
 use super::*;

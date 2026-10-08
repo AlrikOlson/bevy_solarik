@@ -41,6 +41,11 @@ struct MeshletAabb {
     half_extent: vec3<f32>,
 }
 
+struct AssemblyGroup {
+    center: vec3<f32>, first: u32,
+    half_extent: vec3<f32>, count: u32,
+}
+
 struct MeshletAabbErrorOffset {
     center_and_error: vec4<f32>,
     half_extent_and_child_offset: vec4<f32>,
@@ -112,9 +117,13 @@ var<immediate> constants: Constants;
 @group(0) @binding(11) var<storage, read_write> meshlet_second_pass_instance_dispatch: DispatchIndirectArgs;
 @group(0) @binding(12) var<storage, read_write> meshlet_second_pass_instance_candidates: array<u32>;
 @group(0) @binding(13) var<storage, read> meshlet_active_indices: array<u32>;
+@group(0) @binding(14) var<storage, read> meshlet_assembly_groups: array<AssemblyGroup>;
+@group(0) @binding(15) var<storage, read> meshlet_assembly_members: array<u32>;
 #else
 @group(0) @binding(10) var<storage, read> meshlet_second_pass_instance_count: u32;
 @group(0) @binding(11) var<storage, read> meshlet_second_pass_instance_candidates: array<u32>;
+@group(0) @binding(12) var<storage, read> meshlet_assembly_groups: array<AssemblyGroup>;
+@group(0) @binding(13) var<storage, read> meshlet_assembly_members: array<u32>;
 #endif
 #endif
 
@@ -209,9 +218,33 @@ var<immediate> constants: Constants;
 @group(0) @binding(10) var<storage, read> meshlet_instance_cutouts: array<vec4<f32>>;
 @group(0) @binding(11) var meshlet_cutout_atlas: texture_2d_array<f32>;
 @group(0) @binding(12) var meshlet_cutout_sampler: sampler;
+@group(0) @binding(13) var<storage, read_write> meshlet_early_depth: array<atomic<u32>>;
 
 fn get_meshlet_vertex_uv(meshlet: ptr<function, Meshlet>, vertex_id: u32) -> vec2<f32> {
     return meshlet_vertex_uvs[(*meshlet).start_vertex_attribute_id + vertex_id];
+}
+
+/// Only alpha-qualified depth is published. Reject strictly farther fragments:
+/// equal depths must reach the original packed triangle-ID tie breaker.
+/// Scratch reads and writes are atomic, including concurrent raster workgroups.
+fn meshlet_visibility_may_win(instance_id: u32, pixel: vec2<u32>, depth: u32) -> bool {
+#ifdef MESHLET_EARLY_VISIBILITY_TEST
+    if meshlet_instance_cutouts[instance_id].x == -1.0 { return true; }
+    let index = pixel.y * textureDimensions(meshlet_visibility_buffer).x + pixel.x;
+    if index < arrayLength(&meshlet_early_depth) {
+        return depth >= atomicLoad(&meshlet_early_depth[index]);
+    }
+#endif
+    return true;
+}
+
+fn meshlet_publish_early_depth(pixel: vec2<u32>, depth: u32) {
+#ifdef MESHLET_EARLY_VISIBILITY_TEST
+    let index = pixel.y * textureDimensions(meshlet_visibility_buffer).x + pixel.x;
+    if index < arrayLength(&meshlet_early_depth) {
+        atomicMax(&meshlet_early_depth[index], depth);
+    }
+#endif
 }
 
 fn meshlet_cutout_visible(instance_id: u32, uv: vec2<f32>) -> bool {

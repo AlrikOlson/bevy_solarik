@@ -2,6 +2,9 @@
 use bevy_math::{Affine3A, Vec3};
 use bevy_mesh::{Mesh, VertexAttributeValues};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[path = "history_regions.rs"]
+mod regions;
+pub(super) use regions::Regions;
 
 /// CPU record of what this view actually rendered, not just what was extracted.
 #[derive(Default)]
@@ -27,13 +30,19 @@ impl ViewHistory {
             0.0
         }
     }
+    pub(crate) fn has_one_pending_event(&self, generation: u64) -> bool {
+        let previous = self.scene_generation.load(Ordering::Relaxed);
+        previous != 0
+            && !self.pending_full_reset.load(Ordering::Relaxed)
+            && previous.checked_add(1) == Some(generation)
+    }
     pub(crate) fn rendered(&self, generation: u64) {
         self.scene_generation.store(generation, Ordering::Relaxed);
         self.pending_full_reset.store(false, Ordering::Relaxed);
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Bounds {
     min: Vec3,
     max: Vec3,

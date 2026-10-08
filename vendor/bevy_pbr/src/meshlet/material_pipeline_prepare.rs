@@ -16,7 +16,7 @@ use bevy_material::{
 };
 use bevy_mesh::VertexBufferLayout;
 use bevy_mesh::{Mesh, MeshVertexBufferLayout, MeshVertexBufferLayoutRef, MeshVertexBufferLayouts};
-use bevy_platform::collections::{HashMap, HashSet};
+use bevy_platform::collections::HashMap;
 use bevy_render::{camera::ExtractedCamera, erased_render_asset::ErasedRenderAssets};
 use bevy_render::{camera::TemporalJitter, render_resource::*, view::ExtractedView};
 use bevy_utils::default;
@@ -150,11 +150,7 @@ pub fn prepare_material_meshlet_meshes_main_opaque_pass(
             None,
         );
 
-        for material_id in render_material_instances
-            .instances
-            .values()
-            .map(|instance| instance.asset_id)
-            .collect::<HashSet<_>>()
+        for material_id in instance_manager.material_assets_for_pipeline(&render_material_instances)
         {
             let Some(material) = render_materials.get(material_id) else {
                 continue;
@@ -311,11 +307,7 @@ pub fn prepare_material_meshlet_meshes_prepass(
             None,
         );
 
-        for material_id in render_material_instances
-            .instances
-            .values()
-            .map(|instance| instance.asset_id)
-            .collect::<HashSet<_>>()
+        for material_id in instance_manager.material_assets_for_pipeline(&render_material_instances)
         {
             let Some(material) = render_materials.get(material_id) else {
                 continue;

@@ -23,11 +23,19 @@ use bevy_render::{
     MainWorld,
     render_resource::StorageBuffer,
     renderer::RenderQueue,
-    scene_slots::{SceneSlot, SceneSlots},
+    scene_slots::{SceneInstance, SceneSlot, SceneSlots},
     sync_world::MainEntity,
 };
 use bevy_transform::components::GlobalTransform;
 use core::ops::DerefMut;
+#[path = "assembly_changes.rs"]
+mod assembly_changes;
+#[path = "assembly_extract.rs"]
+mod assembly_extract;
+#[path = "assembly_hierarchy.rs"]
+mod assembly_hierarchy;
+#[path = "scene_metadata.rs"]
+mod scene_metadata;
 
 /// Persistent raw scene receipt, including temporarily suppressed instances.
 /// A warm frame compares these values without resolving materials, cloning
@@ -126,16 +134,26 @@ pub struct InstanceManager {
     query_slots: Vec<SceneSlot>,
     input_positions: Vec<usize>,
     query_publication: u64,
+    assembly_inputs: EntityHashMap<assembly_extract::AssemblyInput>,
+    assembly_part_count: usize,
+    assembly_pending: HashSet<Entity>,
     material_receipt: (u64, u64),
     material_changes: Vec<bool>,
     binding_receipt: HashMap<UntypedAssetId, u32>,
     pub(crate) slots: SceneSlots,
     pub active_indices: StorageBuffer<Vec<u32>>,
+    pub assembly_groups: StorageBuffer<Vec<assembly_hierarchy::AssemblyGroup>>,
+    pub assembly_members: StorageBuffer<Vec<u32>>,
+    pub(crate) group_dirty_indices: Vec<u32>,
+    pub(crate) member_dirty_indices: Vec<u32>,
     pub(crate) dirty_indices: Vec<u32>,
     pub(crate) active_dirty_indices: Vec<u32>,
     binding_slots: Vec<u32>,
     bvh_depths: Vec<u32>,
     instance_material_assets: Vec<UntypedAssetId>,
+    /// Includes shared parts without a standalone MeshMaterial3d owner.
+    scene_metadata: scene_metadata::SceneMetadata,
+    unresolved_material_instances: usize,
     /// Persistent instance buffers only need publication after exact scene changes.
     pub instance_upload_dirty: bool,
     pub rebuild_next_extract: bool,
@@ -197,6 +215,9 @@ impl InstanceManager {
             query_slots: Vec::new(),
             input_positions: Vec::new(),
             query_publication: 0,
+            assembly_inputs: EntityHashMap::default(),
+            assembly_part_count: 0,
+            assembly_pending: HashSet::default(),
             material_receipt: (0, 0),
             material_changes: Vec::new(),
             binding_receipt: HashMap::default(),
@@ -208,11 +229,17 @@ impl InstanceManager {
                 b.add_usages(bevy_render::render_resource::BufferUsages::COPY_SRC);
                 b
             },
+            assembly_groups: StorageBuffer::default(),
+            assembly_members: StorageBuffer::default(),
+            group_dirty_indices: Vec::new(),
+            member_dirty_indices: Vec::new(),
             dirty_indices: Vec::new(),
             active_dirty_indices: Vec::new(),
             binding_slots: Vec::new(),
             bvh_depths: Vec::new(),
             instance_material_assets: Vec::new(),
+            scene_metadata: scene_metadata::SceneMetadata::default(),
+            unresolved_material_instances: 0,
             instance_upload_dirty: true,
             rebuild_next_extract: false,
             material_mapping_dirty: true,
@@ -238,6 +265,39 @@ impl InstanceManager {
         not_shadow_caster: bool,
         cutout: Vec4,
     ) {
+        self.add_material_instance(
+            slot,
+            instance,
+            root_bvh_node,
+            aabb,
+            bvh_depth,
+            transform,
+            previous_transform,
+            render_layers,
+            mesh_material_ids.mesh_material(instance),
+            render_material_bindings,
+            not_shadow_receiver,
+            not_shadow_caster,
+            cutout,
+        );
+    }
+
+    fn add_material_instance(
+        &mut self,
+        slot: SceneSlot,
+        instance: MainEntity,
+        root_bvh_node: u32,
+        aabb: MeshletAabb,
+        bvh_depth: u32,
+        transform: &GlobalTransform,
+        previous_transform: Option<&PreviousGlobalTransform>,
+        render_layers: Option<&RenderLayers>,
+        mesh_material: UntypedAssetId,
+        render_material_bindings: &RenderMaterialBindings,
+        not_shadow_receiver: bool,
+        not_shadow_caster: bool,
+        cutout: Vec4,
+    ) {
         // Build a MeshUniform for the instance
         let transform = transform.affine();
         let previous_transform = previous_transform.map(|t| t.0).unwrap_or(transform);
@@ -255,7 +315,6 @@ impl InstanceManager {
             flags: flags.bits(),
         };
 
-        let mesh_material = mesh_material_ids.mesh_material(instance);
         let mesh_material_binding_id = if mesh_material != DUMMY_MESH_MATERIAL.untyped() {
             render_material_bindings
                 .get(&mesh_material)
@@ -277,6 +336,7 @@ impl InstanceManager {
         );
 
         let i = slot.index as usize;
+        self.update_slot_metadata(slot, mesh_material, bvh_depth);
         extend_to(&mut self.instances, i, None);
         extend_to(&mut self.binding_slots, i, 0);
         extend_to(&mut self.bvh_depths, i, 0);
@@ -328,7 +388,7 @@ impl InstanceManager {
     }
 
     fn query_matches<'a>(&self, rows: impl Iterator<Item = InstanceRow<'a>>) -> bool {
-        if self.slots.active_indices().len() != self.query_slots.len() {
+        if self.slots.active_indices().len() != self.query_slots.len() + self.assembly_part_count {
             return false;
         }
         let unchanged_slots = self.query_publication == self.slots.publication;
@@ -398,10 +458,98 @@ impl InstanceManager {
         self.input_positions[slot.index as usize] = position;
     }
 
-    fn finish_extract(&mut self, queue: &RenderQueue) -> usize {
-        let removed = self.slots.finish(queue);
+    /// Material preparation must follow renderer parts as well as ECS mesh owners.
+    pub(super) fn material_assets_for_pipeline(
+        &self,
+        ordinary: &RenderMaterialInstances,
+    ) -> HashSet<UntypedAssetId> {
+        ordinary
+            .instances
+            .values()
+            .map(|instance| instance.asset_id)
+            .chain(self.scene_metadata.materials.keys().copied())
+            .collect()
+    }
+
+    fn update_slot_metadata(&mut self, slot: SceneSlot, material: UntypedAssetId, depth: u32) {
+        let i = slot.index as usize;
+        if self.slots.is_active(slot) {
+            if self.instance_material_assets[i] == material && self.bvh_depths[i] == depth {
+                return;
+            }
+            self.scene_metadata
+                .remove(self.instance_material_assets[i], self.bvh_depths[i]);
+        }
+        self.scene_metadata.add(material, depth);
+    }
+
+    fn deactivate_slot(&mut self, slot: SceneSlot) {
+        if self.slots.deactivate(slot) {
+            let i = slot.index as usize;
+            self.scene_metadata
+                .remove(self.instance_material_assets[i], self.bvh_depths[i]);
+        }
+    }
+
+    fn refresh_material_ids(&mut self) -> usize {
+        self.material_ids_present_in_scene.clear();
+        self.unresolved_material_instances = 0;
+        for (asset, count) in &self.scene_metadata.materials {
+            let id = self.material_id_lookup.get(asset).copied().unwrap_or(0);
+            if id == 0 {
+                self.unresolved_material_instances += count;
+            } else {
+                self.material_ids_present_in_scene.insert(id);
+            }
+        }
+        // A new mapping can resolve any previously unprepared row. Otherwise,
+        // every changed source row is already in the publication journal.
+        let rows = if self.material_mapping_dirty {
+            self.slots.active_indices().to_vec()
+        } else {
+            self.dirty_indices.clone()
+        };
+        for &slot in &rows {
+            if self.slots.entity(slot).is_none() {
+                continue;
+            }
+            let i = slot as usize;
+            let material_id = self
+                .material_id_lookup
+                .get(&self.instance_material_assets[i])
+                .copied()
+                .unwrap_or(0);
+            if self.instance_material_ids.get()[i] != material_id {
+                self.instance_material_ids.get_mut()[i] = material_id;
+                self.dirty_indices.push(slot);
+                self.instance_upload_dirty = true;
+            }
+        }
+        self.material_mapping_dirty = false;
+        rows.len()
+    }
+
+    fn refresh_scene_metadata(&mut self) {
+        self.scene_instance_count = self.slots.active_indices().len() as u32;
+        self.max_bvh_depth = self.scene_metadata.max_depth();
+    }
+
+    fn finish_extract(
+        &mut self,
+        queue: &RenderQueue,
+        mut retiring: Vec<(SceneInstance, SceneSlot)>,
+    ) -> usize {
+        retiring.extend(self.slots.unobserved_from(&self.query_slots));
+        for &(owner, slot) in &retiring {
+            if self.slots.get_part(owner) == Some(slot) {
+                self.deactivate_slot(slot);
+            }
+        }
+        let removed = self.slots.remove_parts(queue, retiring);
         for slot in &removed {
-            self.input_positions[slot.index as usize] = usize::MAX;
+            if let Some(position) = self.input_positions.get_mut(slot.index as usize) {
+                *position = usize::MAX;
+            }
             if let Some(row) = self.instances.get_mut(slot.index as usize) {
                 *row = None;
             }
@@ -412,12 +560,7 @@ impl InstanceManager {
                 .extend(self.active_indices.set_indices(active));
             self.instance_upload_dirty = true;
         }
-        self.scene_instance_count = active.len() as u32;
-        self.max_bvh_depth = active
-            .iter()
-            .map(|&i| self.bvh_depths[i as usize])
-            .max()
-            .unwrap_or(0);
+        self.refresh_scene_metadata();
         self.query_publication = self.slots.publication;
         removed.len()
     }
@@ -444,6 +587,8 @@ pub fn extract_meshlet_mesh_entities(
                     Option<&MeshletVisibilityCutout>,
                     Has<MeshletDoubleSided>,
                 )>,
+                assembly_extract::AssemblyRows<'static, 'static>,
+                assembly_changes::AssemblyChanges<'static, 'static>,
                 Res<AssetServer>,
                 ResMut<Assets<MeshletMesh>>,
                 MessageReader<AssetEvent<MeshletMesh>>,
@@ -461,6 +606,9 @@ pub fn extract_meshlet_mesh_entities(
         .get_resource::<bevy_diagnostic::FrameCount>()
         .and_then(|f| bevy_render::diagnostic::profile_source_frame(f.0));
     let _cpu_profile = bevy_render::diagnostic::profile_scope("meshlet.extract");
+    let readiness = main_world
+        .get_resource::<bevy_render::scene_readiness::SceneGeometryReadiness>()
+        .cloned();
     // Get instances query
     if system_state.is_none() {
         *system_state = Some(SystemState::new(&mut main_world));
@@ -468,6 +616,8 @@ pub fn extract_meshlet_mesh_entities(
     let system_state = system_state.as_mut().unwrap();
     let (
         instances_query,
+        assemblies_query,
+        mut assembly_changes,
         asset_server,
         mut assets,
         mut asset_events,
@@ -505,20 +655,38 @@ pub fn extract_meshlet_mesh_entities(
         | AssetEvent::Modified { id }
         | AssetEvent::Removed { id } = asset_event
         {
+            if let Some(readiness) = &readiness {
+                readiness.revoke(id.untyped());
+            }
             meshlet_mesh_manager.remove(id);
             force_rebuild = true;
         }
     }
 
+    if let Some(readiness) = &readiness {
+        for id in readiness.requested::<MeshletMesh>() {
+            if assets.contains(id) {
+                meshlet_mesh_manager.queue_upload_if_needed(id, &mut assets);
+            }
+        }
+    }
     let material_changed =
         instance_manager.material_receipt != mesh_material_ids.instances.receipt();
     let bindings_changed =
         !binding_slots_match(&instance_manager.binding_receipt, &render_material_bindings);
+    let assembly_roots = assembly_extract::targets(
+        &instance_manager,
+        &assemblies_query,
+        assembly_changes.collect(),
+        force_rebuild || bindings_changed,
+    );
     let unchanged_inputs = input_changes.unchanged()
         && instances_query.iter().len() == instance_manager.query_slots.len()
         && instance_manager.query_publication == instance_manager.slots.publication
-        && instance_manager.query_slots.len() == instance_manager.slots.active_indices().len();
+        && instance_manager.query_slots.len() + instance_manager.assembly_part_count
+            == instance_manager.slots.active_indices().len();
     if !force_rebuild
+        && assembly_roots.is_empty()
         && instance_manager.scene_matches(
             instances_query.iter(),
             &mesh_material_ids,
@@ -633,7 +801,7 @@ pub fn extract_meshlet_mesh_entities(
             });
         instance_manager.inputs[query_position] = Some(input);
         let Some(cutout) = alpha else {
-            instance_manager.slots.deactivate(slot);
+            instance_manager.deactivate_slot(slot);
             continue;
         };
         // Resolve shared geometry and asset readiness once per prototype rather
@@ -647,7 +815,7 @@ pub fn extract_meshlet_mesh_entities(
             Some(meshlet_mesh_manager.queue_upload_if_needed(meshlet_mesh.id(), &mut assets))
         });
         let Some((root_bvh_node, _, _)) = *mesh_info else {
-            instance_manager.slots.deactivate(slot);
+            instance_manager.deactivate_slot(slot);
             continue;
         };
         let (_, aabb, bvh_depth) = mesh_info.unwrap();
@@ -668,9 +836,24 @@ pub fn extract_meshlet_mesh_entities(
             cutout,
         );
     }
-    let removed = instance_manager.finish_extract(&render_queue);
+    let (assembly_added, assembly_changed, retiring) = assembly_extract::extract(
+        &mut instance_manager,
+        &assemblies_query,
+        &assembly_roots,
+        force_rebuild || bindings_changed,
+        &asset_server,
+        &mut assets,
+        &mut meshlet_mesh_manager,
+        &render_material_bindings,
+        &atlas,
+        &images,
+    );
+    added += assembly_added;
+    changed += assembly_changed;
+    let removed = instance_manager.finish_extract(&render_queue, retiring);
     instance_manager.query_slots.truncate(query_count);
     instance_manager.inputs.truncate(query_count);
+    assembly_hierarchy::rebuild(&mut instance_manager);
     let reused =
         previous_publication == instance_manager.slots.publication && changed == 0 && removed == 0;
     record_extraction(&instance_manager, added, changed, removed, reused);
@@ -716,6 +899,8 @@ fn serialization_bytes(manager: &InstanceManager) -> usize {
         + manager.instance_bvh_root_nodes.cpu_backing_bytes()
         + manager.instance_cutouts.cpu_backing_bytes()
         + manager.active_indices.cpu_backing_bytes()
+        + manager.assembly_groups.cpu_backing_bytes()
+        + manager.assembly_members.cpu_backing_bytes()
 }
 
 fn binding_slots_match(
@@ -743,27 +928,22 @@ pub fn queue_material_meshlet_meshes(
     let instance_manager = instance_manager.deref_mut();
 
     if !instance_manager.instance_upload_dirty && !instance_manager.material_mapping_dirty {
+        bevy_render::diagnostic::profile_value(
+            "meshlet.unresolved_material_instances",
+            instance_manager.unresolved_material_instances as f64,
+            "count",
+        );
         return;
     }
-    instance_manager.material_ids_present_in_scene.clear();
-    for &slot in instance_manager.slots.active_indices() {
-        let i = slot as usize;
-        let asset_id = instance_manager.instance_material_assets[i];
-        let material_id = instance_manager
-            .material_id_lookup
-            .get(&asset_id)
-            .copied()
-            .unwrap_or(0);
-        if material_id != 0 {
-            instance_manager
-                .material_ids_present_in_scene
-                .insert(material_id);
-        }
-        if instance_manager.instance_material_ids.get()[i] != material_id {
-            instance_manager.instance_material_ids.get_mut()[i] = material_id;
-            instance_manager.dirty_indices.push(slot);
-            instance_manager.instance_upload_dirty = true;
-        }
-    }
-    instance_manager.material_mapping_dirty = false;
+    let visited = instance_manager.refresh_material_ids();
+    bevy_render::diagnostic::profile_value(
+        "meshlet.material_rows_visited",
+        visited as f64,
+        "count",
+    );
+    bevy_render::diagnostic::profile_value(
+        "meshlet.unresolved_material_instances",
+        instance_manager.unresolved_material_instances as f64,
+        "count",
+    );
 }

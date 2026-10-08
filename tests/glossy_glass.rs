@@ -1,5 +1,7 @@
 //! Execute the production glossy path against deterministic synthetic intersections.
 //! The fixture replaces scene I/O, not transport or thin-pane sampling.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 #[test]
@@ -23,25 +25,19 @@ fn glossy_glass_gpu() {
             .find("fn trace_glossy_path(")
             .expect("production path");
         let end = source
-            .find("// https://en.wikipedia.org/wiki/Householder_transformation")
+            .find("#ifdef DLSS_RR_GUIDE_BUFFERS\n// https://en.wikipedia.org/wiki/Householder_transformation")
             .expect("PSR helpers");
         for rr_guides in [false, true] {
-            let mut excluded = false;
-            let transport = source[start..end]
-                .lines()
-                .filter(|line| {
-                    if line.starts_with("#ifdef") {
-                        excluded = !rr_guides;
-                        return false;
-                    }
-                    if line.starts_with("#endif") {
-                        excluded = false;
-                        return false;
-                    }
-                    !excluded
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            // Only RR guide writes vary here; material footprints have their
+            // own real-texture readback and are disabled in this transport fixture.
+            let transport = preprocess::select(
+                &source[start..end],
+                if rr_guides {
+                    &["DLSS_RR_GUIDE_BUFFERS"]
+                } else {
+                    &[]
+                },
+            );
             let glass = include_str!("../src/scene/thin_glass.wgsl")
                 .lines()
                 .filter(|line| !line.starts_with('#'))

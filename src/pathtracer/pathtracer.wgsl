@@ -1,4 +1,8 @@
 enable wgpu_ray_query;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+#import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, scatter_ray_cone, resolve_ray_hit_filtered}
+#endif
+
 
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
 #import bevy_pbr::pbr_functions::calculate_F0
@@ -36,6 +40,9 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var ray_origin = view.world_position;
     var ray_direction = normalize((primary_ray_target.xyz / primary_ray_target.w) - ray_origin);
     var ray_t_min = 0.0;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+    var cone = primary_ray_cone(view.clip_from_view, view.viewport.zw, 0.0);
+#endif
 
     // Path trace
     var radiance = vec3(0.0);
@@ -49,7 +56,12 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
         radiance += throughput * analytic_light_radiance(ray_origin, ray_direction,
             select(ray.t, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
         if ray.kind != RAY_QUERY_INTERSECTION_NONE {
+#ifdef RAY_MATERIAL_FOOTPRINTS
+            cone = advance_ray_cone(cone, ray.t);
+            let ray_hit = resolve_ray_hit_filtered(ray, ray_direction, cone);
+#else
             let ray_hit = resolve_ray_hit_full(ray);
+#endif
             let wo = -ray_direction;
             let material = materials[material_ids[ray.instance_custom_data]];
             if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
@@ -84,6 +96,9 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     ray_hit.material.base_color, alpha, ray_hit.material.reflectance, rand_f(&rng));
                 throughput *= next.throughput;
                 if all(throughput <= vec3(0.0)) { break; }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+                if next.reflected { cone = scatter_ray_cone(cone, ray_hit.normal_spread, 0.0); }
+#endif
                 ray_direction = next.wi;
                 ray_origin = offset_thin_glass_ray(ray_hit.world_position,
                     ray_hit.geometric_world_normal, ray_direction, RAY_T_MIN);
@@ -126,6 +141,9 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Sample new ray direction from the material BRDF for next bounce and apply BRDF
             let next_bounce = evaluate_and_sample_brdf(wo, ray_hit.world_normal, ray_hit.material, &rng);
             if next_bounce.pdf == 0.0 { break; }
+#ifdef RAY_MATERIAL_FOOTPRINTS
+            cone = scatter_ray_cone(cone, ray_hit.normal_spread, next_bounce.sampled_roughness);
+#endif
             ray_direction = next_bounce.wi;
             ray_origin = offset_thin_glass_ray(ray_hit.world_position, ray_hit.geometric_world_normal, ray_direction, RAY_T_MIN);
             ray_t_min = RAY_T_MIN;

@@ -1,4 +1,8 @@
 enable wgpu_ray_query;
+#ifdef RAY_MATERIAL_FOOTPRINTS
+#import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, resolve_ray_hit_filtered}
+#endif
+
 
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
 #import bevy_pbr::utils::{rand_f, rand_range_u, sample_cosine_hemisphere}
@@ -66,7 +70,12 @@ fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
         // with a factor of pi, the same units the cached direct light is in.
         pending = vec4(pending.rgb + transmission * PI * sample_sky(ray_direction), pending.w);
     } else if ray.t <= WORLD_CACHE_MAX_GI_RAY_DISTANCE {
+#ifdef RAY_MATERIAL_FOOTPRINTS
+        let cone = primary_ray_cone(view.clip_from_view, view.main_pass_viewport.zw, distance(geometry_data.world_position, view.world_position) + ray.t);
+        let ray_hit = resolve_ray_hit_filtered(ray, ray_direction, cone);
+#else
         let ray_hit = resolve_ray_hit_full(ray);
+#endif
         let cell_life = atomicLoad(&world_cache_life[cell_index]);
         let radiance = query_two_sided_world_cache_with_support(ray_hit.world_position, ray_hit.geometric_world_normal, ray_hit.material.diffuse_transmission, view.world_position, ray.t, cell_life, &rng);
         pending = vec4(pending.rgb + transmission * ray_hit.material.base_color * radiance.rgb,

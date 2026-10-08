@@ -172,6 +172,7 @@ pub fn perform_pending_meshlet_mesh_writes(
     mut meshlet_mesh_manager: ResMut<MeshletMeshManager>,
     render_queue: Res<RenderQueue>,
     render_device: Res<RenderDevice>,
+    readiness: Option<Res<bevy_render::scene_readiness::SceneGeometryReadiness>>,
 ) {
     meshlet_mesh_manager
         .vertex_positions
@@ -200,4 +201,12 @@ pub fn perform_pending_meshlet_mesh_writes(
     meshlet_mesh_manager
         .meshlet_cull_data
         .perform_writes(&render_queue, &render_device);
+    if let Some(readiness) = readiness {
+        for id in readiness.requested::<MeshletMesh>() {
+            readiness.publish(
+                id.untyped(),
+                meshlet_mesh_manager.meshlet_mesh_slices.contains_key(&id),
+            );
+        }
+    }
 }

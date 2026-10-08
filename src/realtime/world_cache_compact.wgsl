@@ -1,6 +1,7 @@
 enable wgpu_ray_query;
 
 #import bevy_solarik::world_cache::WORLD_CACHE_EMPTY_CELL
+#import bevy_solarik::scene_bindings::scene_support_is_valid
 #import bevy_solarik::realtime_bindings::{
     constants,
     world_cache_life,
@@ -22,9 +23,11 @@ var<workgroup> w2: array<u32, 1024u>;
 @compute @workgroup_size(1024, 1, 1)
 fn decay_world_cache(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let geometry = world_cache_geometry_data[global_id.x];
-    let reset = (constants.reset & 1u) != 0u ||
-        ((constants.reset & 2u) != 0u && !cache_support_is_valid(
-            geometry.world_position, geometry.support_radius, constants.stable_radius));
+    var valid = cache_support_is_valid(geometry.world_position, geometry.support_radius, constants.stable_radius);
+    if (constants.reset & 4u) != 0u {
+        valid = scene_support_is_valid(geometry.world_position, geometry.support_radius);
+    }
+    let reset = (constants.reset & 1u) != 0u || ((constants.reset & 2u) != 0u && !valid);
     decay_world_cache_cell(global_id.x, reset);
 }
 

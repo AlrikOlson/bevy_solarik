@@ -1,4 +1,4 @@
-use super::{MeshletCutoutAtlas, cutout::valid_atlas};
+use super::{MeshletCutoutAtlas, cutout::valid_atlas, pipelines::early_visibility_enabled};
 use super::{instance_manager::InstanceManager, meshlet_mesh_manager::MeshletMeshManager};
 use crate::ShadowView;
 use bevy_camera::{Camera3d, visibility::RenderLayers};
@@ -141,16 +141,22 @@ impl ResourceManager {
             // TODO: Buffer min sizes
             clear_visibility_buffer_bind_group_layout: BindGroupLayoutDescriptor::new(
                 "meshlet_clear_visibility_buffer_bind_group_layout",
-                &BindGroupLayoutEntries::single(
+                &BindGroupLayoutEntries::sequential(
                     ShaderStages::COMPUTE,
-                    texture_storage_2d(TextureFormat::R64Uint, StorageTextureAccess::WriteOnly),
+                    (
+                        texture_storage_2d(TextureFormat::R64Uint, StorageTextureAccess::WriteOnly),
+                        storage_buffer_sized(false, None),
+                    ),
                 ),
             ),
             clear_visibility_buffer_shadow_view_bind_group_layout: BindGroupLayoutDescriptor::new(
                 "meshlet_clear_visibility_buffer_shadow_view_bind_group_layout",
-                &BindGroupLayoutEntries::single(
+                &BindGroupLayoutEntries::sequential(
                     ShaderStages::COMPUTE,
-                    texture_storage_2d(TextureFormat::R32Uint, StorageTextureAccess::WriteOnly),
+                    (
+                        texture_storage_2d(TextureFormat::R32Uint, StorageTextureAccess::WriteOnly),
+                        storage_buffer_sized(false, None),
+                    ),
                 ),
             ),
             first_instance_cull_bind_group_layout: BindGroupLayoutDescriptor::new(
@@ -172,6 +178,8 @@ impl ResourceManager {
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -190,6 +198,8 @@ impl ResourceManager {
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
                         storage_buffer_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only_sized(false, None),
                     ),
@@ -356,6 +366,8 @@ impl ResourceManager {
                         storage_buffer_read_only_sized(false, None),
                         texture_2d_array(TextureSampleType::Float { filterable: true }),
                         sampler(SamplerBindingType::Filtering),
+                        storage_buffer_sized(false, None)
+                            .visibility(ShaderStages::FRAGMENT | ShaderStages::COMPUTE),
                     ),
                 ),
             ),
@@ -377,6 +389,8 @@ impl ResourceManager {
                         storage_buffer_read_only_sized(false, None),
                         texture_2d_array(TextureSampleType::Float { filterable: true }),
                         sampler(SamplerBindingType::Filtering),
+                        storage_buffer_sized(false, None)
+                            .visibility(ShaderStages::FRAGMENT | ShaderStages::COMPUTE),
                     ),
                 ),
             ),
@@ -470,12 +484,13 @@ impl ResourceManager {
 
 #[derive(Component)]
 pub struct MeshletViewResources {
-    pub scene_instance_count: u32,
+    pub assembly_group_count: u32,
     pub rightmost_slot: u32,
     pub max_bvh_depth: u32,
     instance_visibility: Buffer,
     pub dummy_render_target: CachedTexture,
     pub visibility_buffer: CachedTexture,
+    early_depth: Buffer,
     pub second_pass_count: Buffer,
     pub second_pass_dispatch: Buffer,
     pub second_pass_candidates: Buffer,
@@ -532,6 +547,7 @@ pub fn prepare_meshlet_per_frame_resources(
         &ExtractedView,
         Option<&RenderLayers>,
         AnyOf<(&Camera3d, &ShadowView)>,
+        Option<&MeshletViewResources>,
     )>,
     mut texture_cache: ResMut<TextureCache>,
     render_queue: Res<RenderQueue>,
@@ -549,7 +565,7 @@ pub fn prepare_meshlet_per_frame_resources(
         "count",
     );
     if instance_manager.scene_instance_count == 0 {
-        for (view_entity, _, _, _) in &views {
+        for (view_entity, _, _, _, _) in &views {
             commands
                 .entity(view_entity)
                 .remove::<(MeshletViewResources, MeshletViewBindGroups)>();
@@ -580,9 +596,23 @@ pub fn prepare_meshlet_per_frame_resources(
     if instance_manager.instance_upload_dirty {
         let dirty = core::mem::take(&mut instance_manager.dirty_indices);
         let active_dirty = core::mem::take(&mut instance_manager.active_dirty_indices);
+        let group_dirty = core::mem::take(&mut instance_manager.group_dirty_indices);
+        let member_dirty = core::mem::take(&mut instance_manager.member_dirty_indices);
         // TODO: Move this and the submit to a separate system and remove pub from the fields
         let mut batch = StorageBufferUploadBatch::default();
         let uploads = [
+            instance_manager.assembly_groups.stage_buffer_indices(
+                &render_device,
+                &render_queue,
+                &group_dirty,
+                &mut batch,
+            ),
+            instance_manager.assembly_members.stage_buffer_indices(
+                &render_device,
+                &render_queue,
+                &member_dirty,
+                &mut batch,
+            ),
             instance_manager.active_indices.stage_buffer_indices(
                 &render_device,
                 &render_queue,
@@ -674,7 +704,9 @@ pub fn prepare_meshlet_per_frame_resources(
         }
     };
 
-    for (view_entity, view, render_layers, (_, shadow_view)) in &views {
+    let early_visibility = early_visibility_enabled();
+    let mut early_depth_bytes = 0u64;
+    for (view_entity, view, render_layers, (_, shadow_view), previous_resources) in &views {
         let not_shadow_view = shadow_view.is_none();
 
         let instance_visibility = instance_manager
@@ -744,6 +776,30 @@ pub fn prepare_meshlet_per_frame_resources(
                 view_formats: &[],
             },
         );
+
+        // Reuse this view's allocation. Clear in the existing visibility clear
+        // dispatch; both raster phases then share monotonically increasing depth.
+        let requested_bytes = u64::from(view.viewport.z) * u64::from(view.viewport.w) * 4;
+        let early_depth_size = if early_visibility
+            && requested_bytes <= u64::from(render_device.limits().max_storage_buffer_binding_size)
+        {
+            requested_bytes.max(4)
+        } else {
+            // Shader bounds checks conservatively retain fragments for larger views.
+            4
+        };
+        let early_depth = previous_resources
+            .filter(|resources| resources.early_depth.size() == early_depth_size)
+            .map(|resources| resources.early_depth.clone())
+            .unwrap_or_else(|| {
+                render_device.create_buffer(&BufferDescriptor {
+                    label: Some("meshlet_early_depth"),
+                    size: early_depth_size,
+                    usage: BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                })
+            });
+        early_depth_bytes += early_depth_size;
 
         let second_pass_count = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("meshlet_second_pass_count"),
@@ -939,12 +995,13 @@ pub fn prepare_meshlet_per_frame_resources(
         };
 
         commands.entity(view_entity).insert(MeshletViewResources {
-            scene_instance_count: instance_manager.scene_instance_count,
+            assembly_group_count: instance_manager.assembly_groups.get().len() as u32,
             rightmost_slot: resource_manager.cull_queue_rightmost_slot,
             max_bvh_depth: instance_manager.max_bvh_depth,
             instance_visibility,
             dummy_render_target,
             visibility_buffer,
+            early_depth,
             second_pass_count,
             second_pass_dispatch,
             second_pass_candidates: second_pass_candidates.clone(),
@@ -973,6 +1030,11 @@ pub fn prepare_meshlet_per_frame_resources(
             not_shadow_view,
         });
     }
+    bevy_render::diagnostic::profile_value(
+        "meshlet.early_visibility_bytes",
+        early_depth_bytes as f64,
+        "bytes",
+    );
 }
 
 pub fn prepare_meshlet_view_bind_groups(
@@ -1009,7 +1071,10 @@ pub fn prepare_meshlet_view_bind_groups(
             } else {
                 &resource_manager.clear_visibility_buffer_shadow_view_bind_group_layout
             }),
-            &BindGroupEntries::single(&view_resources.visibility_buffer.default_view),
+            &BindGroupEntries::sequential((
+                &view_resources.visibility_buffer.default_view,
+                view_resources.early_depth.as_entire_binding(),
+            )),
         );
 
         let first_instance_cull = render_device.create_bind_group(
@@ -1035,6 +1100,8 @@ pub fn prepare_meshlet_view_bind_groups(
                 view_resources.second_pass_dispatch.as_entire_binding(),
                 view_resources.second_pass_candidates.as_entire_binding(),
                 instance_manager.active_indices.binding().unwrap(),
+                instance_manager.assembly_groups.binding().unwrap(),
+                instance_manager.assembly_members.binding().unwrap(),
             )),
         );
 
@@ -1059,6 +1126,8 @@ pub fn prepare_meshlet_view_bind_groups(
                 view_resources.second_bvh_cull_queue.as_entire_binding(),
                 view_resources.second_pass_count.as_entire_binding(),
                 view_resources.second_pass_candidates.as_entire_binding(),
+                instance_manager.assembly_groups.binding().unwrap(),
+                instance_manager.assembly_members.binding().unwrap(),
             )),
         );
 
@@ -1301,6 +1370,7 @@ pub fn prepare_meshlet_view_bind_groups(
                 instance_manager.instance_cutouts.binding().unwrap(),
                 &cutout_image.texture_view,
                 &cutout_image.sampler,
+                view_resources.early_depth.as_entire_binding(),
             )),
         );
 
