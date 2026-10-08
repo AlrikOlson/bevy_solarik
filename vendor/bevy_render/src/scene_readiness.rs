@@ -1,9 +1,10 @@
 //! Request-driven prewarming receipt shared between app and render worlds.
 //! Ready means queued on the render queue; subsequent rendering uses queue ordering.
+use alloc::sync::Arc;
 use bevy_asset::{Asset, AssetId, UntypedAssetId};
 use bevy_ecs::resource::Resource;
 use bevy_platform::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 #[derive(Default)]
 struct State {
@@ -35,7 +36,7 @@ impl SceneGeometryReadiness {
                 state
                     .alpha
                     .iter()
-                    .filter(|id| id.type_id() == std::any::TypeId::of::<A>())
+                    .filter(|id| id.type_id() == core::any::TypeId::of::<A>())
                     .map(|id| id.typed::<A>())
                     .collect()
             },
@@ -63,7 +64,7 @@ impl SceneGeometryReadiness {
                 state
                     .requested
                     .iter()
-                    .filter(|id| id.type_id() == std::any::TypeId::of::<A>())
+                    .filter(|id| id.type_id() == core::any::TypeId::of::<A>())
                     .map(|id| id.typed::<A>())
                     .collect()
             },

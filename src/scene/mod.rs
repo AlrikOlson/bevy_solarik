@@ -9,6 +9,7 @@ mod dependencies;
 mod extract;
 pub(crate) mod history;
 mod instance_changes;
+pub mod placement;
 
 /// Enable full active-index receipts only for an explicit diagnostic capture.
 #[derive(bevy_ecs::resource::Resource)]

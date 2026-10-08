@@ -926,11 +926,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
                     geometry.triangle_count,
                 ));
 
-            this_frame_entity_to_light_id
-                .insert(entity.into(), light_sources.get().len() as u32 - 1);
+            this_frame_entity_to_light_id.insert(entity, light_sources.get().len() as u32 - 1);
             raytracing_scene_bindings
                 .previous_frame_light_entities
-                .push(entity.into());
+                .push(entity);
         }
 
         instance_id += 1;

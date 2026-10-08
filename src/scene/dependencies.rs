@@ -12,7 +12,7 @@ use bevy_render::{
     render_resource::{SamplerId, TextureId},
     texture::GpuImage,
 };
-use std::hash::{Hash, Hasher};
+use core::hash::{Hash, Hasher};
 
 type ImageState = Option<(TextureId, SamplerId)>;
 #[derive(Clone, PartialEq)]
