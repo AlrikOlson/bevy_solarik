@@ -1,4 +1,6 @@
 //! Compare all compiled output bytes and exercise invalidation/fallback paths.
+#[path = "terminal_surface_tests.rs"]
+mod terminal_surface_tests;
 use super::*;
 use bevy_asset::RenderAssetUsages;
 use bevy_mesh::VertexAttributeValues;

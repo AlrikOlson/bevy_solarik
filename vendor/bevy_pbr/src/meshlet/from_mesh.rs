@@ -85,6 +85,7 @@ impl MeshletMesh {
             vertex_position_quantization_factor,
             tangents,
             false,
+            true,
         )
     }
 
@@ -97,7 +98,19 @@ impl MeshletMesh {
         let tangents = tangent_data::source_tangents(mesh)?;
         let mut geometry = mesh.clone();
         geometry.remove_attribute(Mesh::ATTRIBUTE_TANGENT);
-        Self::from_geometry(&geometry, precision, tangents, true)
+        Self::from_geometry(&geometry, precision, tangents, true, true)
+    }
+
+    /// Compile an externally selected surface without generating unused LODs.
+    /// Finest triangles, vertex packing and verified culling bounds are unchanged.
+    pub fn from_mesh_terminal(
+        mesh: &Mesh,
+        precision: u8,
+    ) -> Result<Self, MeshToMeshletMeshConversionError> {
+        let tangents = tangent_data::source_tangents(mesh)?;
+        let mut geometry = mesh.clone();
+        geometry.remove_attribute(Mesh::ATTRIBUTE_TANGENT);
+        Self::from_geometry(&geometry, precision, tangents, true, false)
     }
 
     fn from_geometry(
@@ -105,6 +118,7 @@ impl MeshletMesh {
         vertex_position_quantization_factor: u8,
         source_tangents: Option<&[[f32; 4]]>,
         preserve_area: bool,
+        build_lods: bool,
     ) -> Result<Self, MeshToMeshletMeshConversionError> {
         let s = debug_span!("build meshlet mesh");
         let _e = s.enter();
@@ -143,6 +157,20 @@ impl MeshletMesh {
         let mut simplification_queue: Vec<_> = (0..meshlets.len() as u32).collect();
         let mut stuck = Vec::new();
         let mut diagnostic_level = 0;
+        if !build_lods {
+            for ids in simplification_queue.chunks(TARGET_MESHLETS_PER_GROUP) {
+                let mut group = TempMeshletGroup::default();
+                for &id in ids {
+                    let data = &cull_data[id as usize];
+                    group.meshlets.push(id);
+                    group.aabb = group.aabb.merge(&data.aabb);
+                    group.lod_bounds = merge_spheres(group.lod_bounds, data.lod_group_sphere);
+                }
+                all_groups.push(group);
+            }
+            bvh.add_lod(0, &all_groups);
+            simplification_queue.clear();
+        }
         while !simplification_queue.is_empty() {
             diagnostic_level += 1;
             let vertices = VertexDataAdapter::new(&vertex_buffer, vertex_stride, 0).unwrap();

@@ -36,6 +36,16 @@ impl MeshletMesh {
         })
     }
 
+    /// Exact cached terminal surface, in a separate compiler policy domain.
+    pub fn from_mesh_terminal_cached(
+        mesh: &Mesh,
+        precision: u8,
+        directory: &Path,
+    ) -> Result<Self, MeshToMeshletMeshConversionError> {
+        let key = preprocessed_key(mesh, precision, true, b"terminal-surface-v1");
+        cached_key(key, directory, || Self::from_mesh_terminal(mesh, precision))
+    }
+
     /// Load an exact cooked result before deterministic caller preprocessing.
     ///
     /// The caller recipe must identify all preprocessing code, dependencies and
