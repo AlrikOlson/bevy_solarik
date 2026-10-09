@@ -9,6 +9,7 @@
 extern crate alloc;
 
 pub mod atmosphere;
+pub mod coarse_appearance;
 pub mod coarse_cache;
 pub mod coarse_scene;
 pub mod depth_probe;
