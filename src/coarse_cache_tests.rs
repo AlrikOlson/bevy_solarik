@@ -1,6 +1,32 @@
 use super::*;
 use bytemuck::Zeroable;
 
+#[test]
+fn level_family_rejects_duplicates_disorder_and_unbounded_values() {
+    assert_eq!(parse_levels("1,2,4,8,16,32").unwrap(), DEFAULT_LEVELS);
+    assert_eq!(parse_levels("16, 32,64").unwrap(), [16, 32, 64]);
+    for value in ["", "0", "3", "128", "1,1", "32,16", "1,", "-1", "NaN"] {
+        assert!(parse_levels(value).is_none(), "{value}");
+    }
+}
+#[test]
+fn every_supported_grid_roundtrips_without_changing_source_observations() {
+    for resolution in [1, 2, 4, 8, 16, 32, 64] {
+        let mut cache = cache();
+        cache.resolution = resolution;
+        let step = 1. / resolution as f32;
+        cache.cells[0].grid[3] = resolution as i32;
+        cache.cells[0].centre_half = [-0.5 * step, 0.5 * step, 2.5 * step, 0.5 * step];
+        let bytes = encode(&cache).unwrap();
+        let loaded = decode(&bytes, cache.identity).unwrap();
+        assert_eq!(loaded.resolution, resolution);
+        assert_eq!(
+            bytemuck::cast_slice::<Cell, u8>(&cache.cells),
+            bytemuck::cast_slice::<Cell, u8>(&loaded.cells)
+        );
+    }
+}
+
 fn cache() -> SourceCache {
     let mut cell = Cell::zeroed();
     cell.grid = [-1, 0, 2, 16];

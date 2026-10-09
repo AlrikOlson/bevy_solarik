@@ -8,6 +8,27 @@ pub const DIRECTIONS: usize = 14;
 pub const MATERIALS: usize = 8;
 pub const MAX_CACHE_BYTES: usize = 128 << 20;
 
+/// Bounded, independently sampled source-height grid family.
+pub const DEFAULT_LEVELS: [u32; 6] = [1, 2, 4, 8, 16, 32];
+pub fn valid_resolution(value: u32) -> bool {
+    value.is_power_of_two() && value <= 64
+}
+/// Strict ascending order makes identity and consumer selection unambiguous.
+pub fn parse_levels(value: &str) -> Option<Vec<u32>> {
+    let levels: Vec<u32> = value
+        .split(',')
+        .map(|v| v.trim().parse().ok())
+        .collect::<Option<_>>()?;
+    if levels.is_empty()
+        || levels.len() > 7
+        || levels.iter().any(|&v| !valid_resolution(v))
+        || levels.windows(2).any(|v| v[0] >= v[1])
+    {
+        return None;
+    }
+    Some(levels)
+}
+
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct Directional {

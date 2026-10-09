@@ -65,7 +65,7 @@ fn valid(cache: &SourceCache) -> bool {
     if !cfg!(target_endian = "little")
         || cache.prototype == 0
         || cache.cells.is_empty()
-        || !matches!(cache.resolution, 8 | 16 | 32 | 64)
+        || !super::valid_resolution(cache.resolution)
         || !matches!(cache.samples_side, 1 | 2 | 4 | 8 | 16)
     {
         return false;

@@ -4,7 +4,7 @@ use bytemuck::Zeroable;
 
 /// Conservative triangle AABB candidates. Sampling never removes a candidate.
 pub fn cells(input: &Input, resolution: u32) -> Vec<Cell> {
-    assert!(matches!(resolution, 8 | 16 | 32 | 64));
+    assert!(bevy_solarik::coarse_cache::valid_resolution(resolution));
     let addresses: Vec<[i32; 3]> = input
         .positions
         .iter()

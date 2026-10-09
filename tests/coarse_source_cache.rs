@@ -23,6 +23,10 @@ fn cook_original_source_cells() {
     assert_eq!(key.len(), 64);
     let identity =
         core::array::from_fn(|i| u8::from_str_radix(&key[i * 2..i * 2 + 2], 16).unwrap());
+    let levels = coarse_cache::parse_levels(
+        &std::env::var("SOLARIK_COARSE_LEVELS").unwrap_or_else(|_| "16,32".into()),
+    )
+    .expect("bounded source level family");
     bevy_platform::future::block_on(async {
         let resources = initialize_headless_renderer(&WgpuSettings {
             backends: Some(wgpu::Backends::VULKAN),
@@ -48,7 +52,7 @@ fn cook_original_source_cells() {
                 "explicit GPU resource budget exceeded"
             );
             let prepared_seconds = started.elapsed().as_secs_f64();
-            for resolution in [16, 32] {
+            for &resolution in &levels {
                 let started = Instant::now();
                 let mut cells = grid::cells(&input, resolution);
                 let grid_seconds = started.elapsed().as_secs_f64();
@@ -87,7 +91,7 @@ fn cook_original_source_cells() {
                 }
                 for (part, count) in input.parts.iter().zip(materials) {
                     assert!(
-                        count > 0,
+                        count > 0 || resolution < 16,
                         "source{id} unmeasured original material {part:?}"
                     );
                 }

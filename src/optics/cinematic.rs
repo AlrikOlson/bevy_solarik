@@ -1,6 +1,6 @@
 //! Optional physical lens controls for Solarik's HDR postprocess chain.
-//! Requires Bevy's PostProcessPlugin (included in DefaultPlugins).
-//! Optics metering/scattering precedes bloom, bokeh DoF and tone mapping.
+//! Requires Bevy's `PostProcessPlugin` (included in `DefaultPlugins`).
+//! Optics metering/scattering precedes bloom, bokeh `DoF` and tone mapping.
 //! This screen-space approximation cannot resolve hidden or multilayer surfaces.
 use bevy_post_process::{
     bloom::{Bloom, BloomCompositeMode},
@@ -30,7 +30,7 @@ impl Default for CinematicLens {
 }
 impl CinematicLens {
     /// Validate before inserting on an HDR perspective camera. Focus can then
-    /// be animated directly through DepthOfField without resetting lighting.
+    /// be animated directly through `DepthOfField` without resetting lighting.
     pub fn components(self) -> Result<(DepthOfField, Bloom), &'static str> {
         for (value, minimum, maximum) in [
             (self.focus_distance_m, 0.1, 1.0e7),
