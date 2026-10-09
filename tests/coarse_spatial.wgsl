@@ -2,7 +2,8 @@ struct Ray { origin: vec4f, direction: vec4f }
 struct Result { depth: vec4f, counts: vec4u, first: vec4u, normal: vec4f }
 @group(0) @binding(0) var<storage,read> grid: CoarseGrid;
 @group(0) @binding(1) var<storage,read> lookup: array<u32>;
-@group(0) @binding(2) var<storage,read> samples: array<u32>;
+@group(0) @binding(2) var<storage,read> rows: array<vec4u>;
+@group(0) @binding(6) var<storage,read> hits: array<u32>;
 @group(0) @binding(3) var<storage,read> rays: array<Ray>;
 @group(0) @binding(4) var<storage,read_write> output: array<Result>;
 @group(0) @binding(5) var<storage,read> settings: array<u32>;
@@ -36,7 +37,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                                 let index=u32((local.x*i32(grid.dimensions.y)+local.y)*i32(grid.dimensions.z)+local.z);
                                 let source=lookup[index];if source==COARSE_MISSING { continue; }
                                 for(var side=0u;side<2u;side+=1u) {
-                                    let word=samples[(source*6u+axis*2u+side)*64u+column.grid_index];
+                                    let sample_index=spatial_sample_index(rows[source*6u+axis*2u+side],column.grid_index);
+                                    var word=0u;
+                                    if sample_index!=SPATIAL_MISSING { word=hits[sample_index]; }
                                     let hit=spatial_intersect(word,grid.origin_resolution.xyz+local,
                                         f32(grid.origin_resolution.w),axis,column.grid_index,settings[2],
                                         ray.origin.xyz,ray.direction.xyz,column.low,column.high);

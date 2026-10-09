@@ -1,11 +1,7 @@
 //! Small native spatial-cache images; no original triangle AS on warm iteration.
 #[path = "support/coarse_spatial_controls.rs"]
 mod controls;
-#[expect(
-    dead_code,
-    reason = "reuse buffer dispatch; its old transport pipeline is a separate target"
-)]
-#[path = "support/coarse_transport_gpu.rs"]
+#[path = "support/coarse_spatial_gpu.rs"]
 mod gpu;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
 use bevy_solarik::{
@@ -22,12 +18,14 @@ struct Probe {
     first: [u32; 4],
     normal: [f32; 4],
 }
-fn pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipeline {
+fn pipeline(device: &bevy_render::renderer::RenderDevice, entry: &str) -> wgpu::ComputePipeline {
+    let device = device.wgpu_device();
     let source = [
         coarse_scene::SHADER,
         coarse_scene::WALK_SHADER,
         coarse_spatial::PACK_SHADER,
         coarse_spatial::SHADER,
+        bevy_solarik::coarse_spatial_scene::SHADER,
         include_str!("coarse_spatial.wgsl"),
     ]
     .map(|s| {
@@ -78,7 +76,7 @@ fn native_spatial_source_visibility() {
             ..Default::default()
         })
         .await;
-        let device = resources.0.wgpu_device();
+        let device = &resources.0;
         let queue = &resources.1;
         let pipeline = pipeline(device, "main");
         let analytic = controls::check(device, queue, &pipeline);
@@ -98,6 +96,8 @@ fn native_spatial_source_visibility() {
                 )
                 .unwrap();
                 let cache = SpatialCache::decode(&spatial, identity, &source).unwrap();
+                let packed_bytes = gpu::decode(device, queue, &cache.samples);
+                let decoded_words = cache.samples.len();
                 let mut settings = vec![cache.parts, 8, cache.two_sided, 0];
                 settings.extend(cache.unknown_cells());
                 let started = Instant::now();
@@ -137,7 +137,7 @@ fn native_spatial_source_visibility() {
                     &Path::new(&output).join(format!("coarse-{id}-r{resolution}.bin")),
                     bytemuck::cast_slice(&values),
                 );
-                reports.push(format!(r#"{{"prototype":{id},"resolution":{resolution},"rays":655360,"hits":{hits},"unresolved_rays":{unresolved},"columns_visited":{visited},"explicit_fixture_bytes":{bytes},"trace_host_seconds":{elapsed}}}"#));
+                reports.push(format!(r#"{{"prototype":{id},"resolution":{resolution},"rays":655360,"hits":{hits},"unresolved_rays":{unresolved},"columns_visited":{visited},"bit_exact_words":{decoded_words},"packed_bytes":{packed_bytes},"explicit_fixture_bytes":{bytes},"trace_host_seconds":{elapsed}}}"#));
             }
         }
         write(&Path::new(&output).join("gpu.json"),format!(r#"{{"adapter":{:?},"sources":[{}],"side":256,"views":10,"analytic_controls":{analytic},"source_transport_accepted":false}}"#,format!("{:?}",**resources.2),reports.join(",")).as_bytes());

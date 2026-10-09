@@ -1,6 +1,10 @@
 use super::{Grid, gpu, pipeline};
 use bevy_math::Vec3;
-pub fn check(device: &wgpu::Device, queue: &wgpu::Queue, trace: &wgpu::ComputePipeline) -> usize {
+pub fn check(
+    device: &bevy_render::renderer::RenderDevice,
+    queue: &wgpu::Queue,
+    trace: &wgpu::ComputePipeline,
+) -> usize {
     let requests: Vec<[f32; 8]> = (0..8192)
         .map(|i| {
             let z = 1. - 2. * (i as f32 + 0.5) / 8192.;
@@ -118,7 +122,7 @@ pub fn check(device: &wgpu::Device, queue: &wgpu::Queue, trace: &wgpu::ComputePi
 }
 
 fn boundary_plane(
-    device: &wgpu::Device,
+    device: &bevy_render::renderer::RenderDevice,
     queue: &wgpu::Queue,
     trace: &wgpu::ComputePipeline,
 ) -> usize {
