@@ -43,7 +43,12 @@ fn meter() {
     else {
         let delta=desired-ev;
         let rate=select(p.lens.z,p.lens.w,delta>0.0);
-        ev+=clamp(delta*(1.0-exp(-p.meter.w)),-rate*p.meter.w,rate*p.meter.w);
+        // Exact rate-limited relaxation, tau=1s; matches optics::adapt_ev.
+        let error=abs(delta);
+        let linear_time=min(max((error-rate)/rate,0.0),p.meter.w);
+        let linear=rate*linear_time;
+        let relaxed=(error-linear)*(1.0-exp(-(p.meter.w-linear_time)));
+        ev+=sign(delta)*(linear+relaxed);
     }
     state[0]=vec4<f32>(ev,desired,lum,f32(count));
     let centre=textureLoad(source,vec2<i32>(dim/2u),0).rgb;

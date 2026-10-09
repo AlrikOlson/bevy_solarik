@@ -77,10 +77,18 @@ pub fn meter_ev(luminance: f64) -> Option<f64> {
 }
 /// Exact first-order relaxation with a hard rate bound; tau=1 second.
 pub fn adapt_ev(current: f64, target: f64, dt: f64, brighten: f64, darken: f64) -> f64 {
-    let dt = dt.clamp(0.0, 0.1);
     let delta = target - current;
     let rate = if delta > 0.0 { darken } else { brighten };
-    current + (delta * (-(-dt).exp_m1())).clamp(-rate * dt, rate * dt)
+    if !delta.is_finite() || !dt.is_finite() || dt <= 0.0 || !rate.is_finite() || rate <= 0.0 {
+        return current;
+    }
+    // Integrate the rate-limited segment before the exponential tail. Keeping
+    // all elapsed time makes a slow frame equivalent to its smaller substeps.
+    let error = delta.abs();
+    let linear_time = ((error - rate) / rate).max(0.0).min(dt);
+    let linear = rate * linear_time;
+    let relaxed = (error - linear) * (-(-(dt - linear_time)).exp_m1());
+    current + delta.signum() * (linear + relaxed)
 }
 /// Normalized discrete Gaussian; radius ceil(4 sigma), at most128 pixels.
 pub fn scatter_kernel(sigma_pixels: f64) -> Result<Vec<f64>, &'static str> {
@@ -120,6 +128,26 @@ mod tests {
         }
         assert!((ev - 3.0).abs() < 0.001);
         assert_eq!(adapt_ev(3.0, 15.0, 0.1, 1.0, 4.0), 3.4);
+    }
+    #[test]
+    fn slow_frames_preserve_elapsed_exposure_time() {
+        assert_eq!(adapt_ev(15.0, 3.0, 0.75, 1.0, 4.0), 14.25);
+        for (current, target) in [(15.0, 3.0), (3.0, 15.0), (10.0, 10.2)] {
+            for dt in [0.02, 0.75, 2.0, 5.0, 15.0] {
+                let once = adapt_ev(current, target, dt, 1.0, 4.0);
+                let mut split = current;
+                for _ in 0..100 {
+                    split = adapt_ev(split, target, dt / 100.0, 1.0, 4.0);
+                }
+                assert!((once - split).abs() < 1e-11, "{current} {target} {dt}");
+                assert!((current.min(target)..=current.max(target)).contains(&once));
+                let rate = if target > current { 4.0 } else { 1.0 };
+                assert!((once - current).abs() <= rate * dt + 1e-12);
+            }
+        }
+        for dt in [-1.0, 0.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(adapt_ev(15.0, 3.0, dt, 1.0, 4.0), 15.0);
+        }
     }
     #[test]
     fn scattering_conserves_uniform_fields_and_impulse_energy_at_edges() {

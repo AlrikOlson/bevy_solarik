@@ -202,7 +202,7 @@ fn compose(
         *state = allocate(&device, size.x, size.y, settings.reset);
     }
     let now = Instant::now();
-    let dt = now.duration_since(state.last).as_secs_f32().min(0.1);
+    let dt = now.duration_since(state.last).as_secs_f32();
     state.last = now;
     let manual = -(camera.exposure * 1.2).log2();
     let reset = state.initial || state.reset != settings.reset;
