@@ -1047,16 +1047,92 @@ mod quantization_tests {
 }
 
 fn merge_spheres(a: BoundingSphere, b: BoundingSphere) -> BoundingSphere {
-    let sr = a.radius().min(b.radius());
-    let br = a.radius().max(b.radius());
-    let len = a.center.distance(b.center);
-    if len + sr <= br || sr == 0.0 || len == 0.0 {
-        if a.radius() > b.radius() { a } else { b }
-    } else {
-        let radius = (sr + br + len) / 2.0;
-        let center =
-            (a.center + b.center + (a.radius() - b.radius()) * (a.center - b.center) / len) / 2.0;
-        BoundingSphere::new(center, radius)
+    // A zero-radius sphere is the empty accumulator used by the hierarchy builder.
+    if a.radius() == 0.0 {
+        return b;
+    }
+    if b.radius() == 0.0 {
+        return a;
+    }
+    let ac = a.center.as_dvec3();
+    let bc = b.center.as_dvec3();
+    let ar = f64::from(a.radius());
+    let br = f64::from(b.radius());
+    let len = ac.distance(bc);
+    if len + ar.min(br) <= ar.max(br) {
+        return if ar > br { a } else { b };
+    }
+    let radius = (ar + br + len) * 0.5;
+    let center: Vec3A = (ac + (bc - ac) * ((radius - ar) / len)).as_vec3().into();
+    // Recompute around the rounded, stored center. Two outward ULPs also cover
+    // the f32 distance/subtraction used by GPU and CPU enclosure checks.
+    let radius =
+        (center.as_dvec3().distance(ac) + ar).max(center.as_dvec3().distance(bc) + br) as f32;
+    BoundingSphere::new(center, radius.next_up().next_up())
+}
+
+#[cfg(test)]
+mod sphere_merge_tests {
+    use super::*;
+
+    #[test]
+    fn translated_page_bounds_enclose_every_child_at_all_scales() {
+        for scale in [0.001, 1.0, 2_048.0, 65_536.0] {
+            let mut parent = BoundingSphere::new(Vec3A::ZERO, 0.0);
+            let mut children = Vec::new();
+            for i in 0..512 {
+                let t = i as f32;
+                let point = Vec3A::new(
+                    (t * 0.754_877_7).fract() * 1.73 - 0.87,
+                    (t * 0.569_840_3).fract() * 0.29 - 0.13,
+                    (t * 0.438_579).fract() * 1.91 - 0.93,
+                ) * scale
+                    + Vec3A::splat(scale * 3.7);
+                let child = BoundingSphere::new(point, scale * (0.01 + (t * 0.31).fract() * 0.1));
+                let previous = parent;
+                parent = merge_spheres(parent, child);
+                for enclosed in [previous, child] {
+                    if enclosed.radius() == 0.0 {
+                        continue;
+                    }
+                    let exact = parent
+                        .center
+                        .as_dvec3()
+                        .distance(enclosed.center.as_dvec3())
+                        + f64::from(enclosed.radius());
+                    assert!(
+                        exact <= f64::from(parent.radius()),
+                        "under-bound at scale {scale}"
+                    );
+                    assert!(
+                        parent.center.distance(enclosed.center)
+                            <= parent.radius() - enclosed.radius(),
+                        "nonmonotonic f32 bound at scale {scale}"
+                    );
+                }
+                children.push(child);
+            }
+            for child in children {
+                assert!(
+                    parent.center.as_dvec3().distance(child.center.as_dvec3())
+                        + f64::from(child.radius())
+                        <= f64::from(parent.radius())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_and_contained_spheres_do_not_grow() {
+        let child = BoundingSphere::new(Vec3A::splat(2_000.0), 3.0);
+        let outer = BoundingSphere::new(child.center, 20.0);
+        for result in [merge_spheres(outer, child), merge_spheres(child, outer)] {
+            assert_eq!(result.center, outer.center);
+            assert_eq!(result.radius(), outer.radius());
+        }
+        let result = merge_spheres(BoundingSphere::new(Vec3A::ZERO, 0.0), child);
+        assert_eq!(result.center, child.center);
+        assert_eq!(result.radius(), child.radius());
     }
 }
 
