@@ -42,6 +42,7 @@ impl Plugin for CameraOpticsPlugin {
                     Core3d,
                     compose
                         .in_set(Core3dSystems::PostProcess)
+                        .before(bevy_post_process::bloom::bloom)
                         .before(tonemapping),
                 )
                 .add_systems(Render, readback.in_set(RenderSystems::Cleanup));

@@ -1,5 +1,7 @@
 //! Optional photometric camera metering and conservative forward-scatter optics.
 mod background;
+mod cinematic;
+pub use cinematic::CinematicLens;
 mod gpu;
 use alloc::sync::Arc;
 pub use background::CameraOpticsSystems;

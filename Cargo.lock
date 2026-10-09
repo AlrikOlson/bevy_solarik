@@ -817,6 +817,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_post_process"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eb9340107f7a4292b3b1d138cffb2700f31cef580f5777f2e83f4f00eae4dc1"
+dependencies = [
+ "bevy_app",
+ "bevy_asset",
+ "bevy_camera",
+ "bevy_color",
+ "bevy_core_pipeline",
+ "bevy_derive",
+ "bevy_ecs",
+ "bevy_image",
+ "bevy_math",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_render",
+ "bevy_shader",
+ "bevy_utils",
+ "smallvec",
+ "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
 name = "bevy_ptr"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -970,6 +995,7 @@ dependencies = [
  "bevy_mesh",
  "bevy_pbr",
  "bevy_platform",
+ "bevy_post_process",
  "bevy_reflect",
  "bevy_render",
  "bevy_shader",
