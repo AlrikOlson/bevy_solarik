@@ -7,10 +7,8 @@ struct Result { depth: vec4f, counts: vec4u, first: vec4u, normal: vec4f }
 @group(0) @binding(3) var<storage,read> rays: array<Ray>;
 @group(0) @binding(4) var<storage,read_write> output: array<Result>;
 @group(0) @binding(5) var<storage,read> settings: array<u32>;
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3u) {
-    if id.x>=arrayLength(&rays) { return; }
-    let ray=rays[id.x]; var result: Result;
+fn spatial_trace(ray: Ray) -> Result {
+    var result: Result;
     var walk=coarse_walk_begin(grid,ray.origin.xyz,ray.direction.xyz,vec2f(ray.origin.w,ray.direction.w));
     loop {
         let interval=coarse_walk_next(grid,&walk);
@@ -45,7 +43,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                                         ray.origin.xyz,ray.direction.xyz,column.low,column.high);
                                     if hit.valid!=0u && (result.depth.x==0.0 || hit.t<result.depth.y) {
                                         result.depth=vec4f(1.0,hit.t,0.0,0.0);
-                                        result.first=vec4u(hit.part+1u,source,column.grid_index,0u);
+                                        result.first=vec4u(hit.part+1u,source,column.grid_index,sample_index);
                                         result.normal=vec4f(hit.normal,0.0);
                                     }
                                 }
@@ -59,7 +57,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         }
         if result.depth.x>0.0 || walk.running==0u || result.counts.w!=0u { break; }
     }
-    result.counts.w|=walk.overflow; output[id.x]=result;
+    result.counts.w|=walk.overflow; return result;
+}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    if id.x<arrayLength(&rays) { output[id.x]=spatial_trace(rays[id.x]); }
 }
 @compute @workgroup_size(64)
 fn quantization(@builtin(global_invocation_id) id: vec3u) {

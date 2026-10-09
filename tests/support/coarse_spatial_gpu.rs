@@ -1,4 +1,4 @@
-//! The test dispatcher uses the production immutable `RenderDevice` upload.
+// The test dispatcher uses the production immutable `RenderDevice` upload.
 use super::Probe;
 use bevy_render::renderer::RenderDevice;
 use bevy_solarik::coarse_spatial_scene::{self, PackedSpatial};
