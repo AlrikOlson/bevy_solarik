@@ -35,6 +35,53 @@ impl MeshletMesh {
             convert(mesh, precision, preserve_area)
         })
     }
+
+    /// Load an exact cooked result before deterministic caller preprocessing.
+    ///
+    /// The caller recipe must identify all preprocessing code, dependencies and
+    /// non-mesh inputs. The source mesh, precision, area policy and renderer
+    /// compiler recipe are also keyed. The closure runs only on a miss; its
+    /// errors propagate unchanged and are never persisted.
+    pub fn from_mesh_cached_preprocessed<E>(
+        mesh: Mesh,
+        precision: u8,
+        preserve_area: bool,
+        directory: &Path,
+        preprocessing_recipe: &[u8],
+        compile: impl FnOnce(Mesh) -> Result<Self, E>,
+    ) -> Result<Self, E> {
+        let key = preprocessed_key(&mesh, precision, preserve_area, preprocessing_recipe);
+        let mut compiled = false;
+        let result = cached_key(key, directory, || {
+            compiled = true;
+            bevy_render::diagnostic::profile_value(
+                "geometry.preprocessed_cache_miss",
+                1.0,
+                "count",
+            );
+            compile(mesh)
+        });
+        if !compiled && result.is_ok() {
+            bevy_render::diagnostic::profile_value("geometry.preprocessed_cache_hit", 1.0, "count");
+        }
+        result
+    }
+}
+
+fn preprocessed_key(
+    mesh: &Mesh,
+    precision: u8,
+    preserve_area: bool,
+    recipe: &[u8],
+) -> blake3::Hash {
+    let mut hash = blake3::Hasher::new();
+    hash_field(&mut hash, b"meshlet-preprocessing-v1");
+    hash_field(
+        &mut hash,
+        key(mesh, precision, preserve_area, RECIPE).as_bytes(),
+    );
+    hash_field(&mut hash, recipe);
+    hash.finalize()
 }
 
 fn cached(
@@ -44,11 +91,22 @@ fn cached(
     directory: &Path,
     compile: impl FnOnce() -> Result<MeshletMesh, MeshToMeshletMeshConversionError>,
 ) -> Result<MeshletMesh, MeshToMeshletMeshConversionError> {
+    cached_key(
+        key(mesh, precision, preserve_area, RECIPE),
+        directory,
+        compile,
+    )
+}
+
+fn cached_key<E>(
+    key: blake3::Hash,
+    directory: &Path,
+    compile: impl FnOnce() -> Result<MeshletMesh, E>,
+) -> Result<MeshletMesh, E> {
     if env!("MESHLET_CACHE_COMPILER_KNOWN") != "1" {
         bevy_render::diagnostic::profile_value("geometry.cache_disabled", 1.0, "count");
         return compile();
     }
-    let key = key(mesh, precision, preserve_area, RECIPE);
     let path = directory.join(format!("{}.mvg", key.to_hex()));
     {
         let _profile = bevy_render::diagnostic::profile_scope("geometry.cache_read");

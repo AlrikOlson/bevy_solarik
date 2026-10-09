@@ -228,3 +228,59 @@ fn derived_cache_warm_use_refreshes_recency_and_lock_contention_keeps_output() {
     fs::remove_file(directory.join(retention::LOCK)).unwrap();
     fs::remove_dir(directory).unwrap();
 }
+#[test]
+fn preprocessed_cache_preserves_cold_bytes_and_warm_hit_skips_all_cooking() {
+    let directory = directory();
+    for preserve in [false, true] {
+        let source = source();
+        let expected = convert(&source, 4, preserve).unwrap();
+        let cold = MeshletMesh::from_mesh_cached_preprocessed(
+            source.clone(),
+            4,
+            preserve,
+            &directory,
+            b"cooking-v1",
+            |mesh| convert(&mesh, 4, preserve),
+        )
+        .unwrap();
+        assert_eq!(encode(&cold), encode(&expected));
+        let warm = MeshletMesh::from_mesh_cached_preprocessed::<MeshToMeshletMeshConversionError>(
+            source,
+            4,
+            preserve,
+            &directory,
+            b"cooking-v1",
+            |_| panic!("verified hit must bypass the complete preprocessing closure"),
+        )
+        .unwrap();
+        assert_eq!(encode(&warm), encode(&expected));
+    }
+    for entry in fs::read_dir(&directory).unwrap() {
+        fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+    fs::remove_dir(directory).unwrap();
+}
+
+#[test]
+fn preprocessed_recipe_source_policy_and_errors_cannot_reuse_another_result() {
+    let source = source();
+    let original = preprocessed_key(&source, 4, false, b"one");
+    assert_ne!(original, preprocessed_key(&source, 4, false, b"two"));
+    assert_ne!(original, key(&source, 4, false, RECIPE));
+    assert_ne!(original, preprocessed_key(&source, 5, false, b"one"));
+    assert_ne!(original, preprocessed_key(&source, 4, true, b"one"));
+    let mut changed = source.clone();
+    if let Some(VertexAttributeValues::Float32x2(uvs)) = changed.attribute_mut(Mesh::ATTRIBUTE_UV_0)
+    {
+        uvs[0][0] += 0.1;
+    }
+    assert_ne!(original, preprocessed_key(&changed, 4, false, b"one"));
+    let directory = directory();
+    let failure =
+        MeshletMesh::from_mesh_cached_preprocessed(source, 4, false, &directory, b"one", |_| {
+            Err::<MeshletMesh, _>("original cooking error")
+        });
+    assert_eq!(failure.err(), Some("original cooking error"));
+    assert!(fs::read_dir(&directory).unwrap().next().is_none());
+    fs::remove_dir(directory).unwrap();
+}
