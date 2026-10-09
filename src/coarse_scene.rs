@@ -37,6 +37,7 @@ pub struct GpuSource {
 pub(crate) fn load_shader(app: &mut bevy_app::App) {
     bevy_shader::load_shader_library!(app, "coarse_scene.wgsl");
     bevy_shader::load_shader_library!(app, "coarse_walk.wgsl");
+    bevy_shader::load_shader_library!(app, "coarse_transport.wgsl");
     bevy_shader::load_shader_library!(app, "coarse_appearance.wgsl");
 }
 impl Grid {
