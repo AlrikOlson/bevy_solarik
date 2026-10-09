@@ -413,7 +413,7 @@ mod tests {
             assert_eq!(combined.root_slots(), 2 * parts.len() as u64);
             assert_eq!(
                 combined.all_lod_slots(),
-                parts.iter().map(MeshletWorkset::all_lod_slots).sum()
+                parts.iter().map(MeshletWorkset::all_lod_slots).sum::<u64>()
             );
             let mut distances = vec![0.0, 1.0, 100.0, 1e8];
             for part in &parts {
@@ -424,12 +424,15 @@ mod tests {
             for &min in &distances {
                 assert_eq!(
                     combined.slots(min),
-                    parts.iter().map(|p| p.slots(min)).sum()
+                    parts.iter().map(|p| p.slots(min)).sum::<u64>()
                 );
                 for &max in &distances {
                     assert_eq!(
                         combined.slots_in_range(min, max),
-                        parts.iter().map(|p| p.slots_in_range(min, max)).sum()
+                        parts
+                            .iter()
+                            .map(|p| p.slots_in_range(min, max))
+                            .sum::<u64>()
                     );
                 }
             }
@@ -441,7 +444,10 @@ mod tests {
             ] {
                 assert_eq!(
                     combined.slots_in_range(min, max),
-                    parts.iter().map(|p| p.slots_in_range(min, max)).sum()
+                    parts
+                        .iter()
+                        .map(|p| p.slots_in_range(min, max))
+                        .sum::<u64>()
                 );
             }
             let nested = MeshletWorkset::combined(&[combined.clone(), combined.clone()]).unwrap();

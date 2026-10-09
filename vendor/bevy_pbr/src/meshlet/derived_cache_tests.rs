@@ -70,6 +70,7 @@ fn derived_cache_preserves_all_buffers_tangent_palette_and_dilation_errors_and_w
         assert_eq!(encode(&hit), encode(&expected));
         fs::remove_file(path).unwrap();
     }
+    fs::remove_file(directory.join(retention::LOCK)).unwrap();
     assert!(fs::read_dir(&directory).unwrap().next().is_none());
     fs::remove_dir(directory).unwrap();
 }
@@ -158,6 +159,7 @@ fn derived_cache_corruption_wrong_key_version_lengths_and_trailing_data_are_safe
         .unwrap();
     assert!(load(&path, key.as_bytes()).is_err());
     fs::remove_file(path).unwrap();
+    fs::remove_file(directory.join(retention::LOCK)).unwrap();
     fs::remove_dir(directory).unwrap();
 }
 
@@ -172,5 +174,57 @@ fn derived_cache_unwritable_directory_keeps_the_exact_compiled_result() {
     assert_eq!(encode(&actual), encode(&expected));
     assert_eq!(fs::read(&file).unwrap(), b"keep");
     fs::remove_file(file).unwrap();
+    fs::remove_dir(directory).unwrap();
+}
+#[test]
+fn derived_cache_recycling_counts_headers_preserves_foreign_and_recent_entries() {
+    let directory = directory();
+    let old = retention::tests::entry(&directory, b"old", 100, 1);
+    let recent = retention::tests::entry(&directory, b"recent", 100, 2);
+    let foreign = directory.join("foreign.mvg");
+    let partial = directory.join("active.partial");
+    fs::write(&foreign, b"foreign").unwrap();
+    fs::write(&partial, b"partial").unwrap();
+    let lease = retention::reserve(&directory, 100, 207).unwrap();
+    assert!(!old.exists());
+    assert!(recent.exists());
+    assert_eq!(fs::read(&foreign).unwrap(), b"foreign");
+    assert_eq!(fs::read(&partial).unwrap(), b"partial");
+    assert!(retention::reserve(&directory, 100, 207).is_err());
+    drop(lease);
+    // Unknown .mvg files count against the cap but are never evicted.
+    assert!(retention::reserve(&directory, 201, 207).is_err());
+    assert!(foreign.exists());
+    for entry in fs::read_dir(&directory).unwrap() {
+        fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+    fs::remove_dir(directory).unwrap();
+}
+
+#[test]
+fn derived_cache_warm_use_refreshes_recency_and_lock_contention_keeps_output() {
+    let source = source();
+    let mesh = convert(&source, 4, false).unwrap();
+    let directory = directory();
+    let key = key(&source, 4, false, RECIPE);
+    let path = directory.join(format!("{}.mvg", key.to_hex()));
+    publish(&directory, &path, key.as_bytes(), &mesh).unwrap();
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let hit = cached(&source, 4, false, &directory, || panic!("warm cache")).unwrap();
+    assert_eq!(encode(&hit), encode(&mesh));
+    assert!(fs::metadata(&path).unwrap().modified().unwrap() > old);
+    fs::remove_file(&path).unwrap();
+    let lease = retention::reserve(&directory, 0, MAX_DIRECTORY).unwrap();
+    let fallback = cached(&source, 4, false, &directory, || Ok(mesh.clone())).unwrap();
+    assert_eq!(encode(&fallback), encode(&mesh));
+    assert!(!path.exists());
+    drop(lease);
+    fs::remove_file(directory.join(retention::LOCK)).unwrap();
     fs::remove_dir(directory).unwrap();
 }

@@ -115,6 +115,7 @@ fn main() {
             "tangent_data.rs",
             "tangent_palette.rs",
             "derived_cache.rs",
+            "derived_cache_retention.rs",
         ] {
             tree(&mut recipe, &root, &root.join("src/meshlet").join(source));
         }

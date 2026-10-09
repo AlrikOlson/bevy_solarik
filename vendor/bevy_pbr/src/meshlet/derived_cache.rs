@@ -54,6 +54,7 @@ fn cached(
         let _profile = bevy_render::diagnostic::profile_scope("geometry.cache_read");
         if let Ok(cached) = load(&path, key.as_bytes()) {
             bevy_render::diagnostic::profile_value("geometry.cache_hit", 1.0, "count");
+            retention::touch(&path);
             return Ok(cached);
         }
     }
@@ -252,21 +253,18 @@ fn load(path: &Path, key: &[u8; 32]) -> io::Result<MeshletMesh> {
 
 fn publish(directory: &Path, path: &Path, key: &[u8; 32], mesh: &MeshletMesh) -> io::Result<()> {
     fs::create_dir_all(directory)?;
-    let mut size = 0u64;
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        if entry.path().extension().is_some_and(|ext| ext == "mvg") {
-            size = size.saturating_add(entry.metadata()?.len());
-        }
-    }
     let payload = encode(mesh);
-    if payload.len() > MAX_ENTRY - HEADER
-        || size.saturating_add(payload.len() as u64) > MAX_DIRECTORY
-    {
+    if payload.len() > MAX_ENTRY - HEADER {
         return Err(io::Error::new(
             io::ErrorKind::StorageFull,
-            "derived cache byte limit",
+            "derived cache entry limit",
         ));
+    }
+    let _lease = retention::reserve(directory, (payload.len() + HEADER) as u64, MAX_DIRECTORY)?;
+    // A competing compiler may have published this exact key while we worked.
+    if load(path, key).is_ok() {
+        retention::touch(path);
+        return Ok(());
     }
     let temp = directory.join(format!(
         "{}.{}.{}.partial",
@@ -295,6 +293,9 @@ fn publish(directory: &Path, path: &Path, key: &[u8; 32], mesh: &MeshletMesh) ->
     }
     result
 }
+
+#[path = "derived_cache_retention.rs"]
+mod retention;
 
 #[cfg(test)]
 #[path = "derived_cache_tests.rs"]
