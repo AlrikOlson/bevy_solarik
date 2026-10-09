@@ -1,4 +1,9 @@
 enable wgpu_ray_query;
+// Synthetic scene I/O for the renderer-owned query boundary.
+fn scene_hit_is_miss(ray: RayIntersection) -> bool { return ray.kind == 0u; }
+fn scene_hit_material(ray: RayIntersection) -> RawMaterial { return materials[material_ids[ray.instance_custom_data]]; }
+fn scene_hit_alpha(ray: RayIntersection, uv: vec2f) -> f32 { return resolve_material_alpha(scene_hit_material(ray), uv); }
+fn scene_requires_ordered_transport() -> bool { return (sky_light.material_transport_flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) != 0u; }
 @group(0) @binding(0) var scene: acceleration_structure;
 @group(0) @binding(1) var<storage, read_write> cached: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> output: array<vec4<f32>>;

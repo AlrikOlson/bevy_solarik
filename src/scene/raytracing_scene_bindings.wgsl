@@ -1,6 +1,7 @@
 enable wgpu_ray_query;
 
 #define_import_path bevy_solarik::scene_bindings
+#import bevy_solarik::scene_hit::{SceneHit, scene_miss, scene_triangle, scene_hit_is_triangle, SCENE_HIT_INVALID}
 
 #import bevy_solarik::collimated::collimated_weight
 #import bevy_solarik::ring_transport::ring_shadow
@@ -252,17 +253,29 @@ fn ray_max_distance() -> f32 { return sky_light.ray_max_distance; }
 
 const RAY_NO_CULL = 0xFFu;
 
-fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32) -> RayIntersection {
+fn trace_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32) -> SceneHit {
     return trace_ray_impl(ray_origin, ray_direction, ray_t_min, ray_t_max, ray_flag, false);
 }
 
 // Camera and pathtracer bounce rays can interact with glass. Shadow and
 // realtime GI callers retain trace_ray's transparent-to-light behavior.
-fn trace_glass_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32) -> RayIntersection {
+fn trace_glass_ray(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32) -> SceneHit {
     return trace_ray_impl(ray_origin, ray_direction, ray_t_min, ray_t_max, RAY_FLAG_NONE, true);
 }
 
-fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> RayIntersection {
+fn scene_hit_from_triangle(hit: RayIntersection) -> SceneHit {
+    if hit.kind == RAY_QUERY_INTERSECTION_NONE { return scene_miss(); }
+    if hit.kind == RAY_QUERY_INTERSECTION_TRIANGLE {
+        return scene_triangle(hit.t, hit.instance_custom_data, hit.primitive_index, hit.barycentrics, hit.front_face);
+    }
+    var invalid = scene_miss();
+    invalid.kind = SCENE_HIT_INVALID;
+    return invalid;
+}
+fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> SceneHit {
+    return scene_hit_from_triangle(trace_triangle_ray_impl(ray_origin, ray_direction, ray_t_min, ray_t_max, ray_flag, include_glass));
+}
+fn trace_triangle_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> RayIntersection {
     let minimum = max(ray_t_min, max(max(abs(ray_origin.x), abs(ray_origin.y)), abs(ray_origin.z)) * sky_light.relative_ray_min);
     let maximum = min(ray_t_max, ray_max_distance());
     if minimum > maximum {
@@ -454,17 +467,31 @@ fn resolve_material_filtered(material: Material, uv: vec2f, uv_width: vec2f) -> 
     return m;
 }
 
-fn resolve_ray_hit_full(ray_hit: RayIntersection) -> ResolvedRayHitFull {
+fn resolve_ray_hit_full(ray_hit: SceneHit) -> ResolvedRayHitFull {
     return resolve_ray_hit_filtered(ray_hit, vec3f(0.0), vec2f(0.0));
 }
-fn resolve_ray_hit_filtered(ray_hit: RayIntersection, direction: vec3f, cone: vec2f) -> ResolvedRayHitFull {
-    let barycentrics = vec3(1.0 - ray_hit.barycentrics.x - ray_hit.barycentrics.y, ray_hit.barycentrics);
-    var hit = resolve_triangle_data_filtered(ray_hit.instance_custom_data, ray_hit.primitive_index, barycentrics, direction, cone);
+// Unknown tags never address triangle or material storage.
+// This scene-level policy must include every representation when coarse events publish.
+fn scene_requires_ordered_transport() -> bool {
+    return (sky_light.material_transport_flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) != 0u;
+}
+fn scene_hit_material(ray_hit: SceneHit) -> Material {
+    if !scene_hit_is_triangle(ray_hit) { var invalid: Material; return invalid; }
+    return materials[material_ids[ray_hit.triangle.slot]];
+}
+fn scene_hit_alpha(ray_hit: SceneHit, uv: vec2f) -> f32 {
+    if !scene_hit_is_triangle(ray_hit) { return 0.0; }
+    return resolve_material_alpha(scene_hit_material(ray_hit), uv);
+}
+fn resolve_ray_hit_filtered(ray_hit: SceneHit, direction: vec3f, cone: vec2f) -> ResolvedRayHitFull {
+    if !scene_hit_is_triangle(ray_hit) { var invalid: ResolvedRayHitFull; return invalid; }
+    let barycentrics = vec3(1.0 - ray_hit.triangle.barycentrics.x - ray_hit.triangle.barycentrics.y, ray_hit.triangle.barycentrics);
+    var hit = resolve_triangle_data_filtered(ray_hit.triangle.slot, ray_hit.triangle.primitive, barycentrics, direction, cone);
     // A double-sided surface hit from behind is shaded as the side the ray
     // arrived on (the rasteriser does the same for the gbuffer); a
     // single-sided back face keeps upstream's raw normal.
-    let material = materials[material_ids[ray_hit.instance_custom_data]];
-    if !ray_hit.front_face && (material.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0u {
+    let material = materials[material_ids[ray_hit.triangle.slot]];
+    if !ray_hit.triangle.front_face && (material.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0u {
         hit.world_normal = -hit.world_normal;
         hit.geometric_world_normal = -hit.geometric_world_normal;
     }

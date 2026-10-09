@@ -1,3 +1,7 @@
+// Synthetic scene I/O for the renderer-owned query boundary.
+fn scene_hit_is_miss(ray: Ray) -> bool { return ray.kind == 0u; }
+fn scene_hit_material(ray: Ray) -> RawMaterial { return materials[material_ids[ray.instance_custom_data]]; }
+fn scene_hit_alpha(ray: Ray, uv: vec2f) -> f32 { return resolve_material_alpha(scene_hit_material(ray), uv); }
 
 // These synthetic scenes use ordinary, nondirectional emission.
 fn emitted_radiance(m: Material, outgoing: vec3f) -> vec3f { return m.emissive; }

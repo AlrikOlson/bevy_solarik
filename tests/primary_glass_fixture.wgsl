@@ -1,3 +1,8 @@
+
+// Synthetic scene I/O for the renderer-owned query boundary.
+fn scene_hit_is_miss(ray: Intersection) -> bool { return ray.kind == 0u; }
+fn scene_hit_material(ray: Intersection) -> Material { return materials[material_ids[ray.instance_custom_data]]; }
+fn scene_hit_alpha(ray: Intersection, uv: vec2f) -> f32 { return resolve_material_alpha(scene_hit_material(ray), uv); }
 @group(0) @binding(0) var<storage> inputs: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> output: vec4<f32>;
 const RAY_T_MIN = 0.0001;

@@ -1,4 +1,6 @@
 enable wgpu_ray_query;
+#import bevy_solarik::scene_hit::scene_hit_is_miss
+
 #ifdef RAY_MATERIAL_FOOTPRINTS
 #import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, resolve_ray_hit_filtered}
 #endif
@@ -61,11 +63,11 @@ fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
     let ray = trace_ray(geometry_data.world_position + (geometry_data.world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, ray_max_distance(), RAY_FLAG_NONE);
     // trace_ray skips thin panes when finding the endpoint. Apply their energy
     // to this new cache sample once, excluding the endpoint itself.
-    let connection_distance = select(ray.t - RAY_T_MIN, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE);
+    let connection_distance = select(ray.t - RAY_T_MIN, ray_max_distance(), scene_hit_is_miss(ray));
     var pending = world_cache_active_cells_new_radiance[active_cell_id.x];
     pending.w = max(pending.w, connection_distance + 2.0 * RAY_T_MIN);
     let transmission = trace_shadow_transmission_impl(geometry_data.world_position + geometry_data.world_normal * RAY_T_MIN, ray_direction, connection_distance, false).rgb;
-    if ray.kind == RAY_QUERY_INTERSECTION_NONE {
+    if scene_hit_is_miss(ray) {
         // Escaped to the sky: cosine sampling turns radiance into irradiance
         // with a factor of pi, the same units the cached direct light is in.
         pending = vec4(pending.rgb + transmission * PI * sample_sky(ray_direction), pending.w);

@@ -1,4 +1,7 @@
 enable wgpu_ray_query;
+#import bevy_solarik::scene_hit::scene_hit_is_miss
+#import bevy_solarik::scene_bindings::{scene_hit_material, scene_hit_alpha, scene_requires_ordered_transport}
+
 
 #define_import_path bevy_solarik::sampling
 
@@ -439,23 +442,23 @@ fn trace_shadow_transmission_impl(origin: vec3<f32>, direction: vec3<f32>, ray_t
 fn trace_shadow_transmission_with_support(origin: vec3<f32>, direction: vec3<f32>, ray_t_max: f32, include_coverage: bool) -> ShadowTransmission {
     // Only actual admitted TLAS materials decide this shortcut. Mixed panes
     // and diffuse coverage retain the complete ordered transport below.
-    if (sky_light.material_transport_flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) == 0u {
+    if !scene_requires_ordered_transport() {
         // Both false callers have already traced visibility/the GI endpoint.
         if !include_coverage || ray_t_max < RAY_T_MIN { return ShadowTransmission(vec4(1.0), max(ray_t_max, 0.0)); }
         let hit = trace_ray(origin, direction, RAY_T_MIN, ray_t_max, RAY_FLAG_TERMINATE_ON_FIRST_HIT);
-        return ShadowTransmission(vec4(select(0.0, 1.0, hit.kind == RAY_QUERY_INTERSECTION_NONE)),
-            select(hit.t, ray_t_max, hit.kind == RAY_QUERY_INTERSECTION_NONE));
+        return ShadowTransmission(vec4(select(0.0, 1.0, scene_hit_is_miss(hit))),
+            select(hit.t, ray_t_max, scene_hit_is_miss(hit)));
     }
     var transmission = vec4(1.0);
     var ray_t_min = RAY_T_MIN;
     for (var panes = 0u; panes <= 32u; panes += 1u) {
         if ray_t_max < ray_t_min { return ShadowTransmission(transmission, max(ray_t_max, 0.0)); }
         let ray = trace_glass_ray(origin, direction, ray_t_min, ray_t_max);
-        if ray.kind == RAY_QUERY_INTERSECTION_NONE { return ShadowTransmission(transmission, ray_t_max); }
+        if scene_hit_is_miss(ray) { return ShadowTransmission(transmission, ray_t_max); }
         if panes == 32u { return ShadowTransmission(vec4(0.0), ray.t); }
-        let raw_material = materials[material_ids[ray.instance_custom_data]];
+        let raw_material = scene_hit_material(ray);
         let hit = resolve_ray_hit_full(ray);
-        let alpha = clamp(resolve_material_alpha(raw_material, hit.uv), 0.0, 1.0);
+        let alpha = clamp(scene_hit_alpha(ray, hit.uv), 0.0, 1.0);
         if (raw_material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
             let weights = thin_glass_weights(-direction, hit.geometric_world_normal,
                 hit.material.base_color, alpha, hit.material.reflectance);
@@ -486,7 +489,7 @@ fn trace_light_visibility(ray_origin: vec3<f32>, light_sample_world_position: ve
     if ray_t_max < RAY_T_MIN { return 0.0; }
 
     let ray_hit = trace_ray(ray_origin, ray_direction, RAY_T_MIN, ray_t_max, RAY_FLAG_TERMINATE_ON_FIRST_HIT);
-    return f32(ray_hit.kind == RAY_QUERY_INTERSECTION_NONE);
+    return f32(scene_hit_is_miss(ray_hit));
 }
 
 fn trace_point_visibility(ray_origin: vec3<f32>, point: vec3<f32>) -> f32 {
@@ -498,7 +501,7 @@ fn trace_point_visibility(ray_origin: vec3<f32>, point: vec3<f32>) -> f32 {
     if ray_t_max < RAY_T_MIN { return 0.0; }
 
     let ray_hit = trace_ray(ray_origin, ray_direction, RAY_T_MIN, ray_t_max, RAY_FLAG_TERMINATE_ON_FIRST_HIT);
-    return f32(ray_hit.kind == RAY_QUERY_INTERSECTION_NONE);
+    return f32(scene_hit_is_miss(ray_hit));
 }
 
 // https://www.realtimerendering.com/raytracinggems/unofficial_RayTracingGems_v1.9.pdf#0004286901.INDD%3ASec22%3A297

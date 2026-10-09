@@ -1,4 +1,7 @@
 enable wgpu_ray_query;
+#import bevy_solarik::scene_hit::scene_hit_is_miss
+#import bevy_solarik::scene_bindings::{scene_hit_material, scene_hit_alpha}
+
 #ifdef RAY_MATERIAL_FOOTPRINTS
 #import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, scatter_ray_cone, resolve_ray_hit_filtered}
 #endif
@@ -59,8 +62,8 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
         for (var panes = 0u; panes <= 32u; panes += 1u) {
             let ray = trace_glass_ray(origin, wi, RAY_T_MIN, ray_max_distance());
             radiance += throughput * analytic_light_radiance(origin, wi,
-                select(ray.t, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE), delta, previous_position);
-            if ray.kind == RAY_QUERY_INTERSECTION_NONE {
+                select(ray.t, ray_max_distance(), scene_hit_is_miss(ray)), delta, previous_position);
+            if scene_hit_is_miss(ray) {
                 return radiance + throughput * sample_sky(wi);
             }
 #ifdef RAY_MATERIAL_FOOTPRINTS
@@ -69,11 +72,11 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
 #else
             let candidate = resolve_ray_hit_full(ray);
 #endif
-            let raw = materials[material_ids[ray.instance_custom_data]];
+            let raw = scene_hit_material(ray);
             let glass = (raw.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u;
             let coverage = (raw.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u;
             if (glass || coverage) && panes == 32u { return radiance; }
-            let alpha = clamp(resolve_material_alpha(raw, candidate.uv), 0.0, 1.0);
+            let alpha = clamp(scene_hit_alpha(ray, candidate.uv), 0.0, 1.0);
             if coverage && rand_f(rng) >= alpha {
                 path_pdf *= 1.0 - alpha;
                 origin = offset_thin_glass_ray(candidate.world_position, candidate.geometric_world_normal, wi, RAY_T_MIN);

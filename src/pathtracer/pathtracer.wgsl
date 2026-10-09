@@ -1,4 +1,7 @@
 enable wgpu_ray_query;
+#import bevy_solarik::scene_hit::scene_hit_is_miss
+#import bevy_solarik::scene_bindings::{scene_hit_material, scene_hit_alpha}
+
 #ifdef RAY_MATERIAL_FOOTPRINTS
 #import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, scatter_ray_cone, resolve_ray_hit_filtered}
 #endif
@@ -54,8 +57,8 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     loop {
         let ray = trace_glass_ray(ray_origin, ray_direction, ray_t_min, ray_max_distance());
         radiance += throughput * analytic_light_radiance(ray_origin, ray_direction,
-            select(ray.t, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
-        if ray.kind != RAY_QUERY_INTERSECTION_NONE {
+            select(ray.t, ray_max_distance(), scene_hit_is_miss(ray)), analytic_owned, previous_scatter_position);
+        if !scene_hit_is_miss(ray) {
 #ifdef RAY_MATERIAL_FOOTPRINTS
             cone = advance_ray_cone(cone, ray.t);
             let ray_hit = resolve_ray_hit_filtered(ray, ray_direction, cone);
@@ -63,9 +66,9 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let ray_hit = resolve_ray_hit_full(ray);
 #endif
             let wo = -ray_direction;
-            let material = materials[material_ids[ray.instance_custom_data]];
+            let material = scene_hit_material(ray);
             if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
-                let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+                let alpha = clamp(scene_hit_alpha(ray, ray_hit.uv), 0.0, 1.0);
                 if rand_f(&rng) >= alpha {
                     if glass_interactions >= 32u { break; }
                     glass_interactions += 1u;
@@ -82,7 +85,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // opaque BRDF path. Truncation loses only the remaining energy.
                 if glass_interactions >= 32u { break; }
                 glass_interactions += 1u;
-                let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+                let alpha = clamp(scene_hit_alpha(ray, ray_hit.uv), 0.0, 1.0);
                 var emission_weight = 1.0;
                 if p_bounce != 0.0 {
                     emission_weight = power_heuristic(p_bounce, random_emissive_light_solid_angle_pdf(ray_hit, previous_scatter_position));

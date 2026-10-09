@@ -66,6 +66,7 @@ impl Plugin for RaytracingScenePlugin {
         load_shader_library!(app, "brdf.wgsl");
         load_shader_library!(app, "light_medium.wgsl");
         load_shader_library!(app, "thin_glass.wgsl");
+        load_shader_library!(app, "scene_hit.wgsl");
         load_shader_library!(app, "raytracing_scene_bindings.wgsl");
         load_shader_library!(app, "sampling.wgsl");
 

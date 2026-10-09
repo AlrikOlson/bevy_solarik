@@ -1,5 +1,7 @@
 // https://intro-to-restir.cwyman.org/presentations/2023ReSTIR_Course_Notes.pdf
 enable wgpu_ray_query;
+#import bevy_solarik::scene_hit::scene_hit_is_miss
+
 #ifdef RAY_MATERIAL_FOOTPRINTS
 #import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, resolve_ray_hit_filtered}
 #endif
@@ -114,7 +116,7 @@ fn generate_initial_reservoir(world_position: vec3<f32>, world_normal: vec3<f32>
     }
     let ray = trace_ray(world_position + (world_normal * RAY_T_MIN), ray_direction, RAY_T_MIN, ray_max_distance(), RAY_FLAG_NONE);
 
-    if ray.kind == RAY_QUERY_INTERSECTION_NONE {
+    if scene_hit_is_miss(ray) {
         // The ray left the scene: it sees the sky. The sample point is a far
         // point on the ray facing back at us, so reuse, the jacobian and the
         // neighbours' visibility test work as for any other sample; its

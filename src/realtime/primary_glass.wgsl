@@ -1,4 +1,7 @@
 enable wgpu_ray_query;
+#import bevy_solarik::scene_hit::scene_hit_is_miss
+#import bevy_solarik::scene_bindings::{scene_hit_material, scene_hit_alpha}
+
 #ifdef RAY_MATERIAL_FOOTPRINTS
 #import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, resolve_ray_hit_filtered}
 #endif
@@ -51,8 +54,8 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
         let remaining = max_distance - dot(origin - initial_origin, direction);
         if remaining <= RAY_T_MIN { return vec4(radiance + transmission * background, has_glass); }
         let ray = trace_glass_ray(origin, direction, RAY_T_MIN, remaining);
-        if ray.kind == RAY_QUERY_INTERSECTION_NONE { return vec4(radiance + transmission * background, has_glass); }
-        let material = materials[material_ids[ray.instance_custom_data]];
+        if scene_hit_is_miss(ray) { return vec4(radiance + transmission * background, has_glass); }
+        let material = scene_hit_material(ray);
 #ifdef RAY_MATERIAL_FOOTPRINTS
         cone = advance_ray_cone(cone, ray.t);
 #endif
@@ -79,7 +82,7 @@ fn composite_primary_glass(pixel_id: vec2u, initial_origin: vec3f, direction: ve
 #else
         let hit = resolve_ray_hit_full(ray);
 #endif
-        let alpha = clamp(resolve_material_alpha(material, hit.uv), 0.0, 1.0);
+        let alpha = clamp(scene_hit_alpha(ray, hit.uv), 0.0, 1.0);
         if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
             var surface_radiance = vec3(0.0);
             if alpha > 0.0 {

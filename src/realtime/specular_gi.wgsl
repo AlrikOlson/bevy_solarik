@@ -1,4 +1,7 @@
 enable wgpu_ray_query;
+#import bevy_solarik::scene_hit::scene_hit_is_miss
+#import bevy_solarik::scene_bindings::{scene_hit_material, scene_hit_alpha}
+
 #ifdef RAY_MATERIAL_FOOTPRINTS
 #import bevy_solarik::scene_bindings::{primary_ray_cone, advance_ray_cone, scatter_ray_cone, resolve_ray_hit_filtered}
 #endif
@@ -114,8 +117,8 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         // Trace ray
         let ray = trace_glass_ray(ray_origin, wi, RAY_T_MIN, ray_max_distance());
         radiance += throughput * analytic_light_radiance(ray_origin, wi,
-            select(ray.t, ray_max_distance(), ray.kind == RAY_QUERY_INTERSECTION_NONE), analytic_owned, previous_scatter_position);
-        if ray.kind == RAY_QUERY_INTERSECTION_NONE {
+            select(ray.t, ray_max_distance(), scene_hit_is_miss(ray)), analytic_owned, previous_scatter_position);
+        if scene_hit_is_miss(ray) {
             // The ray left the scene: it sees the sky. Nothing else samples
             // the sky for this lobe (the sky is not in the light list), so
             // the whole contribution belongs here.
@@ -128,12 +131,12 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
 #else
         let ray_hit = resolve_ray_hit_full(ray);
 #endif
-        let material = materials[material_ids[ray.instance_custom_data]];
+        let material = scene_hit_material(ray);
         if (material.flags & MATERIAL_FLAG_DIFFUSE_BLEND) != 0u {
 #ifdef DLSS_RR_GUIDE_BUFFERS
             psr_finished = true;
 #endif
-            let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+            let alpha = clamp(scene_hit_alpha(ray, ray_hit.uv), 0.0, 1.0);
             if rand_f(rng) >= alpha {
                 if glass_interactions >= 32u { break; }
                 glass_interactions += 1u;
@@ -146,7 +149,7 @@ fn trace_glossy_path(pixel_id: vec2<u32>, primary_surface: ResolvedGPixel, initi
         if (material.flags & MATERIAL_FLAG_ALPHA_BLEND) != 0u {
             if glass_interactions >= 32u { break; }
             glass_interactions += 1u;
-            let alpha = clamp(resolve_material_alpha(material, ray_hit.uv), 0.0, 1.0);
+            let alpha = clamp(scene_hit_alpha(ray, ray_hit.uv), 0.0, 1.0);
             let emission_weight = select(
                 emissive_mis_weight(i, primary_surface.material.roughness, p_bounce, ray_hit, previous_scatter_position),
                 1.0, delta_reflection);

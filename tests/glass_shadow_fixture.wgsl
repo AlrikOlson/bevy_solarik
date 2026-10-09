@@ -1,3 +1,8 @@
+// Synthetic scene I/O for the renderer-owned query boundary.
+fn scene_hit_is_miss(ray: Ray) -> bool { return ray.kind == 0u; }
+fn scene_hit_material(ray: Ray) -> RawMaterial { return materials[material_ids[ray.instance_custom_data]]; }
+fn scene_hit_alpha(ray: Ray, uv: vec2f) -> f32 { return resolve_material_alpha(scene_hit_material(ray), uv); }
+fn scene_requires_ordered_transport() -> bool { return (sky_light.material_transport_flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) != 0u; }
 struct RawMaterial { flags: u32 }
 struct ResolvedMaterial { base_color: vec3f, reflectance: f32 }
 struct ResolvedRayHitFull { world_position: vec3f, geometric_world_normal: vec3f, material: ResolvedMaterial, uv: vec2f }

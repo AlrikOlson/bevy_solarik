@@ -1,3 +1,6 @@
+
+// Synthetic scene I/O for the renderer-owned query boundary.
+fn scene_hit_is_miss(ray: Ray) -> bool { return ray.kind == 0u; }
 // Deterministic scene I/O; all endpoint generation, cache mixing and reuse are production WGSL.
 @group(0) @binding(0) var<storage, read> config: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> output: array<vec4<f32>>;

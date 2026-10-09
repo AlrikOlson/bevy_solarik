@@ -1,4 +1,6 @@
 //! Production bounded surface paths: complementary BSDF/NEE through thin panes.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -57,7 +59,7 @@ fn surface_shadow_gpu() {
         }
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production emitter MIS"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: wgpu::ShaderSource::Wgsl(preprocess::select(&source, &[]).into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
