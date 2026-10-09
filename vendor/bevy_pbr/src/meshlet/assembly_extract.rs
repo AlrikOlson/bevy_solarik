@@ -122,7 +122,6 @@ impl Sources<'_> {
         Some((root, bounds, depth, alpha?))
     }
 }
-#[allow(clippy::too_many_arguments)]
 pub(super) fn extract(
     manager: &mut InstanceManager,
     rows: &AssemblyRows<'_, '_>,
@@ -191,7 +190,6 @@ fn retire_tail(
             }),
     );
 }
-#[allow(clippy::too_many_arguments)]
 fn update_root(
     manager: &mut InstanceManager,
     root: Entity,

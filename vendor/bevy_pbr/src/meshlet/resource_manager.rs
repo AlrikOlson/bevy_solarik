@@ -77,6 +77,16 @@ pub struct ResourceManager {
 
 impl ResourceManager {
     pub fn new(cluster_buffer_slots: u32, render_device: &RenderDevice) -> Self {
+        let queue_storage_bytes = super::MeshletPlugin::validate_queue_capacity(
+            cluster_buffer_slots,
+            &render_device.limits(),
+        )
+        .expect("unsupported meshlet queue capacity");
+        tracing::info!(
+            cluster_buffer_slots,
+            queue_storage_bytes,
+            "Meshlet queue budget"
+        );
         let needs_dispatch_remap =
             cluster_buffer_slots > render_device.limits().max_compute_workgroups_per_dimension;
         // The IDs are a (u32, u32) of instance and index.
@@ -781,7 +791,7 @@ pub fn prepare_meshlet_per_frame_resources(
         // dispatch; both raster phases then share monotonically increasing depth.
         let requested_bytes = u64::from(view.viewport.z) * u64::from(view.viewport.w) * 4;
         let early_depth_size = if early_visibility
-            && requested_bytes <= u64::from(render_device.limits().max_storage_buffer_binding_size)
+            && requested_bytes <= render_device.limits().max_storage_buffer_binding_size
         {
             requested_bytes.max(4)
         } else {

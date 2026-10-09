@@ -71,6 +71,10 @@ use core::{
 use smallvec::SmallVec;
 use tracing::error;
 
+#[cfg(all(test, feature = "meshlet"))]
+#[path = "material_sweep_tests.rs"]
+mod material_sweep_tests;
+
 pub const MATERIAL_BIND_GROUP_INDEX: usize = 3;
 
 /// Materials are used alongside [`MaterialPlugin`], [`Mesh3d`], and [`MeshMaterial3d`]
@@ -734,7 +738,7 @@ fn early_sweep_material_instances<M>(
 }
 
 /// Removes mesh materials from [`RenderMaterialInstances`] when their
-/// [`ViewVisibility`] components are removed.
+/// ordinary [`Mesh3d`] components are removed without a remaining virtual mesh.
 ///
 /// This runs after all invocations of `early_sweep_material_instances` and is
 /// responsible for bumping [`RenderMaterialInstances::current_change_tick`] in
@@ -742,10 +746,17 @@ fn early_sweep_material_instances<M>(
 pub fn late_sweep_material_instances(
     mut material_instances: ResMut<RenderMaterialInstances>,
     mut removed_meshes_query: Extract<RemovedComponents<Mesh3d>>,
+    #[cfg(feature = "meshlet")] virtual_meshes: Extract<Query<(), With<meshlet::MeshletMesh3d>>>,
 ) {
     let last_change_tick = material_instances.current_change_tick;
 
     for entity in removed_meshes_query.read() {
+        // Changing raster paths does not remove the material owner. Its unchanged
+        // MeshMaterial3d will not be extracted again just because Mesh3d vanished.
+        #[cfg(feature = "meshlet")]
+        if virtual_meshes.contains(entity) {
+            continue;
+        }
         // A material of another type inserted this frame owns the membership.
         let entity = MainEntity::from(entity);
         if material_instances

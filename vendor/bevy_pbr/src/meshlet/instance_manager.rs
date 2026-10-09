@@ -151,7 +151,7 @@ pub struct InstanceManager {
     binding_slots: Vec<u32>,
     bvh_depths: Vec<u32>,
     instance_material_assets: Vec<UntypedAssetId>,
-    /// Includes shared parts without a standalone MeshMaterial3d owner.
+    /// Includes shared parts without a standalone `MeshMaterial3d` owner.
     scene_metadata: scene_metadata::SceneMetadata,
     unresolved_material_instances: usize,
     /// Persistent instance buffers only need publication after exact scene changes.
@@ -674,11 +674,13 @@ pub fn extract_meshlet_mesh_entities(
         instance_manager.material_receipt != mesh_material_ids.instances.receipt();
     let bindings_changed =
         !binding_slots_match(&instance_manager.binding_receipt, &render_material_bindings);
+    let bindings_invalidated =
+        binding_slots_invalidated(&instance_manager.binding_receipt, &render_material_bindings);
     let assembly_roots = assembly_extract::targets(
         &instance_manager,
         &assemblies_query,
         assembly_changes.collect(),
-        force_rebuild || bindings_changed,
+        force_rebuild || bindings_invalidated,
     );
     let unchanged_inputs = input_changes.unchanged()
         && instances_query.iter().len() == instance_manager.query_slots.len()
@@ -840,7 +842,7 @@ pub fn extract_meshlet_mesh_entities(
         &mut instance_manager,
         &assemblies_query,
         &assembly_roots,
-        force_rebuild || bindings_changed,
+        force_rebuild || bindings_invalidated,
         &asset_server,
         &mut assets,
         &mut meshlet_mesh_manager,
@@ -901,6 +903,19 @@ fn serialization_bytes(manager: &InstanceManager) -> usize {
         + manager.active_indices.cpu_backing_bytes()
         + manager.assembly_groups.cpu_backing_bytes()
         + manager.assembly_members.cpu_backing_bytes()
+}
+
+// Newly available materials are handled by changed or pending assembly roots.
+// Only removing or remapping an existing slot invalidates retained ready roots.
+fn binding_slots_invalidated(
+    slots: &HashMap<UntypedAssetId, u32>,
+    bindings: &RenderMaterialBindings,
+) -> bool {
+    slots.iter().any(|(id, slot)| {
+        bindings
+            .get(id)
+            .is_none_or(|binding| binding.slot.0 != *slot)
+    })
 }
 
 fn binding_slots_match(

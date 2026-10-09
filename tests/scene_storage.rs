@@ -18,8 +18,14 @@ fn packed_publication_shares_staging_and_preserves_queued_source_lifetimes() {
             }
             let first = a.stage_buffer_indices(&device, &queue, &indices, &mut batch);
             let second = b.stage_buffer_indices(&device, &queue, &indices, &mut batch);
-            assert_eq!(first.ranges + second.ranges, 8192);
-            assert_eq!(batch.finish(&device, &queue), (32_768, 1));
+            assert!(
+                first.ranges + second.ranges <= 256,
+                "fragmented copies are bounded"
+            );
+            assert_eq!(
+                batch.finish(&device, &queue),
+                (first.bytes + second.bytes, 1)
+            );
         }
         // No CPU/GPU wait between generations: submitted copies must retain
         // their own data, and later writes must win for every destination.
@@ -47,6 +53,60 @@ fn packed_publication_splits_large_ranges_without_losing_boundaries() {
         let upload = values.stage_buffer_indices(&device, &queue, &indices, &mut batch);
         assert_eq!(upload.ranges, 1);
         assert_eq!(batch.finish(&device, &queue), (count as u64 * 4, 2));
+        assert_eq!(read(&device, &queue, &values)[1..], *values.get());
+    });
+}
+
+#[test]
+fn incremental_growth_reserves_capacity_without_exposing_spare_records() {
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        let mut values = StorageBuffer::from(vec![31u32; 1024]);
+        let mut allocations =
+            usize::from(values.write_buffer_indices(&device, &queue, &[]).allocated);
+        for generation in 1..=30u32 {
+            let first = values.get().len() as u32;
+            let end = first + 4096;
+            values.get_mut().resize(end as usize, generation);
+            let dirty: Vec<_> = (first..end).collect();
+            allocations += usize::from(
+                values
+                    .write_buffer_indices(&device, &queue, &dirty)
+                    .allocated,
+            );
+        }
+        assert!(
+            allocations <= 4,
+            "stream growth must amortize allocations: {allocations}"
+        );
+        let actual = read(&device, &queue, &values);
+        assert_eq!(actual[0] as usize, values.get().len());
+        assert_eq!(actual[1..], *values.get());
+    });
+}
+
+#[test]
+fn fragmented_uploads_preserve_unmarked_values_inside_merged_gaps() {
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        let mut values = StorageBuffer::from(vec![17u32; 16_384]);
+        values.write_buffer_indices(&device, &queue, &[]);
+        let indices: Vec<_> = (0..16_384).step_by(4).collect();
+        let mut expected = values.get().clone();
+        for &index in &indices {
+            values.get_mut()[index as usize] = index + 91;
+            expected[index as usize] = index + 91;
+        }
+        // A CPU-side change without a dirty index must not leak through a gap.
+        values.get_mut()[7] = u32::MAX;
+        let upload = values.write_buffer_indices(&device, &queue, &indices);
+        assert!(upload.ranges <= 128, "fragmented copies are bounded");
+        assert_eq!(read(&device, &queue, &values)[1..], expected);
+        assert_eq!(
+            values.write_buffer_indices(&device, &queue, &indices).bytes,
+            0
+        );
+        values.write_buffer_indices(&device, &queue, &[7]);
         assert_eq!(read(&device, &queue, &values)[1..], *values.get());
     });
 }

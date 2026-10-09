@@ -1,5 +1,8 @@
 use core::marker::PhantomData;
 
+#[path = "storage_publication.rs"]
+mod publication;
+
 use super::{Buffer, StorageBufferUploadBatch};
 use crate::{
     render_resource::make_buffer_label,
@@ -204,7 +207,8 @@ impl<T: ShaderType + WriteInto> StorageBuffer<T> {
         let capacity = self.buffer.as_deref().map(wgpu::Buffer::size).unwrap_or(0);
         let allocated = capacity < size || self.changed || self.buffer.is_none();
         let ranges = if allocated {
-            let allocation_size = size.max(4).next_multiple_of(64 * 1024);
+            let allocation_size =
+                publication::allocation_size(size, device.limits().max_buffer_size);
             self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: make_buffer_label::<Self>(&self.label),
                 size: allocation_size,
@@ -285,6 +289,8 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
     /// Stage exact changed records into an owning system's shared upload batch.
     /// Initialization still uses one full write; sparse publications share a
     /// bounded source allocation instead of allocating once per dirty range.
+    /// More than 128 dirty runs coalesce into 64 KiB pages (or one full copy),
+    /// preserving the last published bytes between explicitly changed records.
     pub fn stage_buffer_indices(
         &mut self,
         device: &RenderDevice,
@@ -381,7 +387,7 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
         batch: &mut StorageBufferUploadBatch,
     ) -> StorageBufferUpload {
         let mut upload = StorageBufferUpload::default();
-        for range in ranges {
+        for range in publication::upload_ranges(ranges, self.last_uploaded.len()) {
             batch.push(
                 device,
                 queue,

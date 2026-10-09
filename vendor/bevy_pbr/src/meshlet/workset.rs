@@ -67,7 +67,7 @@ impl MeshletMesh {
             meshlet_cull_data: self.meshlet_cull_data.clone(),
         }
     }
-    /// See [MeshletWorksetSource::workset_profile_range].
+    /// See [`MeshletWorksetSource::workset_profile_range`].
     pub fn workset_profile_range(
         &self,
         root_from_mesh: Mat4,
@@ -84,7 +84,7 @@ impl MeshletMesh {
             near_plane,
         )
     }
-    /// See [MeshletWorksetSource::workset_profile].
+    /// See [`MeshletWorksetSource::workset_profile`].
     pub fn workset_profile(
         &self,
         root_from_mesh: Mat4,

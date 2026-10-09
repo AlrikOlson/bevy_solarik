@@ -453,6 +453,36 @@ fn cached_query_reordering_repairs_slots_without_publication() {
 }
 
 #[test]
+fn new_materials_preserve_existing_assembly_slots_but_remaps_and_removals_do_not() {
+    let id = DUMMY_MESH_MATERIAL.untyped();
+    let mut assets = Assets::<crate::StandardMaterial>::default();
+    let other = assets
+        .add(crate::StandardMaterial::default())
+        .id()
+        .untyped();
+    let mut bindings = RenderMaterialBindings::default();
+    bindings.insert(id, MaterialBindingId::default());
+    let mut slots = HashMap::default();
+    slots.insert(id, 0);
+    assert!(!binding_slots_invalidated(&slots, &bindings));
+
+    bindings.insert(other, MaterialBindingId::default());
+    assert!(!binding_slots_match(&slots, &bindings));
+    assert!(!binding_slots_invalidated(&slots, &bindings));
+
+    bindings.get_mut(&id).unwrap().slot.0 = 7;
+    assert!(binding_slots_invalidated(&slots, &bindings));
+    slots.insert(id, 7);
+    assert!(!binding_slots_invalidated(&slots, &bindings));
+    bindings.remove(&other);
+    assert!(!binding_slots_invalidated(&slots, &bindings));
+    bindings.remove(&id);
+    assert!(binding_slots_invalidated(&slots, &bindings));
+    slots.clear();
+    assert!(!binding_slots_invalidated(&slots, &bindings));
+}
+
+#[test]
 fn persistent_binding_receipt_invalidates_slot_changes_additions_and_removals() {
     let id = DUMMY_MESH_MATERIAL.untyped();
     let mut bindings = RenderMaterialBindings::default();

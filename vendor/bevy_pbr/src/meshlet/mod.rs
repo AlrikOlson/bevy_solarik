@@ -123,13 +123,30 @@ pub struct MeshletPlugin {
     ///
     /// If this number is too low, you'll see rendering artifacts like missing or blinking meshes.
     ///
-    /// Each cluster slot costs 4 bytes of VRAM.
+    /// Four shared queues each store an 8-byte (instance, index) pair per slot.
+    /// Their fixed allocation therefore costs 32 bytes of VRAM per slot.
     ///
     /// Must not be greater than 2^25.
     pub cluster_buffer_slots: u32,
 }
 
 impl MeshletPlugin {
+    /// Validate all four queue allocations against device and packed-index limits.
+    /// Returns their total fixed bytes, excluding geometry, images and scratch.
+    pub fn validate_queue_capacity(
+        slots: u32,
+        limits: &bevy_render::settings::WgpuLimits,
+    ) -> Result<u64, &'static str> {
+        if slots == 0 || slots > (1 << 25) {
+            return Err("meshlet queue slots must be in 1..=2^25");
+        }
+        let one_queue = u64::from(slots) * 8;
+        if one_queue > limits.max_buffer_size || one_queue > limits.max_storage_buffer_binding_size
+        {
+            return Err("meshlet queue exceeds the device buffer or storage binding limit");
+        }
+        Ok(one_queue * 4)
+    }
     /// [`WgpuFeatures`] required for this plugin to function.
     pub fn required_wgpu_features() -> WgpuFeatures {
         WgpuFeatures::TEXTURE_INT64_ATOMIC
@@ -140,6 +157,10 @@ impl MeshletPlugin {
             | WgpuFeatures::IMMEDIATES
     }
 }
+
+#[cfg(test)]
+#[path = "queue_budget_tests.rs"]
+mod queue_budget_tests;
 
 impl Plugin for MeshletPlugin {
     fn build(&self, app: &mut App) {
