@@ -104,6 +104,10 @@ fn source_spatial_maps_partition_original_surfaces_without_inventing_coverage() 
     let output = std::env::var("SOLARIK_COARSE_OUTPUT").unwrap();
     let identity = identity("SOLARIK_SPATIAL_IDENTITY");
     let source_identity = self::identity("SOLARIK_COARSE_IDENTITY");
+    let levels = coarse_cache::parse_levels(
+        &std::env::var("SOLARIK_COARSE_LEVELS").unwrap_or_else(|_| "16,32".into()),
+    )
+    .expect("bounded spatial source levels");
     bevy_platform::future::block_on(async {
         let resources = initialize_headless_renderer(&WgpuSettings {
             backends: Some(wgpu::Backends::VULKAN),
@@ -128,7 +132,7 @@ fn source_spatial_maps_partition_original_surfaces_without_inventing_coverage() 
             original.rays = vec![[0.; 8]];
             let scene = acceleration::build(device, queue, &original);
             let prepare_seconds = started.elapsed().as_secs_f64();
-            for resolution in [16, 32] {
+            for &resolution in &levels {
                 let started = Instant::now();
                 let bytes = std::fs::read(
                     Path::new(&coverage).join(format!("source-{id}-r{resolution}.sfcg")),

@@ -45,6 +45,10 @@ fn spatial_source_materials_match_original_hit_selection() {
     let identity = identity("SOLARIK_MATERIAL_IDENTITY");
     let coverage_identity = self::identity("SOLARIK_COARSE_IDENTITY");
     let spatial_identity = self::identity("SOLARIK_SPATIAL_IDENTITY");
+    let levels = coarse_cache::parse_levels(
+        &std::env::var("SOLARIK_COARSE_LEVELS").unwrap_or_else(|_| "16,32".into()),
+    )
+    .expect("bounded spatial material levels");
     bevy_platform::future::block_on(async {
         let resources = initialize_headless_renderer(&WgpuSettings {
             backends: Some(wgpu::Backends::VULKAN),
@@ -87,7 +91,7 @@ fn spatial_source_materials_match_original_hit_selection() {
             );
             let (texture_error, math_error) = appearance_oracle::compare(&material, &rows);
             let prepare_seconds = started.elapsed().as_secs_f64();
-            for resolution in [16, 32] {
+            for &resolution in &levels {
                 let started = Instant::now();
                 let raw = std::fs::read(
                     Path::new(&coverage).join(format!("source-{id}-r{resolution}.sfcg")),
