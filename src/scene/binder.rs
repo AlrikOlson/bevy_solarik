@@ -510,7 +510,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             &blas_manager,
             &material_assets,
             &texture_assets,
-            (&detailed, &gaussian),
+            (&detailed, &gaussian, &lommel),
             [inputs.sky, inputs.weather, Some(inputs.dfg)],
         )
     };
@@ -518,13 +518,22 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     // Asset arrivals and BLAS compaction are publication events, not global
     // lighting changes. Used geometry/material dependencies invalidate their
     // old/new support; emitter, environment and unknown extensions remain global.
+    // Known material registries are diffed by used material in Dependencies.
+    // Preparing or evicting an unused terrain tile must not erase canopy GI.
     let global_history_change = changes.global
         || scene_cache.inputs.as_ref() != Some(&inputs)
         || collimated.is_changed()
-        || detailed.is_changed()
-        || gaussian.is_changed()
-        || lommel.is_changed()
         || fallback_texture.is_changed();
+    bevy_render::diagnostic::profile_value(
+        "scene.history_registry_changed",
+        f64::from(detailed.is_changed() || gaussian.is_changed() || lommel.is_changed()),
+        "count",
+    );
+    bevy_render::diagnostic::profile_value(
+        "scene.history_global_sources_changed",
+        f64::from(global_history_change),
+        "count",
+    );
     scene_cache.history_stable_radius = if global_history_change {
         0.0
     } else {

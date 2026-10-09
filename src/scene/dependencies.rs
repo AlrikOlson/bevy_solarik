@@ -1,4 +1,7 @@
 //! History depends on assets actually used by the scene, not unrelated arrivals.
+#[cfg(test)]
+#[path = "dependencies_tests.rs"]
+mod tests;
 use super::{
     binder::RayInstanceInput, blas::BlasManager, extract::StandardMaterialAssets, history::Bounds,
 };
@@ -89,6 +92,50 @@ fn material_state(material: &StandardMaterial, images: &RenderAssets<GpuImage>) 
         ready,
     }
 }
+type Extensions<'a> = (
+    &'a crate::surface_detail::DetailedRayMaterials,
+    &'a crate::gaussian::GaussianRayMaterials,
+    &'a crate::lommel::LommelRayMaterials,
+);
+
+fn extended_material_state(
+    id: AssetId<StandardMaterial>,
+    material: &StandardMaterial,
+    images: &RenderAssets<GpuImage>,
+    (detailed, gaussian, lommel): Extensions<'_>,
+) -> MaterialState {
+    let mut state = material_state(material, images);
+    let detail = detailed.0.get(&id);
+    let water = gaussian.0.get(&id);
+    // Registry membership is not itself a scene-wide lighting change. Seal
+    // every parameter of the extensions actually used by this material.
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    state.hash.hash(&mut hash);
+    format!("{detail:?}").hash(&mut hash);
+    format!("{water:?}").hash(&mut hash);
+    lommel.0.contains(&id).hash(&mut hash);
+    state.hash = hash.finish();
+    let mut additional = Vec::new();
+    if let Some(detail) = detail {
+        additional.extend([
+            detail.coverage0.id(),
+            detail.coverage1.id(),
+            detail.colour.id(),
+            detail.detail.id(),
+            detail.meso_colour.id(),
+            detail.meso_detail.id(),
+        ]);
+        additional.extend(detail.gaussian_mask.as_ref().map(Handle::id));
+    }
+    additional.extend(water.map(|water| water.mask.id()));
+    for id in additional {
+        let image = image_state(images, Some(id));
+        state.ready &= image.is_some();
+        state.images.push(image);
+    }
+    state
+}
+
 impl Dependencies {
     pub fn observe(
         &mut self,
@@ -96,10 +143,7 @@ impl Dependencies {
         blas: &BlasManager,
         materials: &StandardMaterialAssets,
         images: &RenderAssets<GpuImage>,
-        extensions: (
-            &crate::surface_detail::DetailedRayMaterials,
-            &crate::gaussian::GaussianRayMaterials,
-        ),
+        extensions: Extensions<'_>,
         global_images: [Option<AssetId<Image>>; 3],
     ) -> Changes {
         let mut mesh_ids: HashSet<AssetId<Mesh>> = HashSet::default();
@@ -137,29 +181,9 @@ impl Dependencies {
         }
         let mut next_materials = HashMap::default();
         for id in material_ids {
-            let state = materials.get(&id).map(|m| {
-                let mut state = material_state(m, images);
-                let mut additional = Vec::new();
-                if let Some(detail) = extensions.0.0.get(&id) {
-                    additional.extend([
-                        detail.coverage0.id(),
-                        detail.coverage1.id(),
-                        detail.colour.id(),
-                        detail.detail.id(),
-                        detail.meso_colour.id(),
-                        detail.meso_detail.id(),
-                    ]);
-                }
-                if let Some(gaussian) = extensions.1.0.get(&id) {
-                    additional.push(gaussian.mask.id());
-                }
-                state.images.extend(
-                    additional
-                        .into_iter()
-                        .map(|id| image_state(images, Some(id))),
-                );
-                state
-            });
+            let state = materials
+                .get(&id)
+                .map(|material| extended_material_state(id, material, images, extensions));
             let old = self.materials.get(&id);
             if old.is_some_and(|m| m.emitter) {
                 changes.old_emitters.insert(id);

@@ -40,10 +40,6 @@ fn lod_error_is_imperceptible(lod_sphere: vec4<f32>, simplification_error: f32, 
     }
 }
 
-fn normalize_plane(p: vec4<f32>) -> vec4<f32> {
-    return p / length(p.xyz);
-}
-
 // https://fgiesen.wordpress.com/2012/08/31/frustum-planes-from-the-projection-matrix/
 // https://fgiesen.wordpress.com/2010/10/17/view-frustum-culling/
 fn aabb_in_frustum(aabb: MeshletAabb, instance_id: u32) -> bool {
@@ -55,11 +51,18 @@ fn aabb_in_frustum(aabb: MeshletAabb, instance_id: u32) -> bool {
         row_major[3] - row_major[0],
         row_major[3] + row_major[1],
         row_major[3] - row_major[1],
+        // Reverse-Z near plane. row 2 is the infinite far plane for a
+        // perspective view and has a zero normal; normalizing it creates NaNs.
+        row_major[3] - row_major[2],
+        // Keep the far half-space for finite orthographic/shadow projections.
+        // The infinite perspective plane is harmless without normalization.
         row_major[2],
     );
 
-    for (var i = 0; i < 5; i++) {
-        let plane = normalize_plane(planes[i]);
+    for (var i = 0; i < 6; i++) {
+        // Only the half-space sign matters. Keep planes unnormalized so the
+        // test also remains defined for degenerate source transforms.
+        let plane = planes[i];
         let flipped = aabb.half_extent * sign(plane.xyz);
         if dot(aabb.center + flipped, plane.xyz) <= -plane.w {
             return false;

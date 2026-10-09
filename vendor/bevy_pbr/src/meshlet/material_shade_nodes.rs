@@ -6,7 +6,7 @@ use super::{
     },
     resource_manager::{MeshletViewBindGroups, MeshletViewResources},
 };
-use crate::{MeshViewBindGroup, PrepassViewBindGroup};
+use crate::{MaterialBindGroupAllocators, MeshViewBindGroup, PrepassViewBindGroup};
 use bevy_camera::MainPassResolutionOverride;
 use bevy_camera::Viewport;
 use bevy_core_pipeline::prepass::{
@@ -38,6 +38,7 @@ pub fn meshlet_main_opaque_pass(
     )>,
     instance_manager: Res<InstanceManager>,
     pipeline_cache: Res<PipelineCache>,
+    material_allocators: Res<MaterialBindGroupAllocators>,
     mut ctx: RenderContext,
 ) {
     let (
@@ -98,12 +99,12 @@ pub fn meshlet_main_opaque_pass(
     render_pass.set_bind_group(2, meshlet_material_shade_bind_group, &[]);
 
     // 1 fullscreen triangle draw per material
-    for (material_id, material_pipeline_id, material_bind_group) in meshlet_view_materials.iter() {
-        if instance_manager.material_present_in_scene(material_id)
-            && let Some(material_pipeline) =
-                pipeline_cache.get_render_pipeline(*material_pipeline_id)
+    for material in meshlet_view_materials.iter() {
+        if instance_manager.material_present_in_scene(&material.id)
+            && let Some(material_pipeline) = pipeline_cache.get_render_pipeline(material.pipeline)
+            && let Some(material_bind_group) = material.bind_group(&material_allocators)
         {
-            let x = *material_id * 3;
+            let x = material.id * 3;
             render_pass.set_render_pipeline(material_pipeline);
             render_pass.set_bind_group(3, material_bind_group, &[]);
             render_pass.draw(x..(x + 3), 0..1);
@@ -129,6 +130,7 @@ pub fn meshlet_prepass(
     prepass_view_bind_group: Res<PrepassViewBindGroup>,
     instance_manager: Res<InstanceManager>,
     pipeline_cache: Res<PipelineCache>,
+    material_allocators: Res<MaterialBindGroupAllocators>,
     mut ctx: RenderContext,
 ) {
     let (
@@ -217,12 +219,12 @@ pub fn meshlet_prepass(
     render_pass.set_bind_group(2, meshlet_material_shade_bind_group, &[]);
 
     // 1 fullscreen triangle draw per material
-    for (material_id, material_pipeline_id, material_bind_group) in meshlet_view_materials.iter() {
-        if instance_manager.material_present_in_scene(material_id)
-            && let Some(material_pipeline) =
-                pipeline_cache.get_render_pipeline(*material_pipeline_id)
+    for material in meshlet_view_materials.iter() {
+        if instance_manager.material_present_in_scene(&material.id)
+            && let Some(material_pipeline) = pipeline_cache.get_render_pipeline(material.pipeline)
+            && let Some(material_bind_group) = material.bind_group(&material_allocators)
         {
-            let x = *material_id * 3;
+            let x = material.id * 3;
             render_pass.set_render_pipeline(material_pipeline);
             render_pass.set_bind_group(3, material_bind_group, &[]);
             render_pass.draw(x..(x + 3), 0..1);
@@ -247,6 +249,8 @@ pub fn meshlet_deferred_gbuffer_prepass(
     prepass_view_bind_group: Res<PrepassViewBindGroup>,
     instance_manager: Res<InstanceManager>,
     pipeline_cache: Res<PipelineCache>,
+    material_allocators: Res<MaterialBindGroupAllocators>,
+    frame: Res<bevy_diagnostic::FrameCount>,
     mut ctx: RenderContext,
 ) {
     let (
@@ -340,16 +344,34 @@ pub fn meshlet_deferred_gbuffer_prepass(
     render_pass.set_bind_group(2, meshlet_material_shade_bind_group, &[]);
 
     // 1 fullscreen triangle draw per material
-    for (material_id, material_pipeline_id, material_bind_group) in meshlet_view_materials.iter() {
-        if instance_manager.material_present_in_scene(material_id)
-            && let Some(material_pipeline) =
-                pipeline_cache.get_render_pipeline(*material_pipeline_id)
-        {
-            let x = *material_id * 3;
+    let mut draws = 0u32;
+    let mut missing_bindings = 0u32;
+    for material in meshlet_view_materials.iter() {
+        if !instance_manager.material_present_in_scene(&material.id) {
+            continue;
+        }
+        let Some(material_bind_group) = material.bind_group(&material_allocators) else {
+            missing_bindings += 1;
+            continue;
+        };
+        if let Some(material_pipeline) = pipeline_cache.get_render_pipeline(material.pipeline) {
+            let x = material.id * 3;
             render_pass.set_render_pipeline(material_pipeline);
             render_pass.set_bind_group(3, material_bind_group, &[]);
             render_pass.draw(x..(x + 3), 0..1);
+            draws += 1;
         }
     }
+    let _source = bevy_render::diagnostic::profile_source_frame(frame.0);
+    bevy_render::diagnostic::profile_value(
+        "meshlet.gbuffer_material_draws",
+        f64::from(draws),
+        "count",
+    );
+    bevy_render::diagnostic::profile_value(
+        "meshlet.gbuffer_missing_bindings",
+        f64::from(missing_bindings),
+        "count",
+    );
     span.end(&mut render_pass);
 }
