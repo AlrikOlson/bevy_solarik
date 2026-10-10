@@ -8,6 +8,7 @@
     meshlet_assembly_members,
 }
 #import bevy_pbr::meshlet_cull_shared::{aabb_in_frustum, should_occlusion_cull_aabb}
+#import bevy_pbr::meshlet_cull_dispatch::{cull_dispatch_size, cull_dispatch_index}
 
 const GROUP_BIT = 0x80000000u;
 
@@ -21,7 +22,11 @@ fn defer_candidate(candidate: u32) {
     // Thus the existing live-part-sized queue is a strict upper bound.
     let id = atomicAdd(&meshlet_second_pass_instance_count, 1u);
     meshlet_second_pass_instance_candidates[id] = candidate;
-    if (id & 127u) == 0u { atomicAdd(&meshlet_second_pass_instance_dispatch.x, 1u); }
+    if (id & 127u) == 0u {
+        let size = cull_dispatch_size(id + 1u, 128u);
+        atomicMax(&meshlet_second_pass_instance_dispatch.x, size.x);
+        atomicMax(&meshlet_second_pass_instance_dispatch.y, size.y);
+    }
 }
 #endif
 fn cull_part(instance_id: u32) {
@@ -35,7 +40,11 @@ fn cull_part(instance_id: u32) {
     }
     let id = atomicAdd(&meshlet_bvh_cull_count_write, 1u);
     meshlet_bvh_cull_queue[id] = InstancedOffset(instance_id, meshlet_instance_bvh_root_nodes[instance_id]);
-    if (id & 15u) == 0u { atomicAdd(&meshlet_bvh_cull_dispatch.x, 1u); }
+    if (id & 15u) == 0u {
+        let size = cull_dispatch_size(id + 1u, 16u);
+        atomicMax(&meshlet_bvh_cull_dispatch.x, size.x);
+        atomicMax(&meshlet_bvh_cull_dispatch.y, size.y);
+    }
 }
 fn cull_group(group_id: u32) {
     let group = meshlet_assembly_groups[group_id];
@@ -58,8 +67,8 @@ fn cull_group(group_id: u32) {
 }
 @compute
 @workgroup_size(128, 1, 1)
-fn cull_instances(@builtin(global_invocation_id) invocation: vec3<u32>) {
-    let id = invocation.x;
+fn cull_instances(@builtin(global_invocation_id) invocation: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    let id = cull_dispatch_index(invocation, groups);
 #ifdef MESHLET_FIRST_CULLING_PASS
     if id >= constants.scene_instance_count { return; }
     cull_group(id);

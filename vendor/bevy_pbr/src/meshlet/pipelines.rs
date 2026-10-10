@@ -53,12 +53,17 @@ pub struct MeshletPipelines {
 
 pub fn init_meshlet_pipelines(
     mut commands: Commands,
+    render_device: Res<bevy_render::renderer::RenderDevice>,
     resource_manager: Res<ResourceManager>,
     fullscreen_shader: Res<FullscreenShader>,
     downsample_shaders: Res<DownsampleShaders>,
     pipeline_cache: Res<PipelineCache>,
     asset_server: Res<AssetServer>,
 ) {
+    let cull_width = ShaderDefVal::UInt(
+        "CULL_DISPATCH_WIDTH".into(),
+        render_device.limits().max_compute_workgroups_per_dimension,
+    );
     let clear_visibility_buffer_bind_group_layout = resource_manager
         .clear_visibility_buffer_bind_group_layout
         .clone();
@@ -159,6 +164,7 @@ pub fn init_meshlet_pipelines(
             shader_defs: vec![
                 "MESHLET_INSTANCE_CULLING_PASS".into(),
                 "MESHLET_FIRST_CULLING_PASS".into(),
+                cull_width.clone(),
             ],
             ..default()
         }),
@@ -171,6 +177,7 @@ pub fn init_meshlet_pipelines(
             shader_defs: vec![
                 "MESHLET_INSTANCE_CULLING_PASS".into(),
                 "MESHLET_SECOND_CULLING_PASS".into(),
+                cull_width.clone(),
             ],
             ..default()
         }),
@@ -183,6 +190,7 @@ pub fn init_meshlet_pipelines(
             shader_defs: vec![
                 "MESHLET_BVH_CULLING_PASS".into(),
                 "MESHLET_FIRST_CULLING_PASS".into(),
+                cull_width.clone(),
             ],
             ..default()
         }),
@@ -195,6 +203,7 @@ pub fn init_meshlet_pipelines(
             shader_defs: vec![
                 "MESHLET_BVH_CULLING_PASS".into(),
                 "MESHLET_SECOND_CULLING_PASS".into(),
+                cull_width.clone(),
             ],
             ..default()
         }),
@@ -207,6 +216,7 @@ pub fn init_meshlet_pipelines(
             shader_defs: vec![
                 "MESHLET_CLUSTER_CULLING_PASS".into(),
                 "MESHLET_FIRST_CULLING_PASS".into(),
+                cull_width.clone(),
             ],
             ..default()
         }),
@@ -219,6 +229,7 @@ pub fn init_meshlet_pipelines(
             shader_defs: vec![
                 "MESHLET_CLUSTER_CULLING_PASS".into(),
                 "MESHLET_SECOND_CULLING_PASS".into(),
+                cull_width,
             ],
             ..default()
         }),

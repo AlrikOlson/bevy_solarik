@@ -72,6 +72,8 @@ struct DispatchIndirectArgs {
     z: u32,
 }
 
+#import bevy_pbr::meshlet_cull_dispatch::CullDispatchArgs
+
 struct DrawIndirectArgs {
     vertex_count: u32,
     instance_count: atomic<u32>,
@@ -108,13 +110,13 @@ var<immediate> constants: Constants;
 
 // BVH cull queue data
 @group(0) @binding(7) var<storage, read_write> meshlet_bvh_cull_count_write: atomic<u32>;
-@group(0) @binding(8) var<storage, read_write> meshlet_bvh_cull_dispatch: DispatchIndirectArgs;
+@group(0) @binding(8) var<storage, read_write> meshlet_bvh_cull_dispatch: CullDispatchArgs;
 @group(0) @binding(9) var<storage, read_write> meshlet_bvh_cull_queue: array<InstancedOffset>;
 
 // Second pass queue data
 #ifdef MESHLET_FIRST_CULLING_PASS
 @group(0) @binding(10) var<storage, read_write> meshlet_second_pass_instance_count: atomic<u32>;
-@group(0) @binding(11) var<storage, read_write> meshlet_second_pass_instance_dispatch: DispatchIndirectArgs;
+@group(0) @binding(11) var<storage, read_write> meshlet_second_pass_instance_dispatch: CullDispatchArgs;
 @group(0) @binding(12) var<storage, read_write> meshlet_second_pass_instance_candidates: array<u32>;
 @group(0) @binding(13) var<storage, read> meshlet_active_indices: array<u32>;
 @group(0) @binding(14) var<storage, read> meshlet_assembly_groups: array<AssemblyGroup>;
@@ -145,20 +147,20 @@ var<immediate> constants: Constants;
 // BVH cull queue data
 @group(0) @binding(5) var<storage, read> meshlet_bvh_cull_count_read: u32;
 @group(0) @binding(6) var<storage, read_write> meshlet_bvh_cull_count_write: atomic<u32>;
-@group(0) @binding(7) var<storage, read_write> meshlet_bvh_cull_dispatch: DispatchIndirectArgs;
+@group(0) @binding(7) var<storage, read_write> meshlet_bvh_cull_dispatch: CullDispatchArgs;
 @group(0) @binding(8) var<storage, read_write> meshlet_bvh_cull_queue: array<InstancedOffset>;
 
 // Meshlet cull queue data
 @group(0) @binding(9) var<storage, read_write> meshlet_meshlet_cull_count_early: atomic<u32>;
 @group(0) @binding(10) var<storage, read_write> meshlet_meshlet_cull_count_late: atomic<u32>;
-@group(0) @binding(11) var<storage, read_write> meshlet_meshlet_cull_dispatch_early: DispatchIndirectArgs;
-@group(0) @binding(12) var<storage, read_write> meshlet_meshlet_cull_dispatch_late: DispatchIndirectArgs;
+@group(0) @binding(11) var<storage, read_write> meshlet_meshlet_cull_dispatch_early: CullDispatchArgs;
+@group(0) @binding(12) var<storage, read_write> meshlet_meshlet_cull_dispatch_late: CullDispatchArgs;
 @group(0) @binding(13) var<storage, read_write> meshlet_meshlet_cull_queue: array<InstancedOffset>;
 
 // Second pass queue data
 #ifdef MESHLET_FIRST_CULLING_PASS
 @group(0) @binding(14) var<storage, read_write> meshlet_second_pass_bvh_count: atomic<u32>;
-@group(0) @binding(15) var<storage, read_write> meshlet_second_pass_bvh_dispatch: DispatchIndirectArgs;
+@group(0) @binding(15) var<storage, read_write> meshlet_second_pass_bvh_dispatch: CullDispatchArgs;
 @group(0) @binding(16) var<storage, read_write> meshlet_second_pass_bvh_queue: array<InstancedOffset>;
 @group(0) @binding(17) var<storage, read> meshlet_cull_data: array<MeshletCullData>;
 #else
@@ -193,7 +195,7 @@ var<immediate> constants: Constants;
 // Second pass queue data
 #ifdef MESHLET_FIRST_CULLING_PASS
 @group(0) @binding(10) var<storage, read_write> meshlet_meshlet_cull_count_write: atomic<u32>;
-@group(0) @binding(11) var<storage, read_write> meshlet_meshlet_cull_dispatch: DispatchIndirectArgs;
+@group(0) @binding(11) var<storage, read_write> meshlet_meshlet_cull_dispatch: CullDispatchArgs;
 @group(0) @binding(12) var<storage, read_write> meshlet_meshlet_cull_queue: array<InstancedOffset>;
 #else
 @group(0) @binding(10) var<storage, read> meshlet_meshlet_cull_queue: array<InstancedOffset>;

@@ -24,12 +24,13 @@
     aabb_in_frustum,
     should_occlusion_cull_aabb,
 }
+#import bevy_pbr::meshlet_cull_dispatch::{cull_dispatch_size, cull_dispatch_index}
 
 @compute
 @workgroup_size(128, 1, 1) // 8 threads per node, 16 nodes per workgroup
-fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
+fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
     // Calculate the queue ID for this thread
-    let dispatch_id = global_invocation_id.x;
+    let dispatch_id = cull_dispatch_index(global_invocation_id, groups);
     var node = dispatch_id >> 3u;
     let subnode = dispatch_id & 7u;
     if node >= meshlet_bvh_cull_count_read { return; }
@@ -63,7 +64,9 @@ fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
             let id = atomicAdd(&meshlet_second_pass_bvh_count, 1u);
             meshlet_second_pass_bvh_queue[id] = value;
             if ((id & 15u) == 0u) {
-                atomicAdd(&meshlet_second_pass_bvh_dispatch.x, 1u);
+                let size = cull_dispatch_size(id + 1u, 16u);
+                atomicMax(&meshlet_second_pass_bvh_dispatch.x, size.x);
+                atomicMax(&meshlet_second_pass_bvh_dispatch.y, size.y);
             }
         } else {
             queue_meshlets(value, child_count, true);
@@ -78,7 +81,9 @@ fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
         let index = select(constants.rightmost_slot - id, id, constants.read_from_front == 0u);
         meshlet_bvh_cull_queue[index] = value;
         if ((id & 15u) == 0u) {
-            atomicAdd(&meshlet_bvh_cull_dispatch.x, 1u);
+            let size = cull_dispatch_size(id + 1u, 16u);
+            atomicMax(&meshlet_bvh_cull_dispatch.x, size.x);
+            atomicMax(&meshlet_bvh_cull_dispatch.y, size.y);
         }
     } else {
 #ifdef MESHLET_FIRST_CULLING_PASS
@@ -109,10 +114,14 @@ fn queue_meshlets(value: InstancedOffset, child_count: u32, late: bool) {
     var base: u32;
     if late {
         base = atomicAdd(&meshlet_meshlet_cull_count_late, count);
-        atomicMax(&meshlet_meshlet_cull_dispatch_late.x, (base + count + 127u) >> 7u);
+        let size = cull_dispatch_size(base + count, 128u);
+        atomicMax(&meshlet_meshlet_cull_dispatch_late.x, size.x);
+        atomicMax(&meshlet_meshlet_cull_dispatch_late.y, size.y);
     } else {
         base = atomicAdd(&meshlet_meshlet_cull_count_early, count);
-        atomicMax(&meshlet_meshlet_cull_dispatch_early.x, (base + count + 127u) >> 7u);
+        let size = cull_dispatch_size(base + count, 128u);
+        atomicMax(&meshlet_meshlet_cull_dispatch_early.x, size.x);
+        atomicMax(&meshlet_meshlet_cull_dispatch_early.y, size.y);
     }
     var written = 0u;
     for (var word = 0u; word < 8u; word++) {

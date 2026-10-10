@@ -451,7 +451,7 @@ fn first_cull(
                 &meshlet_view_resources.first_bvh_cull_dispatch_back
             },
             0,
-            Some(4),
+            Some(8),
         );
         ping = !ping;
     }

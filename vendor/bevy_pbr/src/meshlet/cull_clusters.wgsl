@@ -23,16 +23,18 @@
     should_occlusion_cull_aabb,
 }
 #import bevy_render::maths::affine3_to_square
+#import bevy_pbr::meshlet_cull_dispatch::{cull_dispatch_size, cull_dispatch_index}
 
 @compute
 @workgroup_size(128, 1, 1) // 1 cluster per thread
-fn cull_clusters(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
-    if global_invocation_id.x >= meshlet_meshlet_cull_count_read { return; }
+fn cull_clusters(@builtin(global_invocation_id) global_invocation_id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    let invocation = cull_dispatch_index(global_invocation_id, groups);
+    if invocation >= meshlet_meshlet_cull_count_read { return; }
 
 #ifdef MESHLET_FIRST_CULLING_PASS
-    let meshlet_id = global_invocation_id.x;
+    let meshlet_id = invocation;
 #else
-    let meshlet_id = constants.rightmost_slot - global_invocation_id.x;
+    let meshlet_id = constants.rightmost_slot - invocation;
 #endif
     let instanced_offset = meshlet_meshlet_cull_queue[meshlet_id];
     let instance_id = instanced_offset.instance_id;
@@ -54,7 +56,9 @@ fn cull_clusters(@builtin(global_invocation_id) global_invocation_id: vec3<u32>)
         let value = InstancedOffset(instance_id, instanced_offset.offset);
         meshlet_meshlet_cull_queue[constants.rightmost_slot - id] = value;
         if ((id & 127u) == 0) {
-            atomicAdd(&meshlet_meshlet_cull_dispatch.x, 1u);
+            let size = cull_dispatch_size(id + 1u, 128u);
+            atomicMax(&meshlet_meshlet_cull_dispatch.x, size.x);
+            atomicMax(&meshlet_meshlet_cull_dispatch.y, size.y);
         }
 #endif
         return;
