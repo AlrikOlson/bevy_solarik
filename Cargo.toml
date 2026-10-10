@@ -1,5 +1,6 @@
 [workspace]
 members = [".", "vendor/bevy_render", "vendor/bevy_pbr"]
+exclude = ["vendor/wgpu-core", "vendor/wgpu-hal"]
 resolver = "3"
 
 [package]
@@ -29,6 +30,8 @@ force_disable_dlss = ["bevy_anti_alias/force_disable_dlss"]
 graphics_debug = ["bevy_pbr/graphics_debug"]
 
 [patch.crates-io]
+wgpu-core = { path = "vendor/wgpu-core" }
+wgpu-hal = { path = "vendor/wgpu-hal" }
 bevy_render = { path = "vendor/bevy_render" }
 bevy_pbr = { path = "vendor/bevy_pbr" }
 
