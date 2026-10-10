@@ -144,6 +144,7 @@ pub struct InstanceManager {
     pub active_indices: StorageBuffer<Vec<u32>>,
     pub assembly_groups: StorageBuffer<Vec<assembly_hierarchy::AssemblyGroup>>,
     pub assembly_members: StorageBuffer<Vec<u32>>,
+    hierarchy: assembly_hierarchy::Hierarchy,
     pub(crate) group_dirty_indices: Vec<u32>,
     pub(crate) member_dirty_indices: Vec<u32>,
     pub(crate) dirty_indices: Vec<u32>,
@@ -231,6 +232,7 @@ impl InstanceManager {
             },
             assembly_groups: StorageBuffer::default(),
             assembly_members: StorageBuffer::default(),
+            hierarchy: assembly_hierarchy::Hierarchy::default(),
             group_dirty_indices: Vec::new(),
             member_dirty_indices: Vec::new(),
             dirty_indices: Vec::new(),
@@ -855,7 +857,7 @@ pub fn extract_meshlet_mesh_entities(
     let removed = instance_manager.finish_extract(&render_queue, retiring);
     instance_manager.query_slots.truncate(query_count);
     instance_manager.inputs.truncate(query_count);
-    assembly_hierarchy::rebuild(&mut instance_manager);
+    assembly_hierarchy::update(&mut instance_manager, &assembly_roots);
     let reused =
         previous_publication == instance_manager.slots.publication && changed == 0 && removed == 0;
     record_extraction(&instance_manager, added, changed, removed, reused);

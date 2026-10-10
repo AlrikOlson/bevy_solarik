@@ -3,8 +3,10 @@
 use super::*;
 use bevy_math::{Affine3A, Vec3};
 use bevy_render::render_resource::ShaderType;
+use core::ops::Range;
+use range_alloc::RangeAllocator;
 
-#[derive(Clone, Copy, PartialEq, ShaderType)]
+#[derive(Clone, Copy, Default, PartialEq, ShaderType)]
 pub struct AssemblyGroup {
     pub center: Vec3,
     pub first: u32,
@@ -13,32 +15,109 @@ pub struct AssemblyGroup {
     pub count: u32,
 }
 
-pub(super) fn rebuild(manager: &mut InstanceManager) {
-    let mut groups = Vec::new();
-    let mut members = Vec::with_capacity(manager.scene_instance_count as usize);
-    for slot in &manager.query_slots {
-        if manager.slots.is_active(*slot) {
-            singleton(manager, slot.index, &mut groups, &mut members);
+#[derive(Clone)]
+struct Allocation {
+    group: u32,
+    members: Range<u32>,
+}
+
+pub(super) struct Hierarchy {
+    allocations: HashMap<SceneInstance, Allocation>,
+    ordinary: HashSet<SceneInstance>,
+    free_groups: Vec<u32>,
+    next_group: u32,
+    members: RangeAllocator<u32>,
+}
+impl Default for Hierarchy {
+    fn default() -> Self {
+        Self {
+            allocations: HashMap::default(),
+            ordinary: HashSet::default(),
+            free_groups: Vec::new(),
+            next_group: 0,
+            members: RangeAllocator::new(0..0),
         }
     }
-    let mut roots: Vec<_> = manager.assembly_inputs.iter().collect();
-    roots.sort_unstable_by_key(|(entity, _)| entity.to_bits());
-    // Bounds depend only on immutable prototype geometry and transforms.
-    let mut prototypes: HashMap<usize, Option<MeshletAabb>> = HashMap::default();
-    for (_, input) in roots {
-        if !input.ready {
-            for slot in &input.slots {
-                if manager.slots.is_active(*slot) {
-                    singleton(manager, slot.index, &mut groups, &mut members);
-                }
+}
+impl Hierarchy {
+    fn range(&mut self, count: u32) -> Range<u32> {
+        if let Ok(range) = self.members.allocate_range(count) {
+            return range;
+        }
+        let end = self.members.initial_range().end;
+        self.members
+            .grow_to(end.checked_add(end.max(count)).expect("hierarchy capacity"));
+        self.members
+            .allocate_range(count)
+            .expect("grown hierarchy range")
+    }
+    fn allocate(&mut self, owner: SceneInstance, count: u32) -> Allocation {
+        if let Some(old) = self.allocations.get(&owner) {
+            if old.members.end - old.members.start >= count {
+                return old.clone();
             }
-            continue;
         }
-        if input.slots.is_empty() {
+        let group = if let Some(old) = self.allocations.remove(&owner) {
+            self.members.free_range(old.members);
+            old.group
+        } else {
+            self.free_groups.pop().unwrap_or_else(|| {
+                let group = self.next_group;
+                self.next_group += 1;
+                group
+            })
+        };
+        let allocation = Allocation {
+            group,
+            members: self.range(count),
+        };
+        self.allocations.insert(owner, allocation.clone());
+        allocation
+    }
+}
+
+/// Group IDs and spans persist across sparse root changes. GPU queues refer to
+/// them only within one frame; staged writes precede that frame's dispatches.
+pub(super) fn update(manager: &mut InstanceManager, roots: &[Entity]) {
+    update_ordinary(manager);
+    let mut prototypes: HashMap<usize, Option<MeshletAabb>> = HashMap::default();
+    for &root in roots {
+        let owner = SceneInstance {
+            entity: root,
+            part: 1,
+        };
+        let Some(input) = manager.assembly_inputs.get(&root) else {
+            remove(manager, owner);
             continue;
-        }
-        let key = input.parts.as_ptr() as usize;
-        let bounds = *prototypes.entry(key).or_insert_with(|| {
+        };
+        let (bounds, members) = root_data(manager, input, &mut prototypes);
+        publish(manager, owner, bounds, &members);
+    }
+    manager.instance_upload_dirty |=
+        !manager.group_dirty_indices.is_empty() || !manager.member_dirty_indices.is_empty();
+    bevy_render::diagnostic::profile_value(
+        "meshlet.hierarchy_roots",
+        manager.hierarchy.allocations.len() as f64,
+        "count",
+    );
+}
+fn root_data(
+    manager: &InstanceManager,
+    input: &assembly_extract::AssemblyInput,
+    prototypes: &mut HashMap<usize, Option<MeshletAabb>>,
+) -> (Option<MeshletAabb>, Vec<u32>) {
+    let members: Vec<_> = input
+        .slots
+        .iter()
+        .filter(|slot| manager.slots.is_active(**slot))
+        .map(|slot| slot.index)
+        .collect();
+    if !input.ready || members.is_empty() || members.len() != input.slots.len() {
+        return (None, members);
+    }
+    let bounds = *prototypes
+        .entry(input.parts.as_ptr() as usize)
+        .or_insert_with(|| {
             let anchor_from_root = input.parts[0].transform.inverse();
             union_bounds(input.parts.iter().zip(&input.slots).map(|(part, slot)| {
                 (
@@ -47,52 +126,89 @@ pub(super) fn rebuild(manager: &mut InstanceManager) {
                 )
             }))
         });
-        let first = members.len() as u32;
-        members.extend(input.slots.iter().map(|slot| slot.index));
-        let count = input.slots.len() as u32;
-        groups.push(AssemblyGroup {
-            center: bounds.map_or(Vec3::ZERO, |b| b.center),
-            first,
-            half_extent: bounds.map_or(Vec3::ZERO, |b| b.half_extent),
-            count: count | if bounds.is_none() { 1 << 31 } else { 0 },
-        });
+    (bounds, members)
+}
+fn update_ordinary(manager: &mut InstanceManager) {
+    let mut previous = core::mem::take(&mut manager.hierarchy.ordinary);
+    for slot in manager.query_slots.clone() {
+        if !manager.slots.is_active(slot) {
+            continue;
+        }
+        let owner = SceneInstance {
+            entity: manager.slots.entity(slot.index).unwrap(),
+            part: 0,
+        };
+        previous.remove(&owner);
+        manager.hierarchy.ordinary.insert(owner);
+        publish(
+            manager,
+            owner,
+            Some(manager.instance_aabbs.get()[slot.index as usize]),
+            &[slot.index],
+        );
     }
-    let old_groups = manager.assembly_groups.get();
-    let dirty: Vec<_> = groups
-        .iter()
-        .enumerate()
-        .filter(|(index, group)| old_groups.get(*index) != Some(*group))
-        .map(|(index, _)| index as u32)
-        .collect();
-    manager.instance_upload_dirty |= old_groups.len() != groups.len();
-    *manager.assembly_groups.get_mut() = groups;
-    manager.group_dirty_indices.extend(dirty);
-    manager
-        .member_dirty_indices
-        .extend(manager.assembly_members.set_indices(&members));
-    manager.instance_upload_dirty |=
-        !manager.group_dirty_indices.is_empty() || !manager.member_dirty_indices.is_empty();
-    bevy_render::diagnostic::profile_value(
-        "meshlet.hierarchy_roots",
-        manager.assembly_groups.get().len() as f64,
-        "count",
-    );
+    for owner in previous {
+        remove(manager, owner);
+    }
 }
-fn singleton(
-    manager: &InstanceManager,
-    slot: u32,
-    groups: &mut Vec<AssemblyGroup>,
-    members: &mut Vec<u32>,
+fn remove(manager: &mut InstanceManager, owner: SceneInstance) {
+    let Some(old) = manager.hierarchy.allocations.remove(&owner) else {
+        return;
+    };
+    manager.hierarchy.members.free_range(old.members);
+    manager.hierarchy.free_groups.push(old.group);
+    manager.assembly_groups.get_mut()[old.group as usize].count = 0;
+    manager.group_dirty_indices.push(old.group);
+}
+fn publish(
+    manager: &mut InstanceManager,
+    owner: SceneInstance,
+    bounds: Option<MeshletAabb>,
+    members: &[u32],
 ) {
-    let aabb = manager.instance_aabbs.get()[slot as usize];
-    groups.push(AssemblyGroup {
-        center: aabb.center,
-        half_extent: aabb.half_extent,
-        first: members.len() as u32,
-        count: 1,
-    });
-    members.push(slot);
+    if members.is_empty() {
+        remove(manager, owner);
+        return;
+    }
+    let allocation = manager.hierarchy.allocate(owner, members.len() as u32);
+    let group = AssemblyGroup {
+        center: bounds.map_or(Vec3::ZERO, |b| b.center),
+        half_extent: bounds.map_or(Vec3::ZERO, |b| b.half_extent),
+        first: allocation.members.start,
+        count: members.len() as u32 | if bounds.is_none() { 1 << 31 } else { 0 },
+    };
+    publish_group(manager, allocation.group, group);
+    publish_members(manager, allocation.members.start as usize, members);
 }
+fn publish_group(manager: &mut InstanceManager, group_index: u32, group: AssemblyGroup) {
+    let groups = manager.assembly_groups.get_mut();
+    let index = group_index as usize;
+    if groups.len() <= index {
+        groups.resize(index + 1, AssemblyGroup::default());
+    }
+    if groups[index] != group {
+        groups[index] = group;
+        manager.group_dirty_indices.push(group_index);
+    }
+}
+fn publish_members(manager: &mut InstanceManager, start: usize, members: &[u32]) {
+    let data = manager.assembly_members.get_mut();
+    let old_len = data.len();
+    if data.len() < start + members.len() {
+        data.resize(start + members.len(), 0);
+    }
+    for (offset, &value) in members.iter().enumerate() {
+        let index = start + offset;
+        if index >= old_len || data[index] != value {
+            data[index] = value;
+            manager.member_dirty_indices.push(index as u32);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "assembly_hierarchy_tests.rs"]
+mod publication_tests;
 fn union_bounds(parts: impl Iterator<Item = (Affine3A, MeshletAabb)>) -> Option<MeshletAabb> {
     let mut minimum = Vec3::splat(f32::INFINITY);
     let mut maximum = Vec3::splat(f32::NEG_INFINITY);

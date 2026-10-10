@@ -101,6 +101,7 @@ fn sync(
         manager.deactivate_slot(slot);
     }
     manager.refresh_scene_metadata();
+    assembly_hierarchy::update(manager, &roots);
     let mut fresh = InstanceManager::new();
     fresh.slots.begin();
     for row in &rows {
@@ -116,7 +117,59 @@ fn sync(
     }
     fresh.refresh_scene_metadata();
     assert_same(manager, &fresh);
+    let mut members = Vec::new();
+    for group in manager.assembly_groups.get() {
+        let count = group.count & !(1 << 31);
+        members.extend_from_slice(
+            &manager.assembly_members.get()[group.first as usize..(group.first + count) as usize],
+        );
+    }
+    members.sort_unstable();
+    let mut active = manager.slots.active_indices().to_vec();
+    active.sort_unstable();
+    assert_eq!(
+        members, active,
+        "hierarchy visits each live part exactly once"
+    );
     (roots.len(), parts, removed)
+}
+
+#[test]
+fn hierarchy_keeps_unchanged_root_addresses_after_neighbor_removal() {
+    let mut world = World::new();
+    let mut state = State::new(&mut world);
+    let prototype = assembly(&[0.0, 1.0, 2.0]);
+    let mut roots: Vec<_> = (0..4)
+        .map(|_| {
+            world
+                .spawn((prototype.clone(), GlobalTransform::IDENTITY))
+                .id()
+        })
+        .collect();
+    roots.sort_unstable_by_key(|root| root.to_bits());
+    let mut manager = InstanceManager::new();
+    sync(&mut world, &mut state, &mut manager, false, false);
+    let slot = manager.assembly_inputs[&roots[3]].slots[0].index;
+    let address = |manager: &InstanceManager| {
+        manager
+            .assembly_groups
+            .get()
+            .iter()
+            .enumerate()
+            .find_map(|(i, group)| {
+                (group.count != 0 && manager.assembly_members.get()[group.first as usize] == slot)
+                    .then_some((i, group.first))
+            })
+            .unwrap()
+    };
+    let original = address(&manager);
+    world.despawn(roots[0]);
+    sync(&mut world, &mut state, &mut manager, false, false);
+    assert_eq!(
+        address(&manager),
+        original,
+        "unchanged root must not be republished"
+    );
 }
 #[test]
 fn root_delta_matches_full_snapshot_after_motion_replacement_shrink_and_removal() {
@@ -274,6 +327,16 @@ fn assembly_removal_never_retires_an_ordinary_part_on_the_same_entity() {
         &mut prepared,
         &mut removed,
     );
+    assembly_hierarchy::update(&mut manager, &[root]);
+    assert_eq!(
+        manager
+            .assembly_groups
+            .get()
+            .iter()
+            .map(|g| g.count & !(1 << 31))
+            .sum::<u32>(),
+        3
+    );
     manager.slots.begin();
     manager.observe_query(0, root);
     update_root(
@@ -290,6 +353,19 @@ fn assembly_removal_never_retires_an_ordinary_part_on_the_same_entity() {
     for (_, slot) in removed {
         manager.deactivate_slot(slot);
     }
+    assembly_hierarchy::update(&mut manager, &[root]);
+    let live: Vec<_> = manager
+        .assembly_groups
+        .get()
+        .iter()
+        .filter(|g| g.count != 0)
+        .collect();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].count, 1);
+    assert_eq!(
+        manager.assembly_members.get()[live[0].first as usize],
+        ordinary.index
+    );
     assert!(
         manager
             .slots
