@@ -387,7 +387,9 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
         batch: &mut StorageBufferUploadBatch,
     ) -> StorageBufferUpload {
         let mut upload = StorageBufferUpload::default();
-        for range in publication::upload_ranges(ranges, self.last_uploaded.len()) {
+        // Dirty runs are already merged. The shared batch bounds staging memory
+        // and submissions without expanding sparse edits to whole-scene copies.
+        for range in ranges {
             batch.push(
                 device,
                 queue,

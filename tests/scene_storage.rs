@@ -1,6 +1,90 @@
 //! Read exact production std430 publications back through shader arrayLength.
 
 #[test]
+fn forest_scale_sparse_publication_copies_changed_records_only() {
+    use bevy_render::render_resource::StorageBufferUploadBatch;
+    bevy_platform::future::block_on(async {
+        let limits = wgpu::Limits {
+            max_buffer_size: 512 * 1024 * 1024,
+            max_storage_buffer_binding_size: 512 * 1024 * 1024,
+            ..Default::default()
+        };
+        let (device, queue) = device_with_limits(limits).await;
+        // Same order of population and record stride as the production forest.
+        const COUNT: usize = 262_144 * 12;
+        const WORDS: usize = 40;
+        let mut values = StorageBuffer::from(vec![[17u32; WORDS]; COUNT]);
+        values.add_usages(wgpu::BufferUsages::COPY_SRC);
+        values.write_buffer_indices(&device, &queue, &[]);
+        let indices: Vec<u32> = (0..4096).map(|i| i * 768).collect();
+        let mut measurements = Vec::new();
+        for generation in 1..=3u32 {
+            device
+                .wgpu_device()
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            for &index in &indices {
+                values.get_mut()[index as usize] = [index + generation; WORDS];
+            }
+            // Adjacent CPU changes without dirty indices must remain hidden.
+            values.get_mut()[1] = [u32::MAX; WORDS];
+            let start = std::time::Instant::now();
+            let mut batch = StorageBufferUploadBatch::default();
+            let upload = values.stage_buffer_indices(&device, &queue, &indices, &mut batch);
+            let staged = batch.finish(&device, &queue);
+            measurements.push((upload, staged, start.elapsed().as_secs_f64() * 1000.0));
+        }
+        // Read every changed record and its unchanged neighbor from the GPU.
+        // No full-capacity readback is needed for this sparse-publication probe.
+        let record_bytes = (WORDS * 4) as u64;
+        let size = indices.len() as u64 * 2 * record_bytes;
+        let raw = device.wgpu_device();
+        let readback = raw.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("forest_sparse_readback"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = raw.create_command_encoder(&Default::default());
+        for (sample, &index) in indices.iter().enumerate() {
+            encoder.copy_buffer_to_buffer(
+                values.buffer().unwrap(),
+                index as u64 * record_bytes,
+                &readback,
+                sample as u64 * 2 * record_bytes,
+                2 * record_bytes,
+            );
+        }
+        queue.submit([encoder.finish()]);
+        readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+        raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let bytes = readback.get_mapped_range(..);
+        let words: &[u32] = bytemuck::cast_slice(&bytes);
+        for (sample, &index) in indices.iter().enumerate() {
+            let start = sample * 2 * WORDS;
+            assert_eq!(words[start..start + WORDS], [index + 3; WORDS]);
+            assert_eq!(words[start + WORDS..start + 2 * WORDS], [17; WORDS]);
+        }
+        for (upload, staged, ms) in &measurements {
+            eprintln!(
+                "forest sparse: backing={} bytes={} ranges={} staging={} buffers={} encode_ms={ms:.3}",
+                COUNT * WORDS * 4,
+                upload.bytes,
+                upload.ranges,
+                staged.0,
+                staged.1
+            );
+        }
+        for (upload, staged, _) in measurements {
+            assert!(!upload.allocated);
+            assert_eq!(upload.bytes, indices.len() as u64 * record_bytes);
+            assert_eq!(upload.ranges as usize, indices.len());
+            assert_eq!(staged, (upload.bytes, 1));
+        }
+    });
+}
+
+#[test]
 fn packed_publication_shares_staging_and_preserves_queued_source_lifetimes() {
     use bevy_render::render_resource::StorageBufferUploadBatch;
     bevy_platform::future::block_on(async {
@@ -18,10 +102,8 @@ fn packed_publication_shares_staging_and_preserves_queued_source_lifetimes() {
             }
             let first = a.stage_buffer_indices(&device, &queue, &indices, &mut batch);
             let second = b.stage_buffer_indices(&device, &queue, &indices, &mut batch);
-            assert!(
-                first.ranges + second.ranges <= 256,
-                "fragmented copies are bounded"
-            );
+            assert_eq!(first.ranges + second.ranges, 2 * indices.len() as u32);
+            assert_eq!(first.bytes + second.bytes, 8 * indices.len() as u64);
             assert_eq!(
                 batch.finish(&device, &queue),
                 (first.bytes + second.bytes, 1)
@@ -86,7 +168,7 @@ fn incremental_growth_reserves_capacity_without_exposing_spare_records() {
 }
 
 #[test]
-fn fragmented_uploads_preserve_unmarked_values_inside_merged_gaps() {
+fn fragmented_uploads_preserve_unmarked_values_between_dirty_records() {
     bevy_platform::future::block_on(async {
         let (device, queue) = device().await;
         let mut values = StorageBuffer::from(vec![17u32; 16_384]);
@@ -100,7 +182,8 @@ fn fragmented_uploads_preserve_unmarked_values_inside_merged_gaps() {
         // A CPU-side change without a dirty index must not leak through a gap.
         values.get_mut()[7] = u32::MAX;
         let upload = values.write_buffer_indices(&device, &queue, &indices);
-        assert!(upload.ranges <= 128, "fragmented copies are bounded");
+        assert_eq!(upload.ranges, indices.len() as u32);
+        assert_eq!(upload.bytes, indices.len() as u64 * 4);
         assert_eq!(read(&device, &queue, &values)[1..], expected);
         assert_eq!(
             values.write_buffer_indices(&device, &queue, &indices).bytes,
@@ -118,12 +201,22 @@ use bevy_render::{
 };
 
 async fn device() -> (RenderDevice, RenderQueue) {
+    device_with_limits(Default::default()).await
+}
+
+async fn device_with_limits(limits: wgpu::Limits) -> (RenderDevice, RenderQueue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = instance.request_adapter(&Default::default()).await.unwrap();
-    let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            required_limits: limits,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     (
         RenderDevice::from(device),
         RenderQueue(Arc::new(WgpuWrapper::new(queue))),
