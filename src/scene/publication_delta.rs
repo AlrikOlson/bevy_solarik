@@ -129,6 +129,7 @@ pub(super) fn try_publish(
     // A delta is allowed only when every old live input was ready. Retirement
     // has already removed old owners from SceneSlots, but their published
     // material records remain available until this complete preflight succeeds.
+    let preflight_profile = bevy_render::diagnostic::profile_scope("scene.delta_preflight");
     let removed_set: HashSet<u32> = removed.iter().copied().collect();
     let Some(delta) = preflight(
         cache,
@@ -147,7 +148,9 @@ pub(super) fn try_publish(
     ) else {
         return false;
     };
-    let dirty_set: HashSet<u32> = dirty.iter().copied().collect();
+    drop(preflight_profile);
+    let descriptor_profile = bevy_render::diagnostic::profile_scope("scene.delta_descriptors");
+    let dirty_set = super::super::tlas::DirtySlots::new(capacity, dirty);
     let next = cache.slots.active_indices().iter().copied().chain(
         delta
             .rows
@@ -159,7 +162,7 @@ pub(super) fn try_publish(
     let changed = super::super::tlas::changed_dense_slots(
         cache.storage.active_indices.get(),
         next.inspect(|_| next_count += 1),
-        |slot| dirty_set.contains(&slot),
+        |slot| dirty_set.contains(slot),
     );
     if next_count != required {
         return false;
@@ -188,6 +191,7 @@ pub(super) fn try_publish(
     let Some(updates) = updates else {
         return false;
     };
+    drop(descriptor_profile);
     let _profile = bevy_render::diagnostic::profile_scope("scene.prepare_instances");
     let SceneCache {
         storage,

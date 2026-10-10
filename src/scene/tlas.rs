@@ -1,6 +1,10 @@
 //! Persistent allocation with a full, exact TLAS build for each changed scene.
 use bevy_render::{render_resource::*, renderer::RenderDevice};
 
+#[cfg(test)]
+#[path = "tlas_tests.rs"]
+mod tests;
+
 #[derive(Default)]
 pub(crate) struct SceneTlas {
     allocation: Option<Tlas>,
@@ -38,6 +42,23 @@ impl SceneTlas {
 }
 /// Changed compact descriptors, including swap-removals and appended ready slots.
 /// Stable shader indices remain values; physical descriptor positions may move.
+pub(crate) struct DirtySlots(Vec<u64>);
+impl DirtySlots {
+    pub(crate) fn new(capacity: usize, dirty: &[u32]) -> Self {
+        let mut words = vec![0; capacity.div_ceil(64)];
+        for &slot in dirty {
+            assert!(
+                (slot as usize) < capacity,
+                "preflighted scene slot capacity"
+            );
+            words[slot as usize / 64] |= 1 << (slot % 64);
+        }
+        Self(words)
+    }
+    pub(crate) fn contains(&self, slot: u32) -> bool {
+        self.0[slot as usize / 64] & (1 << (slot % 64)) != 0
+    }
+}
 pub(crate) fn changed_dense_slots(
     old: &[u32],
     next: impl Iterator<Item = u32>,
