@@ -3,13 +3,26 @@
 const PAGE: usize = 64 * 1024;
 
 /// Bound CPU copy-command overhead without turning sparse edits into dense uploads.
-/// Each bridged gap is at most 64 bytes and three times its following dirty run:
-/// total copied bytes are therefore at most four times the exact dirty bytes.
+/// Bridge gaps of at most 64 bytes while copying at most four times the dirty bytes.
+/// Dense regions use one copy even when their dirty runs are unevenly distributed.
 pub(super) fn coalesce(ranges: Vec<core::ops::Range<usize>>) -> Vec<core::ops::Range<usize>> {
     if ranges.len() <= 128 {
         return ranges;
     }
-    let mut packed: Vec<core::ops::Range<usize>> = Vec::new();
+    let mut packed = Vec::new();
+    for region in ranges.chunk_by(|a, b| b.start - a.end <= 64) {
+        let span = region[0].start..region[region.len() - 1].end;
+        let dirty_bytes: usize = region.iter().map(|range| range.len()).sum();
+        if span.len() <= dirty_bytes.saturating_mul(4) {
+            packed.push(span);
+        } else {
+            append_sparse(region, &mut packed);
+        }
+    }
+    packed
+}
+
+fn append_sparse(ranges: &[core::ops::Range<usize>], packed: &mut Vec<core::ops::Range<usize>>) {
     for range in ranges {
         if let Some(last) = packed.last_mut() {
             let gap = range.start - last.end;
@@ -18,9 +31,8 @@ pub(super) fn coalesce(ranges: Vec<core::ops::Range<usize>>) -> Vec<core::ops::R
                 continue;
             }
         }
-        packed.push(range);
+        packed.push(range.clone());
     }
-    packed
 }
 
 pub(super) fn allocation_size(required: u64, limit: u64) -> u64 {
@@ -39,6 +51,33 @@ pub(super) fn allocation_size(required: u64, limit: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uneven_quarter_dirty_region_uses_one_bounded_copy() {
+        let ranges: Vec<_> = (0..1024)
+            .flat_map(|i| [i * 32..i * 32 + 4, i * 32 + 24..i * 32 + 28])
+            .collect();
+        let packed = coalesce(ranges);
+        assert_eq!(packed.len(), 1);
+        assert_eq!(packed, [0..1024 * 32 - 4]);
+        assert!(packed[0].len() <= 4 * 1024 * 2 * 4);
+    }
+
+    #[test]
+    fn dense_regions_cannot_bridge_distant_gaps_or_subsidize_sparse_updates() {
+        let dense: Vec<_> = (0..256)
+            .flat_map(|i| [i * 32..i * 32 + 4, i * 32 + 24..i * 32 + 28])
+            .collect();
+        let sparse: Vec<_> = (0..256).map(|i| 16_384 + i * 68..16_388 + i * 68).collect();
+        let mut ranges = dense.clone();
+        ranges.extend(sparse.clone());
+        ranges.extend(dense.iter().map(|r| r.start + 65_536..r.end + 65_536));
+        let packed = coalesce(ranges);
+        assert_eq!(packed.len(), sparse.len() + 2);
+        assert_eq!(packed[0], 0..8188);
+        assert_eq!(packed[1..257], sparse);
+        assert_eq!(packed[257], 65_536..73_724);
+    }
 
     #[test]
     fn coalescing_limits_extra_bytes_and_preserves_distant_sparse_edits() {

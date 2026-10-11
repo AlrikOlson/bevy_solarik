@@ -1,5 +1,8 @@
 //! Read exact production std430 publications back through shader arrayLength.
 
+#[path = "scene_storage/material_cost.rs"]
+mod material_cost;
+
 #[test]
 fn forest_scale_sparse_publication_copies_changed_records_only() {
     use bevy_render::render_resource::StorageBufferUploadBatch;
@@ -232,6 +235,49 @@ fn full_ray_bank_material_remaps_coalesce_without_exposing_unmarked_cpu_values()
     });
 }
 
+#[test]
+fn uneven_full_ray_bank_remaps_bound_copies_and_preserve_queued_values() {
+    use bevy_render::render_resource::StorageBufferUploadBatch;
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        const COUNT: usize = 262_144 * 3;
+        let mut values = StorageBuffer::from(vec![17u32; COUNT]);
+        values.write_buffer_indices(&device, &queue, &[]);
+        let indices: Vec<_> = (0..COUNT as u32)
+            .step_by(8)
+            .flat_map(|i| [i, i + 6])
+            .collect();
+        let mut expected = values.get().clone();
+        let mut measurements = Vec::new();
+        for generation in 1..=3u32 {
+            for &i in &indices {
+                values.get_mut()[i as usize] = i + (generation << 20);
+                expected[i as usize] = i + (generation << 20);
+            }
+            values.get_mut()[1] = u32::MAX;
+            let start = std::time::Instant::now();
+            let mut batch = StorageBufferUploadBatch::default();
+            let upload = values.stage_buffer_indices(&device, &queue, &indices, &mut batch);
+            let staging = batch.finish(&device, &queue);
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!(
+                "uneven ray remap: dirty={} copies={} bytes={} encode_ms={ms:.3}",
+                indices.len(),
+                upload.ranges,
+                upload.bytes
+            );
+            measurements.push((upload, staging));
+        }
+        assert_eq!(read(&device, &queue, &values)[1..], expected);
+        for (upload, staging) in measurements {
+            assert_eq!(upload.ranges, 1);
+            assert!(!upload.allocated);
+            assert!(upload.bytes <= 4 * indices.len() as u64 * 4);
+            assert_eq!(staging, (upload.bytes, 1));
+        }
+    });
+}
+
 use bevy_platform::sync::Arc;
 use bevy_render::{
     render_resource::{ShaderType, StorageBuffer},
@@ -291,10 +337,11 @@ fn read<T: ShaderType + bevy_render::render_resource::encase::internal::WriteInt
 @group(0) @binding(0) var<storage,read> input:array<u32>;
 @group(0) @binding(1) var<storage,read_write> output:array<u32>;
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id:vec3<u32>) {
+fn main(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgroups) groups:vec3<u32>) {
     let count = arrayLength(&input);
-    if id.x == 0u { output[0] = count; }
-    if id.x < count { output[id.x + 1u] = input[id.x]; }
+    let index = id.x + id.y * groups.x * 64u;
+    if index == 0u { output[0] = count; }
+    if index < count { output[index + 1u] = input[index]; }
 }
 "#
             .into(),
@@ -327,7 +374,9 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
-        pass.dispatch_workgroups((size as u32 / 4).div_ceil(64), 1, 1);
+        let groups = (size as u32 / 4).div_ceil(64);
+        let width = groups.min(65_535);
+        pass.dispatch_workgroups(width, groups.div_ceil(width), 1);
     }
     encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, size + 4);
     queue.submit([encoder.finish()]);
