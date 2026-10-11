@@ -12,7 +12,7 @@ pub(super) fn coalesce(ranges: Vec<core::ops::Range<usize>>) -> Vec<core::ops::R
     let mut packed = Vec::new();
     for region in ranges.chunk_by(|a, b| b.start - a.end <= 64) {
         let span = region[0].start..region[region.len() - 1].end;
-        let dirty_bytes: usize = region.iter().map(|range| range.len()).sum();
+        let dirty_bytes: usize = region.iter().map(ExactSizeIterator::len).sum();
         if span.len() <= dirty_bytes.saturating_mul(4) {
             packed.push(span);
         } else {

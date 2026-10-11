@@ -61,6 +61,7 @@ impl Plugin for RaytracingScenePlugin {
         }
         app.add_plugins(crate::gaussian::GaussianDielectricPlugin);
         app.add_plugins(crate::lommel::LommelSeeligerPlugin);
+        app.add_plugins(crate::material::MaterialRegistrationPlugin);
         app.add_plugins(crate::rings::RingPlugin);
         app.add_plugins(crate::filtered_canopy::CanopyPlugin);
         crate::coarse_scene::load_shader(app);

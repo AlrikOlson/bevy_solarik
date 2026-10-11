@@ -21,6 +21,7 @@ pub mod depth_probe;
 pub mod filtered_canopy;
 pub mod gaussian;
 pub mod lommel;
+pub mod material;
 pub mod optics;
 pub mod pathtracer;
 pub mod point_sky;
