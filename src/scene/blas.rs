@@ -233,13 +233,15 @@ pub fn publish_readiness(
     materials: Res<super::extract::StandardMaterialAssets>,
     bindings: Res<bevy_pbr::RenderMaterialBindings>,
     images: Res<bevy_render::render_asset::RenderAssets<bevy_render::texture::GpuImage>>,
+    registrations: Res<crate::material::Registrations>,
 ) {
     if let Some(readiness) = readiness {
         for id in readiness.requested::<Mesh>() {
             readiness.publish(id.untyped(), manager.get(&id).is_some());
         }
         for id in readiness.requested::<bevy_pbr::StandardMaterial>() {
-            let ready = bindings.contains_key(&id.untyped())
+            let ready = registrations.gpu_ready(id, &bindings, &images)
+                && bindings.contains_key(&id.untyped())
                 && materials.get(&id).is_some_and(|material| {
                     [
                         &material.base_color_texture,

@@ -7,10 +7,17 @@
 //! The legacy ray registries remain available; do not mutate managed entries.
 use alloc::sync::{Arc, Weak};
 use bevy_app::{App, Last, Plugin, PostUpdate};
-use bevy_asset::{AssetId, Assets, Handle};
+use bevy_asset::{AssetId, Assets, Handle, UntypedAssetId};
 use bevy_ecs::{component::Component, entity::Entity, resource::Resource, world::World};
-use bevy_pbr::{MeshMaterial3d, StandardMaterial};
+use bevy_image::Image;
+use bevy_pbr::{MeshMaterial3d, RenderMaterialBindings, StandardMaterial};
 use bevy_platform::collections::HashMap;
+use bevy_render::{
+    RenderApp,
+    extract_resource::{ExtractResource, ExtractResourcePlugin},
+    render_asset::RenderAssets,
+    texture::GpuImage,
+};
 
 use crate::{
     gaussian::{GaussianDielectric, GaussianMaterial, GaussianRayMaterials},
@@ -53,14 +60,30 @@ enum Raster {
 struct Owned {
     base: Handle<StandardMaterial>,
     raster: Raster,
+    images: Vec<Handle<Image>>,
 }
 
 /// Cloneable ownership token, also retained on each bound entity.
 #[derive(Component, Debug, Clone)]
 pub struct MaterialRegistration(Arc<Owned>);
 
-#[derive(Resource, Default)]
-struct Registrations(HashMap<AssetId<StandardMaterial>, Weak<Owned>>);
+#[derive(Resource, Default, Clone, ExtractResource)]
+pub(crate) struct Registrations(HashMap<AssetId<StandardMaterial>, Weak<Owned>>);
+impl Registrations {
+    pub(crate) fn gpu_ready(
+        &self,
+        id: AssetId<StandardMaterial>,
+        bindings: &RenderMaterialBindings,
+        images: &RenderAssets<GpuImage>,
+    ) -> bool {
+        self.0.get(&id).and_then(Weak::upgrade).is_none_or(|owned| {
+            MaterialRegistration(owned).dependencies_ready(
+                |id| bindings.contains_key(&id),
+                |id| images.get(id).is_some(),
+            )
+        })
+    }
+}
 
 impl MaterialRegistration {
     pub fn new(
@@ -91,8 +114,28 @@ impl MaterialRegistration {
         {
             return Err(RegistrationError::AlreadyRegistered);
         }
+        let images = match &model {
+            MaterialModel::Gaussian(extension) => vec![extension.mask.clone()],
+            MaterialModel::Detailed(extension) => [
+                &extension.colour,
+                &extension.detail,
+                &extension.coverage0,
+                &extension.coverage1,
+                &extension.meso_colour,
+                &extension.meso_detail,
+            ]
+            .into_iter()
+            .chain(extension.gaussian_mask.iter())
+            .cloned()
+            .collect(),
+            MaterialModel::Standard | MaterialModel::Lommel => Vec::new(),
+        };
         let raster = create_raster(world, base.id(), value, model);
-        let owned = Arc::new(Owned { base, raster });
+        let owned = Arc::new(Owned {
+            base,
+            raster,
+            images,
+        });
         world
             .resource_mut::<Registrations>()
             .0
@@ -101,6 +144,7 @@ impl MaterialRegistration {
             world.get_resource::<bevy_render::scene_readiness::SceneGeometryReadiness>()
         {
             ready.request(owned.base.id().untyped());
+            ready.revoke(owned.base.id().untyped());
         }
         Ok(Self(owned))
     }
@@ -127,6 +171,52 @@ impl MaterialRegistration {
             Raster::Detailed(handle) => Some(handle),
             _ => None,
         }
+    }
+
+    fn raster_id(&self) -> UntypedAssetId {
+        match &self.0.raster {
+            Raster::Standard => self.0.base.id().untyped(),
+            Raster::Gaussian(handle) => handle.id().untyped(),
+            Raster::Lommel(handle) => handle.id().untyped(),
+            Raster::Detailed(handle) => handle.id().untyped(),
+        }
+    }
+    fn dependencies_ready(
+        &self,
+        binding: impl Fn(UntypedAssetId) -> bool,
+        image: impl Fn(AssetId<Image>) -> bool,
+    ) -> bool {
+        binding(self.raster_id()) && self.0.images.iter().all(|handle| image(handle.id()))
+    }
+    pub(crate) fn is_bound(&self, world: &World, entity: Entity) -> bool {
+        if !world
+            .get::<Self>(entity)
+            .is_some_and(|bound| Arc::ptr_eq(&bound.0, &self.0))
+        {
+            return false;
+        }
+        let raster_ids = [
+            world
+                .get::<MeshMaterial3d<StandardMaterial>>(entity)
+                .map(|m| m.id().untyped()),
+            world
+                .get::<MeshMaterial3d<GaussianMaterial>>(entity)
+                .map(|m| m.id().untyped()),
+            world
+                .get::<MeshMaterial3d<LommelMaterial>>(entity)
+                .map(|m| m.id().untyped()),
+            world
+                .get::<MeshMaterial3d<DetailedMaterial>>(entity)
+                .map(|m| m.id().untyped()),
+        ];
+        let raster_matches = raster_ids.into_iter().flatten().eq([self.raster_id()]);
+        let proxy = world.get::<RaytracingMaterial3d>(entity).map(|m| m.0.id());
+        raster_matches
+            && proxy
+                == match self.0.raster {
+                    Raster::Standard => None,
+                    _ => Some(self.0.base.id()),
+                }
     }
 
     /// Replace all known surface shading components as one exclusive-world edit.
@@ -162,6 +252,22 @@ impl MaterialRegistration {
         entity.insert(self.clone());
         true
     }
+}
+
+pub(crate) fn has_surface(world: &World, entity: Entity) -> bool {
+    world
+        .get::<MeshMaterial3d<StandardMaterial>>(entity)
+        .is_some()
+        || world
+            .get::<MeshMaterial3d<GaussianMaterial>>(entity)
+            .is_some()
+        || world
+            .get::<MeshMaterial3d<LommelMaterial>>(entity)
+            .is_some()
+        || world
+            .get::<MeshMaterial3d<DetailedMaterial>>(entity)
+            .is_some()
+        || world.get::<RaytracingMaterial3d>(entity).is_some()
 }
 
 fn initialize(world: &mut World) {
@@ -295,5 +401,58 @@ impl Plugin for MaterialRegistrationPlugin {
         app.init_resource::<Registrations>()
             .add_systems(PostUpdate, sync)
             .add_systems(Last, collect);
+    }
+    fn finish(&self, app: &mut App) {
+        if app.get_sub_app(RenderApp).is_some() {
+            app.add_plugins(ExtractResourcePlugin::<Registrations>::default());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::surface_detail::DetailCoordinates;
+    use bevy_math::{DVec3, Vec4};
+
+    #[test]
+    fn custom_material_waits_for_its_raster_binding_and_every_optical_image() {
+        let mut world = World::new();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<Image>>();
+        let maps: [Handle<Image>; 7] =
+            core::array::from_fn(|_| world.resource_mut::<Assets<Image>>().add(Image::default()));
+        let base = world
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let base_id = base.id().untyped();
+        let registration = MaterialRegistration::new(
+            &mut world,
+            base,
+            MaterialModel::Detailed(Box::new(SurfaceDetail {
+                coordinates: DetailCoordinates::new(DVec3::ZERO, [1.; 8]).unwrap(),
+                colour: maps[0].clone(),
+                detail: maps[1].clone(),
+                coverage0: maps[2].clone(),
+                coverage1: maps[3].clone(),
+                meso_colour: maps[4].clone(),
+                meso_detail: maps[5].clone(),
+                gaussian_mask: Some(maps[6].clone()),
+                gaussian_parameters: Vec4::ONE,
+                lommel: Vec4::ZERO,
+            })),
+        )
+        .unwrap();
+        assert!(
+            !registration.dependencies_ready(|id| id == base_id, |_| true),
+            "base ray material alone is not the custom raster material"
+        );
+        for missing in &maps {
+            assert!(
+                !registration.dependencies_ready(|_| true, |id| id != missing.id()),
+                "each scan, coverage and dielectric mask must have a GPU image"
+            );
+        }
+        assert!(registration.dependencies_ready(|_| true, |_| true));
     }
 }

@@ -25,6 +25,7 @@ pub mod material;
 pub mod optics;
 pub mod pathtracer;
 pub mod point_sky;
+pub mod publication;
 pub mod radiance_sky;
 pub mod realtime;
 pub mod rings;
