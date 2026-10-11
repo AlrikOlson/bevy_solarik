@@ -37,7 +37,7 @@ fn stable_identity_and_preorder_escape_preserve_every_cell() {
         assert_eq!(low[3], i as u32 + 1);
         let address = header[2] as usize + high[3] as usize * CELL_ROWS;
         assert!(leaves.insert(rows[address + 7][0]));
-        let c: Cell = std::array::from_fn(|r| rows[address + r].map(f32::from_bits));
+        let c: Cell = core::array::from_fn(|r| rows[address + r].map(f32::from_bits));
         for p in footprint(&c).unwrap() {
             for y in [0., 1.] {
                 let point = Vec3::new(p.x, y, p.y);

@@ -1,3 +1,7 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "Explicit diagnostics emit measured selection receipts."
+)]
 use super::*;
 use crate::scene::instance_changes::RayInstanceChanges;
 use crate::scene::{RaytracingAssembly3d, RaytracingAssemblyPart, RaytracingMesh3d};

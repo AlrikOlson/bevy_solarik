@@ -35,7 +35,7 @@ pub(crate) struct CanopyGpu {
     pub bindings_changed: bool,
     pub history_global_changed: bool,
     pub changed_bounds: Vec<[Vec3; 2]>,
-    published: std::collections::BTreeMap<u64, (Instance, u32, Bounds)>,
+    published: alloc::collections::BTreeMap<u64, (Instance, u32, Bounds)>,
     source: Option<Arc<super::SourceProfile>>,
 }
 pub(super) fn extract(
@@ -85,7 +85,7 @@ pub(super) fn prepare(
 ) {
     arena.ensure(&device);
     gpu.bindings_changed =
-        gpu.regions.as_ref().map(|b| b.id()) != arena.buffer.as_ref().map(|b| b.id());
+        gpu.regions.as_ref().map(Buffer::id) != arena.buffer.as_ref().map(Buffer::id);
     gpu.regions = arena.buffer.clone();
     let identity = sources.0.as_ref().map(|s| s.identity);
     gpu.history_global_changed = identity != gpu.source.as_ref().map(|s| s.identity);
@@ -131,9 +131,20 @@ pub(super) fn prepare(
     let mut rows = pack(&mut items, frame.0);
     rows[1][1] = background_guide_control();
     gpu.active = !items.is_empty();
+    publish_scene(&mut gpu, rows, &device, &queue);
+}
+fn publish_scene(
+    gpu: &mut CanopyGpu,
+    rows: Vec<[u32; 4]>,
+    device: &RenderDevice,
+    queue: &RenderQueue,
+) {
+    // Bind groups retain the logical byte range, not just the buffer identity.
+    // A larger header with an older range can strand traversal on zeroed nodes.
+    gpu.bindings_changed |= gpu.scene.get().len() != rows.len();
     gpu.scene
         .set(rows.into_iter().map(UVec4::from_array).collect());
-    gpu.bindings_changed |= gpu.scene.write_buffer_changed(&device, &queue).allocated;
+    gpu.bindings_changed |= gpu.scene.write_buffer_changed(device, queue).allocated;
 }
 // Diagnostic only: retain opaque guides while physical canopy rays still run.
 fn background_guide_control() -> u32 {
@@ -158,7 +169,7 @@ fn background_guide_control() -> u32 {
 }
 
 fn update_history(gpu: &mut CanopyGpu, items: &[Item]) {
-    let current: std::collections::BTreeMap<_, _> =
+    let current: alloc::collections::BTreeMap<_, _> =
         items.iter().map(|i| (i.0.identity, *i)).collect();
     let mut changed = Vec::new();
     for (id, old) in &gpu.published {
@@ -302,6 +313,9 @@ fn node(items: &mut [Item], nodes: &mut Vec<[u32; 4]>, instances: &mut Vec<Item>
 }
 
 #[cfg(test)]
+#[path = "filtered_canopy_binding_tests.rs"]
+mod binding_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use bevy_math::Quat;
@@ -336,7 +350,7 @@ mod tests {
         assert_eq!(rows[1][0], 42);
         assert_eq!(rows[16][3], 123);
         let actual =
-            Mat4::from_cols_array_2d(&std::array::from_fn(|i| rows[4 + i].map(f32::from_bits)));
+            Mat4::from_cols_array_2d(&core::array::from_fn(|i| rows[4 + i].map(f32::from_bits)));
         assert_eq!(actual, Mat4::from(transform));
     }
     #[test]

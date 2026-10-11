@@ -94,7 +94,7 @@ impl Arena {
             return None;
         }
         let limit = (MAX_ARENA_BYTES as u64)
-            .min(device.limits().max_storage_buffer_binding_size as u64)
+            .min(device.limits().max_storage_buffer_binding_size)
             .min(device.limits().max_buffer_size);
         let allocation = self
             .slots

@@ -36,21 +36,20 @@ fn preprocess(source: &str, adaptive: bool) -> String {
     let mut include = true;
     source
         .lines()
-        .filter_map(|line| match line.trim() {
+        .filter(|line| match line.trim() {
             "#ifdef ADAPTIVE_CACHE_BUDGET" => {
                 include = adaptive;
-                None
+                false
             }
             "#else" => {
                 include = !include;
-                None
+                false
             }
             "#endif" => {
                 include = true;
-                None
+                false
             }
-            _ if include => Some(line),
-            _ => None,
+            _ => include,
         })
         .collect::<Vec<_>>()
         .join("\n")

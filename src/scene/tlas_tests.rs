@@ -1,6 +1,11 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "Explicit diagnostics emit descriptor comparison timings."
+)]
 use super::{DirtySlots, changed_dense_slots};
 use bevy_platform::collections::HashSet;
-use std::{hint::black_box, time::Instant};
+use core::hint::black_box;
+use std::time::Instant;
 
 fn indexed_changes(old: &[u32], next: &[u32], dirty: &[u32], capacity: usize) -> Vec<(u32, u32)> {
     let dirty = DirtySlots::new(capacity, dirty);

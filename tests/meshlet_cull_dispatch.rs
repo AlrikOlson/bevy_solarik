@@ -1,4 +1,8 @@
 //! Exercise the production culling grid on Vulkan across the actual 1D limit.
+#![expect(
+    clippy::print_stdout,
+    reason = "The GPU diagnostic emits actual dispatch coverage receipts."
+)]
 use wgpu::util::DeviceExt;
 
 #[test]

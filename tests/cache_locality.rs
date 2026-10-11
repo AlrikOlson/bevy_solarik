@@ -7,6 +7,10 @@
 #[path = "../src/scene/history.rs"]
 mod history;
 #[path = "../src/scene/tlas.rs"]
+#[expect(
+    dead_code,
+    reason = "This GPU fixture uses only the production TLAS allocation and build subset."
+)]
 mod scene_tlas;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
 use wgpu::util::DeviceExt;

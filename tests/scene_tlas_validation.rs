@@ -207,7 +207,7 @@ enable wgpu_ray_query;
     });
 }
 
-#[allow(
+#[expect(
     unsafe_code,
     reason = "The test explicitly opts into wgpu's experimental ray-query API"
 )]

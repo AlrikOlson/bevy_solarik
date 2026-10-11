@@ -1,5 +1,10 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "Explicit diagnostics emit publication timing receipts."
+)]
 use super::super::*;
-use std::{hint::black_box, time::Instant};
+use core::hint::black_box;
+use std::time::Instant;
 
 #[derive(Default)]
 struct Records {

@@ -61,7 +61,7 @@ pub(super) fn init(
         ),
     );
     let shader = load_embedded_asset!(assets.as_ref(), "filtered_canopy_prepass.wgsl");
-    let surfaces = std::array::from_fn(|normal| {
+    let surfaces = core::array::from_fn(|normal| {
         let mut targets = vec![
             Some(DEFERRED_PREPASS_FORMAT.into()),
             Some(MOTION_VECTOR_PREPASS_FORMAT.into()),
@@ -83,7 +83,6 @@ pub(super) fn init(
                 },
                 entry_point: Some("fragment".into()),
                 targets,
-                ..Default::default()
             }),
             depth_stencil: Some(DepthStencilState {
                 format: CORE_3D_DEPTH_FORMAT,

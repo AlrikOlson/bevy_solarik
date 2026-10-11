@@ -1,4 +1,9 @@
 //! Read exact production std430 publications back through shader arrayLength.
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "GPU publication tests emit byte counts and measured timing receipts."
+)]
 
 #[path = "scene_storage/material_cost.rs"]
 mod material_cost;

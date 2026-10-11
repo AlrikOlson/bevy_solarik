@@ -21,6 +21,7 @@ fn dependencies(cache: &mut ShaderCache<(), ()>, assets: &mut Assets<Shader>) {
         "#define_import_path bevy_render::view\nstruct View { value: vec4<f32> }",
         "#define_import_path bevy_pbr::prepass_bindings\nstruct PreviousViewUniforms { value: vec4<f32> }",
         "#define_import_path bevy_pbr::utils\nfn octahedral_decode_signed(v: vec2<f32>) -> vec3<f32> { return vec3(v, 1.0); }",
+        include_str!("../vendor/bevy_pbr/src/meshlet/cull_dispatch.wgsl"),
         include_str!("../vendor/bevy_pbr/src/meshlet/meshlet_bindings.wgsl"),
         "#define_import_path bevy_pbr::meshlet_cull_shared\n#import bevy_pbr::meshlet_bindings::MeshletAabb\nfn aabb_in_frustum(a: MeshletAabb, i: u32) -> bool { return true; }\nfn should_occlusion_cull_aabb(a: MeshletAabb, i: u32) -> bool { return false; }",
     ] {

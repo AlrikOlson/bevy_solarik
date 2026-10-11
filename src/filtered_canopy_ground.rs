@@ -3,8 +3,8 @@ use super::{
     Bounds, CELL_ROWS, CellInput, PreparedRegion, REGION_ALLOCATION_BYTES, build_node, footprint,
     frame, height_range,
 };
+use alloc::collections::{BTreeMap, BTreeSet};
 use bevy_math::{DVec2, DVec3, DVec4, Vec3};
-use std::collections::{BTreeMap, BTreeSet};
 #[path = "filtered_canopy_ground_clip.rs"]
 mod clip;
 #[cfg(feature = "graphics_debug")]
@@ -119,7 +119,7 @@ fn supported_bounds(
     triangles: &[Triangle],
 ) -> Result<Bounds, &'static str> {
     let up = frame(&cell.cell)?.y_axis.as_dvec3();
-    let polygon = footprint(&cell.cell)?.map(|p| p.as_dvec2());
+    let polygon = footprint(&cell.cell)?.map(bevy_math::Vec2::as_dvec2);
     let heights = height_range(&cell.cell, extents)?.ok_or("empty linked canopy cell")?;
     let mut bounds = None;
     let mut polygons = Vec::with_capacity(link.triangles.len());
@@ -177,7 +177,7 @@ fn padded_bounds(low: DVec3, high: DVec3) -> Result<Bounds, &'static str> {
     Ok(bounds)
 }
 fn triangle_rows(triangle: &Triangle) -> [[u32; 4]; TRIANGLE_ROWS] {
-    let [a, b, c] = triangle.lateral.map(|p| p.as_vec2());
+    let [a, b, c] = triangle.lateral.map(DVec2::as_vec2);
     [
         triangle
             .plane

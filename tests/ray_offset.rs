@@ -1,4 +1,5 @@
 //! Float32 visibility-origin offsets remain representable from centimetres to planetary distances.
+extern crate alloc;
 const SAMPLES: usize = 64;
 #[expect(
     clippy::print_stdout,
@@ -18,7 +19,7 @@ fn run_probe() -> Vec<[f32; 4]> {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let adapter = bevy_render::renderer::RenderAdapter(std::sync::Arc::new(
+        let adapter = bevy_render::renderer::RenderAdapter(alloc::sync::Arc::new(
             bevy_render::renderer::WgpuWrapper::new(adapter),
         ));
         let bits = adapter

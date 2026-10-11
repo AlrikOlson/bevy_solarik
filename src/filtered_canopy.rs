@@ -1,7 +1,7 @@
 //! Immutable finite canopy cells and a bounded stackless BVH.
 //! This display model does not own or change authoritative plant identities.
+use alloc::collections::BTreeSet;
 use bevy_math::{Mat3, Vec2, Vec3};
-use std::collections::BTreeSet;
 #[path = "filtered_canopy_profile.rs"]
 mod profile;
 pub use profile::{CanopySources, SourceProfile};
@@ -135,7 +135,7 @@ impl PreparedRegion {
         self.rows[start..start + self.cells * CELL_ROWS]
             .chunks_exact(CELL_ROWS)
             .map(|rows| CellInput {
-                cell: std::array::from_fn(|i| rows[i].map(f32::from_bits)),
+                cell: core::array::from_fn(|i| rows[i].map(f32::from_bits)),
                 identity: u64::from(rows[7][0]) | (u64::from(rows[7][1]) << 32),
             })
     }
@@ -175,7 +175,7 @@ fn footprint(cell: &Cell) -> Result<[Vec2; 4], &'static str> {
         Vec2::new(cell[4][0], cell[4][1]),
         Vec2::new(cell[4][2], cell[4][3]),
     ];
-    let turns = std::array::from_fn::<_, 4, _>(|i| {
+    let turns = core::array::from_fn::<_, 4, _>(|i| {
         (p[(i + 1) % 4] - p[i]).perp_dot(p[(i + 2) % 4] - p[(i + 1) % 4])
     });
     if turns.iter().all(|v| v.is_finite())

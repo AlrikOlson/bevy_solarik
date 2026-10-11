@@ -3,8 +3,8 @@ use super::{
     CellGround, GroundTriangle, MAX_REFERENCES, PreparedRegion, Triangle, clip, footprint,
     prepare_triangles,
 };
+use alloc::collections::BTreeMap;
 use bevy_math::DVec2;
-use std::collections::BTreeMap;
 
 struct Node {
     low: DVec2,
@@ -91,7 +91,7 @@ pub(super) fn links(
     region
         .cell_inputs()
         .map(|cell| {
-            let polygon = footprint(&cell.cell)?.map(|p| p.as_dvec2());
+            let polygon = footprint(&cell.cell)?.map(bevy_math::Vec2::as_dvec2);
             Ok(CellGround {
                 identity: cell.identity,
                 triangles: query(&polygon, &nodes, &prepared)?,

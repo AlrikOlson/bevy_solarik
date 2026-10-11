@@ -1,5 +1,13 @@
 //! Separate native TLAS encoding, finishing, submission and completion costs.
+#![expect(
+    clippy::print_stdout,
+    reason = "The explicit GPU diagnostic emits measured TLAS stage timings."
+)]
 #[path = "../src/scene/tlas.rs"]
+#[expect(
+    dead_code,
+    reason = "This GPU fixture uses only the production TLAS allocation and build subset."
+)]
 mod scene_tlas;
 use bevy_render::{
     renderer::{RenderDevice, RenderQueue, initialize_headless_renderer},
@@ -85,7 +93,13 @@ fn scale_same_blas_build_cost() {
         let raw = device.wgpu_device();
         let blas = triangle(&device, &queue);
         let other_blas = triangle(&device, &queue);
-        let geometry = |slot: u32| if slot % 3 == 0 { &blas } else { &other_blas };
+        let geometry = |slot: u32| {
+            if slot.is_multiple_of(3) {
+                &blas
+            } else {
+                &other_blas
+            }
+        };
         let shader = raw.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(r#"
