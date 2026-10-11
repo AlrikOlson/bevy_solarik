@@ -557,7 +557,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         scene_cache.regions.record(bounds, Affine3A::IDENTITY);
         scene_cache.history_stable_radius = 0.0;
     }
-    let (mut dirty_indices, removed) = if unchanged_inputs {
+    let (dirty_indices, removed) = if unchanged_inputs {
         profile_slots(&scene_cache, 0, 0, 0);
         profile_inputs(false, 0, 0);
         (Vec::new(), Vec::new())
@@ -856,6 +856,8 @@ pub(crate) fn prepare_raytracing_scene_bindings(
 
     let instances_profile = bevy_render::diagnostic::profile_scope("scene.prepare_instances");
     let dirty_transforms = super::tlas::DirtySlots::new(slot_capacity, &dirty_indices);
+    let mut geometry_dirty_indices = dirty_indices.clone();
+    let mut material_dirty_indices = dirty_indices.clone();
     let initialize_transforms = dense_reference
         || transforms.buffer().is_none()
         || previous_frame_transforms.buffer().is_none();
@@ -928,7 +930,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
                 .insert(entity.entity);
         }
         assert!(slot.index < (1 << 24), "TLAS custom slot capacity");
-        if publication_rows::write(
+        let changed = publication_rows::write(
             index,
             input,
             (geometry, material_id),
@@ -939,8 +941,12 @@ pub(crate) fn prepare_raytracing_scene_bindings(
                 material_ids.get_mut(),
             ),
             initialize_transforms || dirty_transforms.contains(slot.index),
-        ) {
-            dirty_indices.push(slot.index);
+        );
+        if changed.geometry {
+            geometry_dirty_indices.push(slot.index);
+        }
+        if changed.material {
+            material_dirty_indices.push(slot.index);
         }
         let transform = transforms.get()[index];
         slots.activate(slot);
@@ -1098,7 +1104,12 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         source.alias_threshold = bin.threshold;
         source.alias_index = bin.alias;
         if source.kind & 1 == 0 {
-            geometry_ids.get_mut()[source.id as usize].light_probability = bin.probability;
+            publication_rows::set_light_probability(
+                source.id as usize,
+                bin.probability,
+                geometry_ids.get_mut(),
+                &mut geometry_dirty_indices,
+            );
         }
     }
 
@@ -1150,13 +1161,13 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         geometry_ids.stage_buffer_indices(
             &render_device,
             &render_queue,
-            &dirty_indices,
+            &geometry_dirty_indices,
             &mut batch,
         ),
         material_ids.stage_buffer_indices(
             &render_device,
             &render_queue,
-            &dirty_indices,
+            &material_dirty_indices,
             &mut batch,
         ),
         light_sources.write_buffer_changed(&render_device, &render_queue),
@@ -1165,6 +1176,13 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         previous_frame_light_id_translations.write_buffer_changed(&render_device, &render_queue),
     ];
     let (staging_bytes, staging_buffers) = batch.finish(&render_device, &render_queue);
+    for (name, count) in [
+        ("scene.transform_dirty_rows", dirty_indices.len()),
+        ("scene.geometry_dirty_rows", geometry_dirty_indices.len()),
+        ("scene.material_dirty_rows", material_dirty_indices.len()),
+    ] {
+        bevy_render::diagnostic::profile_value(name, count as f64, "count");
+    }
     bevy_render::diagnostic::profile_value("scene.staging_bytes", staging_bytes as f64, "bytes");
     bevy_render::diagnostic::profile_value(
         "scene.staging_buffers",

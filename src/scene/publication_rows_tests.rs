@@ -30,15 +30,18 @@ fn reference(
     inputs: &[RayInstanceInput],
     slots: &bevy_render::scene_slots::SceneSlots,
     sources: &[(GpuInstanceGeometryIds, u32)],
-) -> Vec<u32> {
-    let mut dirty = Vec::new();
+) -> (Vec<u32>, Vec<u32>) {
+    let mut dirty = (Vec::new(), Vec::new());
     for (index, input) in inputs.iter().enumerate() {
         let slot = slots.get_part(input.entity).unwrap();
         let (geometry, material) = &sources[input.entity.part as usize];
         records.transforms[index] = Mat4::from(input.transform);
         records.previous[index] = Mat4::from(input.previous);
-        if records.geometry[index] != *geometry || records.materials[index] != *material {
-            dirty.push(slot.index);
+        if records.geometry[index] != *geometry {
+            dirty.0.push(slot.index);
+        }
+        if records.materials[index] != *material {
+            dirty.1.push(slot.index);
         }
         records.geometry[index] = geometry.clone();
         records.materials[index] = *material;
@@ -53,13 +56,13 @@ fn retained(
     sources: &[(GpuInstanceGeometryIds, u32)],
     dirty: &[u32],
     initialize: bool,
-) -> Vec<u32> {
+) -> (Vec<u32>, Vec<u32>) {
     let transforms = super::super::super::tlas::DirtySlots::new(inputs.len(), dirty);
-    let mut changed = Vec::new();
+    let mut changed = (Vec::new(), Vec::new());
     for (index, input) in inputs.iter().enumerate() {
         let slot = slots.get_part_at(index as u32, input.entity).unwrap();
         let (geometry, material) = &sources[input.entity.part as usize];
-        if super::write(
+        let row = super::write(
             index,
             input,
             (geometry, *material),
@@ -70,8 +73,12 @@ fn retained(
                 &mut records.materials,
             ),
             initialize || transforms.contains(slot.index),
-        ) {
-            changed.push(slot.index);
+        );
+        if row.geometry {
+            changed.0.push(slot.index);
+        }
+        if row.material {
+            changed.1.push(slot.index);
         }
     }
     changed
@@ -198,13 +205,49 @@ fn binding_only_republication_preserves_matrix_bytes_until_source_is_ready() {
             changed,
         )
     };
-    assert!(write(&mut rows, &inputs[0], true));
+    assert_eq!(
+        write(&mut rows, &inputs[0], true),
+        super::Changes {
+            geometry: true,
+            material: true
+        }
+    );
     let published = rows.transforms[0];
     inputs[0].previous = inputs[0].transform;
     inputs[0].transform = Affine3A::from_translation(Vec3::new(-9.0, 2.0, 7.0));
-    assert!(!write(&mut rows, &inputs[0], false));
+    assert_eq!(
+        write(&mut rows, &inputs[0], false),
+        super::Changes::default()
+    );
     assert_eq!(rows.transforms[0], published);
-    assert!(!write(&mut rows, &inputs[0], true));
+    assert_eq!(
+        write(&mut rows, &inputs[0], true),
+        super::Changes::default()
+    );
     assert_eq!(rows.transforms[0], Mat4::from(inputs[0].transform));
     assert_eq!(rows.previous[0], published);
+}
+
+#[test]
+fn final_emitter_probability_marks_geometry_without_material_or_transform_changes() {
+    let (slots, inputs) = fixture(1);
+    let mut rows = Records::new(1);
+    let sources = vec![(GpuInstanceGeometryIds::default(), 7)];
+    retained(&mut rows, &inputs, &slots, &sources, &[0], true);
+    assert_eq!(
+        retained(&mut rows, &inputs, &slots, &sources, &[], false),
+        (vec![], vec![])
+    );
+    let before = rows.transforms.clone();
+    let mut dirty = Vec::new();
+    super::set_light_probability(0, 0.75, &mut rows.geometry, &mut dirty);
+    assert_eq!(dirty, [0]);
+    assert_eq!(rows.geometry[0].light_probability, 0.75);
+    assert_eq!(rows.materials, [7]);
+    assert_eq!(rows.transforms, before);
+    dirty.clear();
+    super::set_light_probability(0, 0.75, &mut rows.geometry, &mut dirty);
+    assert!(dirty.is_empty());
+    super::set_light_probability(0, 0.0, &mut rows.geometry, &mut dirty);
+    assert_eq!(dirty, [0]);
 }
