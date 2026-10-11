@@ -102,8 +102,9 @@ fn packed_publication_shares_staging_and_preserves_queued_source_lifetimes() {
             }
             let first = a.stage_buffer_indices(&device, &queue, &indices, &mut batch);
             let second = b.stage_buffer_indices(&device, &queue, &indices, &mut batch);
-            assert_eq!(first.ranges + second.ranges, 2 * indices.len() as u32);
-            assert_eq!(first.bytes + second.bytes, 8 * indices.len() as u64);
+            assert_eq!(first.ranges + second.ranges, 2);
+            assert_eq!(first.bytes + second.bytes, 2 * (16_384 * 4 - 12));
+            assert!(first.bytes + second.bytes <= 4 * 8 * indices.len() as u64);
             assert_eq!(
                 batch.finish(&device, &queue),
                 (first.bytes + second.bytes, 1)
@@ -182,8 +183,9 @@ fn fragmented_uploads_preserve_unmarked_values_between_dirty_records() {
         // A CPU-side change without a dirty index must not leak through a gap.
         values.get_mut()[7] = u32::MAX;
         let upload = values.write_buffer_indices(&device, &queue, &indices);
-        assert_eq!(upload.ranges, indices.len() as u32);
-        assert_eq!(upload.bytes, indices.len() as u64 * 4);
+        assert_eq!(upload.ranges, 1);
+        assert_eq!(upload.bytes, 16_384 * 4 - 12);
+        assert!(upload.bytes <= 4 * indices.len() as u64 * 4);
         assert_eq!(read(&device, &queue, &values)[1..], expected);
         assert_eq!(
             values.write_buffer_indices(&device, &queue, &indices).bytes,
@@ -191,6 +193,42 @@ fn fragmented_uploads_preserve_unmarked_values_between_dirty_records() {
         );
         values.write_buffer_indices(&device, &queue, &[7]);
         assert_eq!(read(&device, &queue, &values)[1..], *values.get());
+    });
+}
+
+#[test]
+fn full_ray_bank_material_remaps_coalesce_without_exposing_unmarked_cpu_values() {
+    use bevy_render::render_resource::StorageBufferUploadBatch;
+    bevy_platform::future::block_on(async {
+        let (device, queue) = device().await;
+        const COUNT: usize = 262_144 * 3;
+        let mut values = StorageBuffer::from(vec![17u32; COUNT]);
+        values.write_buffer_indices(&device, &queue, &[]);
+        let indices: Vec<_> = (0..COUNT as u32).step_by(3).collect();
+        let mut expected = values.get().clone();
+        for generation in 1..=3u32 {
+            for &i in &indices {
+                values.get_mut()[i as usize] = i + generation;
+                expected[i as usize] = i + generation;
+            }
+            values.get_mut()[1] = u32::MAX;
+            let start = std::time::Instant::now();
+            let mut batch = StorageBufferUploadBatch::default();
+            let upload = values.stage_buffer_indices(&device, &queue, &indices, &mut batch);
+            let staging = batch.finish(&device, &queue);
+            println!(
+                "ray material remap: dirty={} copies={} bytes={} encode_ms={:.3}",
+                indices.len(),
+                upload.ranges,
+                upload.bytes,
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            assert_eq!(upload.ranges, 1);
+            assert!(!upload.allocated);
+            assert!(upload.bytes <= 4 * indices.len() as u64 * 4);
+            assert_eq!(staging, (upload.bytes, 1));
+        }
+        assert_eq!(read(&device, &queue, &values)[1..], expected);
     });
 }
 

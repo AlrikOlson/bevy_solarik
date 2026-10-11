@@ -289,8 +289,8 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
     /// Stage exact changed records into an owning system's shared upload batch.
     /// Initialization still uses one full write; sparse publications share a
     /// bounded source allocation instead of allocating once per dirty range.
-    /// More than 128 dirty runs coalesce into 64 KiB pages (or one full copy),
-    /// preserving the last published bytes between explicitly changed records.
+    /// Fragmented runs may bridge small gaps with at most four times the dirty
+    /// bytes, preserving last-published values in unmarked records.
     pub fn stage_buffer_indices(
         &mut self,
         device: &RenderDevice,
@@ -387,9 +387,9 @@ impl<T: ShaderType + encase::ShaderSize + WriteInto> StorageBuffer<Vec<T>> {
         batch: &mut StorageBufferUploadBatch,
     ) -> StorageBufferUpload {
         let mut upload = StorageBufferUpload::default();
-        // Dirty runs are already merged. The shared batch bounds staging memory
-        // and submissions without expanding sparse edits to whole-scene copies.
-        for range in ranges {
+        // Coalesce only nearby records; sparse scene edits never expand into
+        // whole-buffer/page copies. Gaps come from the published byte receipt.
+        for range in publication::coalesce(ranges) {
             batch.push(
                 device,
                 queue,

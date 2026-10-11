@@ -432,7 +432,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     // BLAS the shader can alpha-test; the manager rebuilds the ones built the
     // other way (they are missing from the TLAS for the frame it takes).
     let opacity_profile = bevy_render::diagnostic::profile_scope("scene.prepare_opacity");
-    let changed_roots = input_changes.collect();
+    let mut changed_roots = input_changes.collect();
     let instance_inputs_unchanged = changed_roots.is_empty();
     let mut source_pairs = None;
     if !instance_inputs_unchanged || material_assets.is_changed() || alpha_testing.is_changed() {
@@ -494,12 +494,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         || fallback_texture.is_changed();
     // Pending geometry retains ownership but needs another full readiness pass.
     // Count retained inputs before applying membership deltas, not the new query.
-    let full_inputs = resources_changed
-        || !scene_cache.input_roots.initialized
+    let full_inputs = !scene_cache.input_roots.initialized
         || scene_cache.slots.counts().0 != scene_cache.slots.active_indices().len();
-    let unchanged_inputs = instance_inputs_unchanged && !full_inputs;
     let dependency_profile = bevy_render::diagnostic::profile_scope("scene.prepare_dependencies");
-    let changes = if unchanged_inputs {
+    let changes = if instance_inputs_unchanged && !resources_changed && !full_inputs {
         super::dependencies::Changes::default()
     } else {
         scene_cache.dependencies.observe(
@@ -515,6 +513,14 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         )
     };
     drop(dependency_profile);
+    let resource_roots = instances_query.affected_roots(&changes);
+    bevy_render::diagnostic::profile_value(
+        "scene.resource_roots",
+        resource_roots.len() as f64,
+        "count",
+    );
+    changed_roots.extend(resource_roots);
+    let unchanged_inputs = changed_roots.is_empty() && !full_inputs;
     // Asset arrivals and BLAS compaction are publication events, not global
     // lighting changes. Used geometry/material dependencies invalidate their
     // old/new support; emitter, environment and unknown extensions remain global.

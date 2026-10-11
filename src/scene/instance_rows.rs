@@ -9,7 +9,7 @@ use bevy_ecs::{
 };
 use bevy_mesh::Mesh;
 use bevy_pbr::{MeshMaterial3d, PreviousGlobalTransform, StandardMaterial};
-use bevy_platform::collections::HashSet;
+use bevy_platform::collections::{HashMap, HashSet};
 use bevy_render::scene_slots::SceneInstance;
 use bevy_transform::components::GlobalTransform;
 
@@ -38,6 +38,34 @@ pub(super) struct SceneRows<'w, 's> {
     >,
 }
 impl SceneRows<'_, '_> {
+    /// Asset changes invalidate their users without expanding unrelated shared parts.
+    pub(super) fn affected_roots(&self, changes: &super::dependencies::Changes) -> HashSet<Entity> {
+        if changes.meshes.is_empty() && changes.materials.is_empty() {
+            return HashSet::default();
+        }
+        let affected = |mesh, material| {
+            changes.meshes.contains(&mesh) || changes.materials.contains(&material)
+        };
+        let mut roots: HashSet<_> = self
+            .single
+            .iter()
+            .filter_map(|(entity, mesh, material, _, _)| {
+                affected(mesh.id(), material.id()).then_some(entity)
+            })
+            .collect();
+        let mut families: HashMap<_, bool> = HashMap::default();
+        for (entity, assembly, _, _) in &self.assemblies {
+            if *families.entry(Arc::as_ptr(&assembly.0)).or_insert_with(|| {
+                assembly
+                    .0
+                    .iter()
+                    .any(|part| affected(part.mesh.id(), part.material.id()))
+            }) {
+                roots.insert(entity);
+            }
+        }
+        roots
+    }
     pub(super) fn len(&self) -> usize {
         self.single.iter().len() + self.assemblies.iter().map(|r| r.1.0.len()).sum::<usize>()
     }

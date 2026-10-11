@@ -2,7 +2,7 @@ use super::*;
 use crate::scene::instance_changes::RayInstanceChanges;
 use crate::scene::{RaytracingAssembly3d, RaytracingAssemblyPart, RaytracingMesh3d};
 use bevy_ecs::{system::SystemState, world::World};
-use bevy_pbr::PreviousGlobalTransform;
+use bevy_pbr::{MeshMaterial3d, PreviousGlobalTransform};
 use bevy_transform::components::GlobalTransform;
 
 fn assembly(offsets: &[f32]) -> RaytracingAssembly3d {
@@ -167,5 +167,87 @@ fn shared_source_pairs_match_full_expansion_without_root_transform_work() {
         rows.iter()
             .map(|input| (input.mesh, input.material))
             .collect()
+    );
+}
+
+#[test]
+fn resource_user_roots_match_full_parts_at_forest_scale_and_after_replacement() {
+    let mut world = World::new();
+    let forest = assembly(&[0., 1., 2.]);
+    let forest_root = world.spawn(forest.clone()).id();
+    for _ in 1..262_144 {
+        world.spawn(forest.clone());
+    }
+    let meshes = bevy_asset::Assets::<Mesh>::default();
+    let materials = bevy_asset::Assets::<StandardMaterial>::default();
+    let mesh = meshes.reserve_handle();
+    let material = materials.reserve_handle();
+    let terrain = RaytracingAssembly3d::new(vec![RaytracingAssemblyPart {
+        mesh: mesh.clone(),
+        material: material.clone(),
+        transform: Affine3A::IDENTITY,
+    }]);
+    let mut ground: HashSet<_> = (0..16).map(|_| world.spawn(terrain.clone()).id()).collect();
+    let single = world
+        .spawn((
+            RaytracingMesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+        ))
+        .id();
+    ground.insert(single);
+    let mut state = SystemState::<SceneRows>::new(&mut world);
+    let mut changes = super::super::dependencies::Changes::default();
+    for material_change in [false, true] {
+        changes.meshes.clear();
+        changes.materials.clear();
+        if material_change {
+            changes.materials.insert(material.id());
+        } else {
+            changes.meshes.insert(mesh.id());
+        }
+        let rows = state.get(&world).unwrap();
+        let start = std::time::Instant::now();
+        let affected = rows.affected_roots(&changes);
+        let elapsed = start.elapsed();
+        let full: HashSet<_> = rows
+            .iter()
+            .filter(|input| changes.affects(input))
+            .map(|input| input.entity.entity)
+            .collect();
+        assert_eq!(affected, full);
+        assert_eq!(affected, ground);
+        println!(
+            "ray resource target selection: {} affected, 262144 forest retained, {:?}",
+            affected.len(),
+            elapsed
+        );
+    }
+    world
+        .entity_mut(forest_root)
+        .insert(RaytracingAssembly3d::new(terrain.0.to_vec()));
+    ground.insert(forest_root);
+    assert_eq!(state.get(&world).unwrap().affected_roots(&changes), ground);
+    world.despawn(single);
+    ground.remove(&single);
+    let replacement = world.spawn(forest).id();
+    assert_ne!(replacement, single);
+    assert_eq!(state.get(&world).unwrap().affected_roots(&changes), ground);
+    changes.materials.clear();
+    changes.meshes.insert(meshes.reserve_handle().id());
+    assert!(
+        state
+            .get(&world)
+            .unwrap()
+            .affected_roots(&changes)
+            .is_empty()
+    );
+    // Global history invalidation remains separate from per-source transform work.
+    changes.global = true;
+    assert!(
+        state
+            .get(&world)
+            .unwrap()
+            .affected_roots(&changes)
+            .is_empty()
     );
 }
