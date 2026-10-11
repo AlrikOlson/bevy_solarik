@@ -1,4 +1,5 @@
 enable wgpu_ray_query;
+#import bevy_solarik::filtered_canopy_scene::forest_set_seed
 #import bevy_solarik::scene_hit::scene_hit_is_miss
 #import bevy_solarik::scene_bindings::{scene_hit_material, scene_hit_alpha}
 
@@ -31,6 +32,7 @@ fn primary_glass(@builtin(global_invocation_id) id: vec3<u32>) {
         distance = max(0.0, dot(background_position - origin, direction) - RAY_T_MIN);
     }
     var rng = id.x + id.y * u32(view.main_pass_viewport.z) + constants.frame_index;
+    forest_set_seed(vec2u(id.x+id.y*u32(view.main_pass_viewport.z),constants.frame_index^0x71478d15u));
     let background = textureLoad(view_output, id.xy);
     let radiance = composite_primary_glass(id.xy, origin, direction, distance, background.rgb / view.exposure, &rng);
     textureStore(view_output, id.xy, vec4(radiance.rgb * view.exposure, background.a));

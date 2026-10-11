@@ -3,6 +3,8 @@ mod extract;
 pub mod graphics_debug;
 mod node;
 mod prepare;
+#[cfg(feature = "graphics_debug")]
+pub mod query_capture;
 
 use crate::SolarikPlugins;
 use bevy_app::{App, Plugin};
@@ -40,6 +42,7 @@ pub struct SolarikLightingPlugin;
 impl Plugin for SolarikLightingPlugin {
     fn build(&self, app: &mut App) {
         load_shader_library!(app, "gbuffer_utils.wgsl");
+        load_shader_library!(app, "primary_light_trace.wgsl");
         load_shader_library!(app, "realtime_bindings.wgsl");
         load_shader_library!(app, "presample_light_tiles.wgsl");
         embedded_asset!(app, "restir_di.wgsl");

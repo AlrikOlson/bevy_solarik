@@ -1,3 +1,4 @@
+mod raster_precision;
 #[cfg(feature = "raw_vulkan_init")]
 pub mod raw_vulkan_init;
 mod render_context;

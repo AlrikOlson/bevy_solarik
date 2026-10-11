@@ -4,6 +4,9 @@ enable wgpu_ray_query;
 
 
 #define_import_path bevy_solarik::sampling
+#ifdef PRIMARY_CANOPY_DIRECT_ONLY
+#import bevy_solarik::primary_light_trace::light_trace_set
+#endif
 
 #import bevy_pbr::lighting::D_GGX
 #import bevy_pbr::utils::{rand_f, rand_vec2f, rand_u, rand_range_u}
@@ -211,6 +214,9 @@ fn resolve_light_sample(light_sample: LightSample, light_source: LightSource) ->
         let random = rand_vec2f(&rng);
         let cos_theta = (1.0 - random.x) + random.x * directional_light.cos_theta_max;
         let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+#ifdef PRIMARY_CANOPY_DIRECT_ONLY
+        light_trace_set(19u,vec4f(random,cos_theta,sin_theta));
+#endif
         let phi = random.y * PI_2;
         let x = cos(phi) * sin_theta;
         let y = sin(phi) * sin_theta;
@@ -387,6 +393,13 @@ fn sample_random_light_transmitted(ray_origin: vec3<f32>, world_normal: vec3<f32
     let side = select(-1.0, 1.0, dot(geometric_normal, light.wi) >= 0.0);
     let origin = ray_origin + geometric_normal * (side * RAY_T_MIN);
     let transmission = trace_light_transmission(origin, sample.world_position);
+#ifdef PRIMARY_CANOPY_DIRECT_ONLY
+    light_trace_set(10u,sample.world_position);
+    light_trace_set(11u,vec4f(sample.radiance,sample.inverse_pdf));
+    light_trace_set(12u,vec4f(light.wi,light.solid_angle_pdf));
+    light_trace_set(13u,vec4f(light.radiance,light.inverse_pdf));
+    light_trace_set(14u,transmission);
+#endif
     light.radiance *= transmission.rgb;
     return TransmittedLightContribution(light, transmission.a);
 }

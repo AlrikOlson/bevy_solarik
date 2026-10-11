@@ -24,7 +24,7 @@ use bevy_render::{
             storage_buffer_sized, texture_2d, texture_depth_2d, texture_storage_2d, uniform_buffer,
         },
     },
-    renderer::{RenderContext, RenderDevice, ViewQuery},
+    renderer::{RenderAdapter, RenderContext, RenderDevice, ViewQuery},
     view::{ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
 };
 use bevy_render::{
@@ -223,6 +223,9 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     previous_view_uniforms: Res<PreviousViewUniforms>,
     frame_count: Res<FrameCount>,
     render_device: Res<RenderDevice>,
+    #[cfg(feature = "graphics_debug")] query_capture: Option<
+        Res<super::query_capture::PrimaryQueryCapture>,
+    >,
     mut ctx: RenderContext,
 ) {
     #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
@@ -253,6 +256,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         .contains(&extracted_view.retained_view_entity);
     if PRIMARY
         && !scene_bindings.has_foliage
+        && !scene_bindings.has_canopy
         && !primary_views
             .0
             .contains(&extracted_view.retained_view_entity)
@@ -480,12 +484,34 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         if let Some(group) = &bind_group_resolve_dlss_rr_textures {
             pass.set_bind_group(2, group, &[]);
         }
-        if let Some(pipeline) = foliage_pipeline.filter(|_| scene_bindings.has_foliage) {
+        if let Some(pipeline) =
+            foliage_pipeline.filter(|_| scene_bindings.has_foliage || scene_bindings.has_canopy)
+        {
             let span = diagnostics.time_span(&mut pass, "solarik_lighting/primary_foliage");
             pass.set_pipeline(pipeline);
+            let capture_frame = 0u32;
+            #[cfg(feature = "graphics_debug")]
+            let capture_frame = if let Some(capture) = &query_capture {
+                #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
+                let rr = false;
+                #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+                let rr = view_dlss_rr_textures.is_some();
+                if !rr {
+                    pass.set_bind_group(2, &capture.empty_group, &[]);
+                }
+                pass.set_bind_group(3, &capture.group, &[]);
+                u32::from(capture.frame == Some(render_frame))
+            } else {
+                capture_frame
+            };
             pass.set_immediates(
                 0,
-                bytemuck::cast_slice(&[frame_index, 0u32, render_frame, stable_radius.to_bits()]),
+                bytemuck::cast_slice(&[
+                    frame_index,
+                    capture_frame,
+                    render_frame,
+                    stable_radius.to_bits(),
+                ]),
             );
             pass.dispatch_workgroups(dx, dy, 1);
             span.end(&mut pass);
@@ -711,10 +737,20 @@ pub fn solarik_lighting<const PRIMARY: bool>(
 /// Initializes the Solarik lighting pipelines at render startup.
 pub fn init_solari_lighting_pipelines(
     mut commands: Commands,
+    adapter: Res<RenderAdapter>,
+    #[cfg(feature = "graphics_debug")] device: Res<RenderDevice>,
     pipeline_cache: Res<PipelineCache>,
     scene_bindings: Res<RaytracingSceneBindings>,
     asset_server: Res<AssetServer>,
 ) {
+    let raster_subpixel_bits = adapter
+        .raster_subpixel_precision_bits()
+        .unwrap_or(4)
+        .min(24);
+    tracing::info!(
+        raster_subpixel_bits,
+        "Solarik raster reconstruction precision"
+    );
     let bind_group_layout = BindGroupLayoutDescriptor::new(
         "solarik_lighting_bind_group_layout",
         &BindGroupLayoutEntries::sequential(
@@ -768,6 +804,14 @@ pub fn init_solari_lighting_pipelines(
         ),
     );
 
+    #[cfg(feature = "graphics_debug")]
+    let direct_capture = std::env::var("SOLARIK_PRIMARY_DIRECT_ONLY").as_deref() == Ok("1");
+    #[cfg(feature = "graphics_debug")]
+    let query_capture = (direct_capture
+        || std::env::var("SOLARIK_PRIMARY_QUERY_ONLY").as_deref() == Ok("1"))
+    .then(|| {
+        super::query_capture::PrimaryQueryCapture::new(&device, &pipeline_cache, direct_capture)
+    });
     let create_pipeline = |label: &'static str,
                            entry_point: &'static str,
                            shader: Handle<Shader>,
@@ -786,6 +830,10 @@ pub fn init_solari_lighting_pipelines(
             WORLD_CACHE_SIZE as u32,
         )];
         shader_defs.extend_from_slice(&extra_shader_defs);
+        shader_defs.push(ShaderDefVal::UInt(
+            "RASTER_SUBPIXEL_BITS".into(),
+            raster_subpixel_bits,
+        ));
         shader_defs.push("BINDLESS_SURFACE_DETAIL".into());
         if std::env::var("SOLARIK_ADAPTIVE_CACHE_BUDGET").is_ok_and(|v| v == "1") {
             shader_defs.push("ADAPTIVE_CACHE_BUDGET".into());
@@ -795,6 +843,39 @@ pub fn init_solari_lighting_pipelines(
         }
         if std::env::var("SOLARIK_RAY_MATERIAL_FILTERING").is_ok_and(|v| v == "1") {
             shader_defs.push("RAY_MATERIAL_FOOTPRINTS".into());
+        }
+        #[cfg(feature = "graphics_debug")]
+        if entry_point == "primary_foliage"
+            && std::env::var("SOLARIK_PRIMARY_QUERY_ONLY").as_deref() == Ok("1")
+        {
+            tracing::warn!("Primary canopy query-only diagnostic enabled; radiance is invalid");
+            shader_defs.push("PRIMARY_CANOPY_QUERY_ONLY".into());
+            let capture = query_capture.as_ref().expect("query capture configured");
+            if layout.len() == 2 {
+                layout.push(capture.empty_layout.clone());
+            }
+            layout.push(capture.layout.clone());
+        }
+
+        #[cfg(feature = "graphics_debug")]
+        if entry_point == "primary_foliage"
+            && std::env::var("SOLARIK_PRIMARY_DIRECT_ONLY").as_deref() == Ok("1")
+        {
+            assert!(
+                std::env::var("SOLARIK_PRIMARY_QUERY_ONLY").as_deref() != Ok("1"),
+                "Direct-only and query-only diagnostics are exclusive"
+            );
+            tracing::warn!(
+                "Primary canopy direct-only diagnostic enabled; indirect lighting is absent"
+            );
+            shader_defs.push("PRIMARY_CANOPY_DIRECT_ONLY".into());
+            let capture = query_capture
+                .as_ref()
+                .expect("direct light capture configured");
+            if layout.len() == 2 {
+                layout.push(capture.empty_layout.clone());
+            }
+            layout.push(capture.layout.clone());
         }
 
         pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -1011,4 +1092,8 @@ pub fn init_solari_lighting_pipelines(
             vec!["DLSS_RR_GUIDE_BUFFERS".into()],
         ),
     });
+    #[cfg(feature = "graphics_debug")]
+    if let Some(capture) = query_capture {
+        commands.insert_resource(capture);
+    }
 }

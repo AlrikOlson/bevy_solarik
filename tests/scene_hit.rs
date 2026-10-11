@@ -30,6 +30,24 @@ fn function(source: &str, name: &str) -> String {
     }
     panic!("unterminated function {name}");
 }
+fn default_definitions(source: String) -> String {
+    let mut depth = 0;
+    source
+        .lines()
+        .filter(|line| {
+            if line.trim_start().starts_with("#ifdef") {
+                depth += 1;
+                false
+            } else if line.trim_start().starts_with("#endif") {
+                depth -= 1;
+                false
+            } else {
+                depth == 0
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 #[test]
 fn tagged_hits_preserve_triangle_queries_and_reject_foreign_payloads_on_vulkan() {
     bevy_platform::future::block_on(async {
@@ -108,12 +126,14 @@ fn tagged_hits_preserve_triangle_queries_and_reject_foreign_payloads_on_vulkan()
             "trace_glass_ray",
             "scene_hit_from_triangle",
             "trace_ray_impl",
+            "trace_ray_query",
             "trace_triangle_ray_impl",
             "scene_hit_material",
             "scene_hit_alpha",
             "resolve_ray_hit_filtered",
         ]
         .map(|name| function(source, name))
+        .map(default_definitions)
         .join("\n");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production scene hit boundary"),

@@ -1,5 +1,6 @@
 // https://intro-to-restir.cwyman.org/presentations/2023ReSTIR_Course_Notes.pdf
 enable wgpu_ray_query;
+#import bevy_solarik::filtered_canopy_scene::forest_set_seed
 #import bevy_solarik::scene_hit::scene_hit_is_miss
 
 #ifdef RAY_MATERIAL_FOOTPRINTS
@@ -37,6 +38,7 @@ fn initial_and_temporal(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let pixel_index = global_id.x + global_id.y * u32(view.main_pass_viewport.z);
     var rng = pixel_index + constants.frame_index;
+    forest_set_seed(vec2u(pixel_index,constants.frame_index^0x7a78b931u));
 
     let depth = textureLoad(depth_buffer, global_id.xy, 0);
     if depth == 0.0 {
@@ -63,6 +65,7 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let pixel_index = global_id.x + global_id.y * u32(view.main_pass_viewport.z);
     var rng = pixel_index + constants.frame_index;
+    forest_set_seed(vec2u(pixel_index,constants.frame_index^0x17917811u));
 
     let depth = textureLoad(depth_buffer, global_id.xy, 0);
     if depth == 0.0 {

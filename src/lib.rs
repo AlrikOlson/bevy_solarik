@@ -18,6 +18,7 @@ pub mod coarse_spatial_material;
 pub mod coarse_spatial_scene;
 pub mod coarse_transport;
 pub mod depth_probe;
+pub mod filtered_canopy;
 pub mod gaussian;
 pub mod lommel;
 pub mod optics;

@@ -25,7 +25,8 @@ fn gpixel_resolve(gpixel: vec4<u32>, depth: f32, pixel_id: vec2<u32>, view_size:
     let metallic = props.g;
     let emissive = rgb9e5_to_vec3_(gpixel.g);
     let gaussian_weight = select(0.0, props.a, (gpixel.a & 0x08000000u) != 0u);
-    let material = ResolvedMaterial(base_color, emissive, reflectance, perceptual_roughness, roughness, metallic, 0.0, vec4(0.0), gaussian_weight, (gpixel.a & 0x10000000u) != 0u);
+    let transmission=select(0.0,props.a,(gpixel.a&0x20000000u)!=0u);
+    let material = ResolvedMaterial(base_color, emissive, reflectance, perceptual_roughness, roughness, metallic, transmission, vec4(0.0), gaussian_weight, (gpixel.a & 0x10000000u) != 0u);
 
     return ResolvedGPixel(world_position, world_normal, material);
 }
@@ -35,6 +36,22 @@ fn reconstruct_world_position(pixel_id: vec2<u32>, depth: f32, view_size: vec2<f
     let xy_ndc = (uv - vec2(0.5)) * vec2(2.0, -2.0);
     let world_pos = world_from_clip * vec4(xy_ndc, depth, 1.0);
     return world_pos.xyz / world_pos.w;
+}
+
+// Rasterized vertices have quantized framebuffer XY. Interpolating their depth
+// and unprojecting the exact pixel centre can therefore fall below the surface.
+// Propagate one subpixel step through the homogeneous quotient, onto the normal.
+// A full step covers truncation as well as nearest rounding. The caller omits
+// this term for analytic primary intersections, whose depth is not interpolated.
+fn raster_reconstruction_error(pixel_id: vec2u, depth: f32, normal: vec3f,
+    view_size: vec2f, world_from_clip: mat4x4f, subpixel_step: f32) -> f32 {
+    let ndc = ((vec2f(pixel_id) + 0.5) / view_size - 0.5) * vec2f(2.0, -2.0);
+    let h = world_from_clip * vec4f(ndc, depth, 1.0);
+    let position = h.xyz / h.w;
+    let dx = (world_from_clip[0].xyz - position * world_from_clip[0].w) / h.w;
+    let dy = (world_from_clip[1].xyz - position * world_from_clip[1].w) / h.w;
+    return 2.0 * subpixel_step * (abs(dot(normal, dx)) / view_size.x
+        + abs(dot(normal, dy)) / view_size.y);
 }
 
 // Reject if tangent plane differs more than 0.3% or angle between normals more than 90 degrees

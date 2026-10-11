@@ -7,6 +7,9 @@ enable wgpu_ray_query;
 #endif
 
 #define_import_path bevy_solarik::surface_path
+#ifdef PRIMARY_CANOPY_DIRECT_ONLY
+#import bevy_solarik::primary_light_trace::{light_trace_set,light_trace_set_u}
+#endif
 
 #import bevy_pbr::utils::rand_f
 #import bevy_solarik::brdf::{evaluate_brdf, evaluate_and_sample_brdf, evaluate_brdf_pdf}
@@ -18,6 +21,11 @@ enable wgpu_ray_query;
 // Four ordinary scattering events; final vertex uses NEE alone. Thin panes
 // have a separate 32-event budget between ordinary vertices.
 fn shade_surface_path(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, rng: ptr<function, u32>) -> vec3<f32> {
+#ifdef PRIMARY_CANOPY_DIRECT_ONLY
+    light_trace_set(8u,vec4f(initial.material.base_color,initial.material.roughness));
+    light_trace_set(9u,vec4f(initial.material.metallic,initial.material.reflectance,initial.material.diffuse_transmission,initial.material.perceptual_roughness));
+    light_trace_set_u(16u,vec4u(bitcast<vec3u>(emitted_radiance(initial.material,initial_wo)),*rng));
+#endif
     return emitted_radiance(initial.material, initial_wo) + shade_surface_scattering(initial, initial_wo, rng);
 }
 
@@ -31,8 +39,14 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
     var wo = initial_wo;
     var throughput = vec3(1.0);
     var radiance = vec3(0.0);
-    for (var bounce = 0u; bounce < 4u; bounce += 1u) {
-        let last = bounce == 3u;
+#ifdef PRIMARY_CANOPY_DIRECT_ONLY
+    // Incomplete lighting ablation, enabled only on the debug primary consumer.
+    let vertex_count = 1u;
+#else
+    let vertex_count = 4u;
+#endif
+    for (var bounce = 0u; bounce < vertex_count; bounce += 1u) {
+        let last = bounce + 1u == vertex_count;
         let mirror = hit.material.roughness <= MIRROR_ROUGHNESS_THRESHOLD && hit.material.metallic > 0.9999;
         if !mirror && arrayLength(&light_sources) > 0u {
             let shadow = sample_random_light_transmitted(hit.world_position,
@@ -45,6 +59,9 @@ fn shade_surface_scattering(initial: ResolvedRayHitFull, initial_wo: vec3<f32>, 
             }
             radiance += throughput * light.radiance * light.inverse_pdf * weight
                 * evaluate_brdf(wo, light.wi, hit.world_normal, hit.material);
+#ifdef PRIMARY_CANOPY_DIRECT_ONLY
+            light_trace_set(15u,vec4f(evaluate_brdf(wo,light.wi,hit.world_normal,hit.material),weight));
+#endif
         }
         if last { break; }
         let next = evaluate_and_sample_brdf(wo, hit.world_normal, hit.material, rng);

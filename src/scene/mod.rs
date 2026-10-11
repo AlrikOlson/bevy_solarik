@@ -62,6 +62,7 @@ impl Plugin for RaytracingScenePlugin {
         app.add_plugins(crate::gaussian::GaussianDielectricPlugin);
         app.add_plugins(crate::lommel::LommelSeeligerPlugin);
         app.add_plugins(crate::rings::RingPlugin);
+        app.add_plugins(crate::filtered_canopy::CanopyPlugin);
         crate::coarse_scene::load_shader(app);
         load_shader_library!(app, "brdf.wgsl");
         load_shader_library!(app, "light_medium.wgsl");
@@ -131,7 +132,9 @@ impl Plugin for RaytracingScenePlugin {
                     compact_raytracing_blas
                         .in_set(RenderSystems::PrepareAssets)
                         .after(prepare_raytracing_blas),
-                    prepare_raytracing_scene_bindings.in_set(RenderSystems::PrepareResources),
+                    prepare_raytracing_scene_bindings
+                        .in_set(RenderSystems::PrepareResources)
+                        .after(crate::filtered_canopy::PrepareCanopy),
                     blas::publish_readiness
                         .in_set(RenderSystems::PrepareResources)
                         .after(prepare_raytracing_scene_bindings),

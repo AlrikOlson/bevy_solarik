@@ -2,6 +2,7 @@
 // https://d1qx31qr3h6wln.cloudfront.net/publications/ReSTIR%20GI.pdf
 
 enable wgpu_ray_query;
+#import bevy_solarik::filtered_canopy_scene::forest_set_seed
 
 #import bevy_core_pipeline::tonemapping::tonemapping_luminance as luminance
 #import bevy_pbr::prepass_bindings::PreviousViewUniforms
@@ -9,7 +10,7 @@ enable wgpu_ray_query;
 #import bevy_render::maths::PI
 #import bevy_render::view::View
 #import bevy_solarik::brdf::{evaluate_diffuse_brdf, evaluate_specular_brdf}
-#import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel}
+#import bevy_solarik::gbuffer_utils::{gpixel_resolve, pixel_dissimilar, permute_pixel, raster_reconstruction_error}
 #import bevy_solarik::presample_light_tiles::unpack_resolved_light_sample
 #import bevy_solarik::sampling::{LightSample, ResolvedLightSample, NULL_LIGHT_ID, calculate_resolved_light_contribution, resolve_and_calculate_light_contribution, resolve_light_sample, trace_light_transmission, balance_heuristic}
 #import bevy_solarik::scene_bindings::{light_sources, previous_frame_light_id_translations, LIGHT_NOT_PRESENT_THIS_FRAME, RAY_T_MIN, offset_surface_ray}
@@ -19,6 +20,12 @@ enable wgpu_ray_query;
 const INITIAL_SAMPLES = 8u;
 const SPATIAL_REUSE_RADIUS_PIXELS = 30.0;
 const CONFIDENCE_WEIGHT_CAP = 20.0;
+#ifdef RASTER_SUBPIXEL_BITS
+const RASTER_SUBPIXEL_STEP = 1.0 / f32(1u << #{RASTER_SUBPIXEL_BITS});
+#else
+// Vulkan's guaranteed minimum, used by tools without adapter specialization.
+const RASTER_SUBPIXEL_STEP = 1.0 / 16.0;
+#endif
 
 @compute @workgroup_size(8, 8, 1)
 fn initial_and_temporal(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -26,6 +33,7 @@ fn initial_and_temporal(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin
 
     let pixel_index = global_id.x + global_id.y * u32(view.main_pass_viewport.z);
     var rng = pixel_index + constants.frame_index;
+    forest_set_seed(vec2u(pixel_index,constants.frame_index));
 
     let depth = textureLoad(depth_buffer, global_id.xy, 0);
     if depth == 0.0 {
@@ -49,6 +57,7 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let pixel_index = global_id.x + global_id.y * u32(view.main_pass_viewport.z);
     var rng = pixel_index + constants.frame_index;
+    forest_set_seed(vec2u(pixel_index,constants.frame_index));
 
     let depth = textureLoad(depth_buffer, global_id.xy, 0);
     if depth == 0.0 {
@@ -75,16 +84,23 @@ fn spatial_and_shade(@builtin(global_invocation_id) global_id: vec3<u32>) {
         brdf += evaluate_specular_brdf(wo, merge_result.wi, surface.world_normal, surface.material);
     }
 
-    var pixel_color = shade_di_reservoir(merge_result, surface.world_position, surface.world_normal);
+    var raster_error = 0.0;
+    // Finite-canopy and Gaussian primary surfaces write analytic intersection
+    // depth. Ordinary raster meshes (including VG) retain the snapping bound.
+    if (textureLoad(gbuffer, global_id.xy, 0).a & 0x28000000u) == 0u {
+        raster_error = raster_reconstruction_error(global_id.xy, depth, surface.world_normal,
+            view.main_pass_viewport.zw, view.world_from_clip, RASTER_SUBPIXEL_STEP);
+    }
+    var pixel_color = shade_di_reservoir(merge_result, surface.world_position, surface.world_normal, raster_error);
     pixel_color *= brdf;
     pixel_color += surface.material.emissive;
     pixel_color *= view.exposure;
     textureStore(view_output, global_id.xy, vec4(pixel_color, 1.0));
 }
 
-fn shade_di_reservoir(result: ReservoirMergeResult, world_position: vec3<f32>, world_normal: vec3<f32>) -> vec3<f32> {
+fn shade_di_reservoir(result: ReservoirMergeResult, world_position: vec3<f32>, world_normal: vec3<f32>, raster_error: f32) -> vec3<f32> {
     if !reservoir_valid(result.merged_reservoir) { return vec3(0.0); }
-    let transmission = trace_light_transmission(offset_surface_ray(world_position, world_normal),
+    let transmission = trace_light_transmission(offset_surface_ray(world_position, world_normal, view.world_position, raster_error),
         result.selected_light_world_position);
     return result.selected_sample_radiance * result.merged_reservoir.unbiased_contribution_weight * transmission.rgb;
 }

@@ -1,4 +1,5 @@
 enable wgpu_ray_query;
+#import bevy_solarik::filtered_canopy_scene::forest_set_seed
 #import bevy_solarik::scene_hit::scene_hit_is_miss
 
 #ifdef RAY_MATERIAL_FOOTPRINTS
@@ -42,6 +43,7 @@ fn sample_di(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
     let cell_index = world_cache_a[active_cell_id.x];
     let geometry_data = world_cache_geometry_data[cell_index];
     var rng = cell_index + constants.frame_index;
+    forest_set_seed(vec2u(cell_index,constants.frame_index^0x4173bda1u));
 
     let new_radiance = sample_random_light_ris(geometry_data.world_position, geometry_data.world_normal, workgroup_id.xy, &rng);
 
@@ -55,6 +57,7 @@ fn sample_gi(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_inv
     let cell_index = world_cache_a[active_cell_id.x];
     let geometry_data = world_cache_geometry_data[cell_index];
     var rng = cell_index + constants.frame_index;
+    forest_set_seed(vec2u(cell_index,constants.frame_index^0x79b4da17u));
 
     let ray_direction = sample_cosine_hemisphere(geometry_data.world_normal, &rng);
     // Traced to the end of the world so that geometry beyond the GI ray

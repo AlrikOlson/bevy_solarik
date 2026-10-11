@@ -107,6 +107,7 @@ pub struct RaytracingSceneBindings {
     pub(crate) glass_entities: HashSet<Entity>,
     /// Whether this frame's TLAS contains explicitly transmissive foliage.
     pub(crate) has_foliage: bool,
+    pub(crate) has_canopy: bool,
     /// Region about the render origin untouched by this frame's geometry.
     /// Infinity means unchanged; zero means unknown or global lighting change.
     pub(crate) history_stable_radius: f32,
@@ -389,13 +390,14 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     fallback_texture: Res<FallbackImage>,
     dfg_lut: Res<DfgLut>,
     sky_light: Res<SolarikSkyLight>,
-    (alpha_testing, ray_settings, planet, atmosphere, rings, readiness): (
+    (alpha_testing, ray_settings, planet, atmosphere, rings, readiness, canopy): (
         Res<SolarikAlphaTesting>,
         Res<SolarikRaySettings>,
         Option<Res<crate::atmosphere::PlanetaryAtmosphere>>,
         Option<Res<crate::atmosphere::AtmosphereState>>,
         Res<crate::rings::RingShadow>,
         Res<bevy_render::scene_readiness::SceneGeometryReadiness>,
+        Res<crate::filtered_canopy::CanopyGpu>,
     ),
     (render_device, diagnostics, mut scene_cache, frame, _capture_indices): (
         Res<RenderDevice>,
@@ -409,6 +411,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     mut raytracing_scene_bindings: ResMut<RaytracingSceneBindings>,
 ) {
     let frame_id = frame.as_deref().map(|f| f.0);
+    raytracing_scene_bindings.has_canopy = canopy.active;
     let _source = frame_id.and_then(bevy_render::diagnostic::profile_source_frame);
     #[cfg(feature = "graphics_debug")]
     let dense_reference = {
@@ -527,6 +530,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     // Known material registries are diffed by used material in Dependencies.
     // Preparing or evicting an unused terrain tile must not erase canopy GI.
     let global_history_change = changes.global
+        || canopy.history_global_changed
         || scene_cache.inputs.as_ref() != Some(&inputs)
         || collimated.is_changed()
         || fallback_texture.is_changed();
@@ -546,6 +550,11 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         f32::INFINITY
     };
     scene_cache.regions.clear(global_history_change);
+    for &[min, max] in &canopy.changed_bounds {
+        let bounds = super::history::Bounds::from_extents(min, max);
+        scene_cache.regions.record(bounds, Affine3A::IDENTITY);
+        scene_cache.history_stable_radius = 0.0;
+    }
     let (mut dirty_indices, removed) = if unchanged_inputs {
         profile_slots(&scene_cache, 0, 0, 0);
         profile_inputs(false, 0, 0);
@@ -589,6 +598,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         "count",
     );
     let reused = dirty_indices.is_empty()
+        && !canopy.bindings_changed
         && removed.is_empty()
         && !resources_changed
         && !history_binding_changed
@@ -605,6 +615,7 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         return;
     }
     let delta_allowed = !dense_reference
+        && !canopy.bindings_changed
         && !full_inputs
         && !resources_changed
         && !history_binding_changed
@@ -1253,38 +1264,51 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             .push(fallback_texture.d2_array.texture_view.deref());
         scan_samplers.push(fallback_texture.d2_array.sampler.deref());
     }
-    raytracing_scene_bindings.bind_group = Some(render_device.create_bind_group(
-        "raytracing_scene_bind_group",
-        &pipeline_cache.get_bind_group_layout(&raytracing_scene_bindings.bind_group_layout),
-        &BindGroupEntries::sequential((
-            vertex_buffers.as_slice(),
-            index_buffers.as_slice(),
-            textures.as_slice(),
-            samplers.as_slice(),
-            materials.binding().unwrap(),
-            tlas.as_binding(),
-            transforms.binding().unwrap(),
-            previous_frame_transforms.binding().unwrap(),
-            geometry_ids.binding().unwrap(),
-            material_ids.binding().unwrap(),
-            light_sources.binding().unwrap(),
-            directional_lights.binding().unwrap(),
-            local_lights.binding().unwrap(),
-            previous_frame_light_id_translations.binding().unwrap(),
-            dfg_view,
-            dfg_sampler,
-            sky_view,
-            sky_sampler,
-            sky_buffer.binding().unwrap(),
-            weather_view,
-            weather_sampler,
-            scan_textures.as_slice(),
-            scan_samplers.as_slice(),
-            detail_parameters.binding().unwrap(),
-            ring_buffer.binding().unwrap(),
-            raytracing_scene_bindings.history_regions.binding().unwrap(),
-        )),
-    ));
+    raytracing_scene_bindings.bind_group = Some(
+        render_device.create_bind_group(
+            "raytracing_scene_bind_group",
+            &pipeline_cache.get_bind_group_layout(&raytracing_scene_bindings.bind_group_layout),
+            &BindGroupEntries::sequential((
+                vertex_buffers.as_slice(),
+                index_buffers.as_slice(),
+                textures.as_slice(),
+                samplers.as_slice(),
+                materials.binding().unwrap(),
+                tlas.as_binding(),
+                transforms.binding().unwrap(),
+                previous_frame_transforms.binding().unwrap(),
+                geometry_ids.binding().unwrap(),
+                material_ids.binding().unwrap(),
+                light_sources.binding().unwrap(),
+                directional_lights.binding().unwrap(),
+                local_lights.binding().unwrap(),
+                previous_frame_light_id_translations.binding().unwrap(),
+                dfg_view,
+                dfg_sampler,
+                sky_view,
+                sky_sampler,
+                sky_buffer.binding().unwrap(),
+                weather_view,
+                weather_sampler,
+                scan_textures.as_slice(),
+                scan_samplers.as_slice(),
+                detail_parameters.binding().unwrap(),
+                ring_buffer.binding().unwrap(),
+                raytracing_scene_bindings.history_regions.binding().unwrap(),
+                canopy
+                    .sources
+                    .as_ref()
+                    .expect("canopy sources prepared")
+                    .as_entire_binding(),
+                canopy
+                    .regions
+                    .as_ref()
+                    .expect("canopy regions prepared")
+                    .as_entire_binding(),
+                canopy.scene.binding().expect("canopy instances prepared"),
+            )),
+        ),
+    );
 }
 
 impl RaytracingSceneBindings {
@@ -1324,6 +1348,9 @@ impl RaytracingSceneBindings {
                         storage_buffer_read_only_sized(false, None),
                         storage_buffer_read_only::<crate::rings::RingData>(false),
                         storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
+                        storage_buffer_read_only_sized(false, None),
                     ),
                 ),
             ),
@@ -1333,6 +1360,7 @@ impl RaytracingSceneBindings {
             debug: super::graphics_debug::SceneSnapshot::default(),
             glass_entities: HashSet::default(),
             has_foliage: false,
+            has_canopy: false,
             history_stable_radius: 0.0,
             history_generation: 0,
             history_regional: false,

@@ -1,4 +1,5 @@
 enable wgpu_ray_query;
+#import bevy_solarik::filtered_canopy_scene::forest_set_seed
 #import bevy_solarik::scene_hit::scene_hit_is_miss
 #import bevy_solarik::scene_bindings::{scene_hit_material, scene_hit_alpha}
 
@@ -33,6 +34,7 @@ fn pathtrace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pixel_index = global_id.x + global_id.y * u32(view.viewport.z);
     let frame_index = u32(old_color.a) * 5782582u;
     var rng = pixel_index + frame_index;
+    forest_set_seed(vec2u(pixel_index,frame_index));
 
     // Shoot the first ray from the camera
     let pixel_center = vec2<f32>(global_id.xy) + 0.5;

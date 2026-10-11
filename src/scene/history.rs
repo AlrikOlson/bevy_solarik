@@ -48,6 +48,9 @@ pub(super) struct Bounds {
     max: Vec3,
 }
 impl Bounds {
+    pub(super) fn from_extents(min: Vec3, max: Vec3) -> Option<Self> {
+        (min.is_finite() && max.is_finite() && min.cmple(max).all()).then_some(Self { min, max })
+    }
     pub(super) fn from_mesh(mesh: &Mesh) -> Option<Self> {
         let VertexAttributeValues::Float32x3(points) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)?
         else {

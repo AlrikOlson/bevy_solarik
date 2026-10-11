@@ -62,6 +62,7 @@ fn complete_scene_consumers_compile_with_supported_shader_variants() {
         "src/realtime/specular_gi.wgsl",
         "src/realtime/surface_path.wgsl",
         "src/pathtracer/pathtracer.wgsl",
+        "src/filtered_canopy_prepass.wgsl",
     ];
     for path in inputs {
         let source = std::fs::read_to_string(&path).unwrap();
@@ -91,6 +92,14 @@ fn complete_scene_consumers_compile_with_supported_shader_variants() {
         let mut definitions = vec![
             ShaderDefVal::UInt("WORLD_CACHE_SIZE".into(), 1 << 20),
             ShaderDefVal::UInt(
+                "RASTER_SUBPIXEL_BITS".into(),
+                render
+                    .3
+                    .raster_subpixel_precision_bits()
+                    .unwrap_or(4)
+                    .min(24),
+            ),
+            ShaderDefVal::UInt(
                 "AVAILABLE_STORAGE_BUFFER_BINDINGS".into(),
                 render.0.limits().max_storage_buffers_per_shader_stage,
             ),
@@ -111,6 +120,9 @@ fn complete_scene_consumers_compile_with_supported_shader_variants() {
         }
         for (path, handle) in &targets {
             let mut stage_definitions = definitions.clone();
+            if path.ends_with("filtered_canopy_prepass.wgsl") && bits & 1 != 0 {
+                stage_definitions.push("WRITE_NORMAL".into());
+            }
             // The production pipeline factory specializes the shared world-cache module.
             if path.ends_with("world_cache_update.wgsl") {
                 stage_definitions.push("WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into());
@@ -124,6 +136,17 @@ fn complete_scene_consumers_compile_with_supported_shader_variants() {
             }
             if let Err(error) = cache.get(bits, handle.id(), &stage_definitions) {
                 panic!("{} variant{bits}: {error:?}", path.display());
+            }
+            if path.ends_with("primary_foliage.wgsl") {
+                let mut direct_definitions = stage_definitions.clone();
+                direct_definitions.push("PRIMARY_CANOPY_DIRECT_ONLY".into());
+                if let Err(error) = cache.get(bits + 32, handle.id(), &direct_definitions) {
+                    panic!("{} direct-only variant{bits}: {error:?}", path.display());
+                }
+                stage_definitions.push("PRIMARY_CANOPY_QUERY_ONLY".into());
+                if let Err(error) = cache.get(bits + 16, handle.id(), &stage_definitions) {
+                    panic!("{} query-only variant{bits}: {error:?}", path.display());
+                }
             }
         }
     }

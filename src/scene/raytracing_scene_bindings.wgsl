@@ -1,7 +1,9 @@
 enable wgpu_ray_query;
 
 #define_import_path bevy_solarik::scene_bindings
-#import bevy_solarik::scene_hit::{SceneHit, scene_miss, scene_triangle, scene_hit_is_triangle, SCENE_HIT_INVALID}
+#import bevy_solarik::scene_hit::{SceneHit, scene_miss, scene_triangle, scene_coarse, scene_hit_is_coarse, scene_hit_is_triangle, SCENE_HIT_INVALID}
+#import bevy_solarik::filtered_canopy_scene::{forest_trace_scene_impl, forest_next_seed}
+#import bevy_solarik::filtered_canopy_conditioning::{ForestConditioned, forest_conditioned_primary}
 
 #import bevy_solarik::collimated::collimated_weight
 #import bevy_solarik::ring_transport::ring_shadow
@@ -238,14 +240,17 @@ const RAY_T_MIN = 0.001f;
 const RAY_T_MAX = 100000.0f;
 
 // Raster positions are reconstructed with f32 matrix products/division. A
-// fixed millimetre vanishes at planetary magnitudes. Eight f32 epsilons provide an allowance for
-// local reconstruction arithmetic with rigid camera-relative transforms;
-// this is a conservative numerical policy, not a general sheared-instance bound.
+// fixed millimetre vanishes at planetary magnitudes. Reconstruction also depends
+// on camera distance when the surface itself is near the render origin. Eight
+// f32 epsilons provide an allowance for rigid camera-relative arithmetic.
+// The caller supplies separate raster subpixel uncertainty; it is not f32 error.
+// This is not a general sheared-instance or shading-normal geometry bound.
 // Only the visibility origin moves; the BRDF and physical surface do not.
-fn offset_surface_ray(position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+fn offset_surface_ray(position: vec3<f32>, normal: vec3<f32>, camera_position: vec3<f32>, raster_error: f32) -> vec3<f32> {
     let magnitude = max(max(abs(position.x), abs(position.y)), abs(position.z));
-    let distance = max(RAY_T_MIN, magnitude * 0.00000095367431640625);
-    return position + normal * distance;
+    let reconstruction_scale = max(magnitude, distance(position, camera_position));
+    let offset_distance = max(RAY_T_MIN, reconstruction_scale * 0.00000095367431640625 + raster_error);
+    return position + normal * offset_distance;
 }
 
 // RAY_T_MAX retains the historical default for external shader compatibility.
@@ -273,7 +278,24 @@ fn scene_hit_from_triangle(hit: RayIntersection) -> SceneHit {
     return invalid;
 }
 fn trace_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> SceneHit {
-    return scene_hit_from_triangle(trace_triangle_ray_impl(ray_origin, ray_direction, ray_t_min, ray_t_max, ray_flag, include_glass));
+    return trace_ray_query(ray_origin,ray_direction,ray_t_min,ray_t_max,ray_flag,include_glass,false);
+}
+fn trace_primary_ray(ray_origin:vec3f,ray_direction:vec3f,ray_t_min:f32,ray_t_max:f32,ray_flag:u32)->SceneHit {
+    return trace_ray_query(ray_origin,ray_direction,ray_t_min,ray_t_max,ray_flag,false,true);
+}
+struct PrimaryCanopyRay { background:SceneHit, canopy:ForestConditioned, maximum:f32 }
+fn trace_primary_conditioned(origin:vec3f,direction:vec3f,minimum:f32,maximum:f32,flags:u32)->PrimaryCanopyRay {
+    let background=scene_hit_from_triangle(trace_triangle_ray_impl(origin,direction,minimum,maximum,flags,false));
+    let clipped=select(min(maximum,ray_max_distance()),background.t,scene_hit_is_triangle(background));
+    let canopy=forest_conditioned_primary(origin,direction,minimum,clipped,forest_next_seed());
+    return PrimaryCanopyRay(background,canopy,clipped);
+}
+fn trace_ray_query(ray_origin:vec3f,ray_direction:vec3f,ray_t_min:f32,ray_t_max:f32,ray_flag:u32,include_glass:bool,primary:bool)->SceneHit {
+    let triangle=scene_hit_from_triangle(trace_triangle_ray_impl(ray_origin, ray_direction, ray_t_min, ray_t_max, ray_flag, include_glass));
+    let maximum=select(min(ray_t_max,ray_max_distance()),triangle.t,scene_hit_is_triangle(triangle));
+    let event=forest_trace_scene_impl(ray_origin,ray_direction,ray_t_min,maximum,forest_next_seed(),primary);
+    if event.event.normal_hit.w>0.0 {return scene_coarse(event);}
+    return triangle;
 }
 fn trace_triangle_ray_impl(ray_origin: vec3<f32>, ray_direction: vec3<f32>, ray_t_min: f32, ray_t_max: f32, ray_flag: u32, include_glass: bool) -> RayIntersection {
     let minimum = max(ray_t_min, max(max(abs(ray_origin.x), abs(ray_origin.y)), abs(ray_origin.z)) * sky_light.relative_ray_min);
@@ -476,14 +498,42 @@ fn scene_requires_ordered_transport() -> bool {
     return (sky_light.material_transport_flags & (MATERIAL_FLAG_ALPHA_BLEND | MATERIAL_FLAG_DIFFUSE_BLEND)) != 0u;
 }
 fn scene_hit_material(ray_hit: SceneHit) -> Material {
+    if scene_hit_is_coarse(ray_hit) {
+        var m:Material;m.flags=MATERIAL_FLAG_OPAQUE|MATERIAL_FLAG_DOUBLE_SIDED;
+        m.base_color=ray_hit.coarse.event.color_coverage.xyz;m.base_color_alpha=1.0;
+        m.perceptual_roughness=pow(ray_hit.coarse.event.surface.x,0.25);
+        m.metallic=ray_hit.coarse.event.surface.y;m.reflectance=ray_hit.coarse.event.surface.z;
+        return m;
+    }
     if !scene_hit_is_triangle(ray_hit) { var invalid: Material; return invalid; }
     return materials[material_ids[ray_hit.triangle.slot]];
 }
 fn scene_hit_alpha(ray_hit: SceneHit, uv: vec2f) -> f32 {
+    if scene_hit_is_coarse(ray_hit) {return 1.0;}
     if !scene_hit_is_triangle(ray_hit) { return 0.0; }
     return resolve_material_alpha(scene_hit_material(ray_hit), uv);
 }
 fn resolve_ray_hit_filtered(ray_hit: SceneHit, direction: vec3f, cone: vec2f) -> ResolvedRayHitFull {
+    if scene_hit_is_coarse(ray_hit) {
+        let event=ray_hit.coarse.event;
+        var hit:ResolvedRayHitFull;
+        hit.world_position=event.position_distance.xyz;
+        hit.previous_frame_world_position=ray_hit.coarse.previous_position;
+        hit.world_normal=event.normal_hit.xyz;
+        if dot(hit.world_normal,direction)>0.0 {hit.world_normal=-hit.world_normal;}
+        hit.geometric_world_normal=hit.world_normal;hit.triangle_world_normal=hit.world_normal;
+        hit.material.base_color=event.color_coverage.xyz;
+        hit.material.perceptual_roughness=pow(event.surface.x,0.25);
+        hit.material.roughness=sqrt(event.surface.x);
+        hit.material.metallic=event.surface.y;hit.material.reflectance=event.surface.z;
+#ifdef FOLIAGE_TRANSMISSION
+        hit.material.diffuse_transmission=event.surface.w;
+#endif
+#ifdef RAY_MATERIAL_FOOTPRINTS
+        hit.ray_cone=cone;
+#endif
+        return hit;
+    }
     if !scene_hit_is_triangle(ray_hit) { var invalid: ResolvedRayHitFull; return invalid; }
     let barycentrics = vec3(1.0 - ray_hit.triangle.barycentrics.x - ray_hit.triangle.barycentrics.y, ray_hit.triangle.barycentrics);
     var hit = resolve_triangle_data_filtered(ray_hit.triangle.slot, ray_hit.triangle.primitive, barycentrics, direction, cone);
