@@ -56,6 +56,29 @@ impl AssemblyInput {
             && self.flags == (row.5, row.6)
     }
 }
+/// Resource events are tested once per immutable shared source allocation.
+/// Entity and asset identities retain their generations; no compact ID aliasing.
+pub(super) fn invalidated_sources(
+    rows: &AssemblyRows<'_, '_>,
+    meshes: &HashSet<AssetId<MeshletMesh>>,
+    materials: &HashSet<UntypedAssetId>,
+) -> HashSet<Entity> {
+    if meshes.is_empty() && materials.is_empty() {
+        return HashSet::default();
+    }
+    let mut families: HashMap<*const [MeshletAssemblyPart], bool> = HashMap::default();
+    rows.iter()
+        .filter_map(|row| {
+            let affected = *families.entry(Arc::as_ptr(&row.1.0)).or_insert_with(|| {
+                row.1.0.iter().any(|part| {
+                    meshes.contains(&part.mesh.id())
+                        || materials.contains(&part.material.id().untyped())
+                })
+            });
+            affected.then_some(row.0)
+        })
+        .collect()
+}
 pub(super) fn targets(
     manager: &InstanceManager,
     rows: &AssemblyRows<'_, '_>,
@@ -127,6 +150,7 @@ pub(super) fn extract(
     rows: &AssemblyRows<'_, '_>,
     roots: &[Entity],
     force: bool,
+    invalidated: &HashSet<Entity>,
     server: &AssetServer,
     assets: &mut Assets<MeshletMesh>,
     meshes: &mut MeshletMeshManager,
@@ -151,7 +175,7 @@ pub(super) fn extract(
             manager,
             root,
             rows.get(root).ok(),
-            force,
+            force || invalidated.contains(&root),
             bindings,
             &mut |part| sources.prepare(part),
             &mut removed,

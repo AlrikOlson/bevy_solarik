@@ -464,22 +464,28 @@ fn new_materials_preserve_existing_assembly_slots_but_remaps_and_removals_do_not
     bindings.insert(id, MaterialBindingId::default());
     let mut slots = HashMap::default();
     slots.insert(id, 0);
-    assert!(!binding_slots_invalidated(&slots, &bindings));
+    assert!(invalidated_binding_slots(&slots, &bindings).is_empty());
 
     bindings.insert(other, MaterialBindingId::default());
     assert!(!binding_slots_match(&slots, &bindings));
-    assert!(!binding_slots_invalidated(&slots, &bindings));
+    assert!(invalidated_binding_slots(&slots, &bindings).is_empty());
 
     bindings.get_mut(&id).unwrap().slot.0 = 7;
-    assert!(binding_slots_invalidated(&slots, &bindings));
+    assert_eq!(
+        invalidated_binding_slots(&slots, &bindings),
+        HashSet::from_iter([id])
+    );
     slots.insert(id, 7);
-    assert!(!binding_slots_invalidated(&slots, &bindings));
+    assert!(invalidated_binding_slots(&slots, &bindings).is_empty());
     bindings.remove(&other);
-    assert!(!binding_slots_invalidated(&slots, &bindings));
+    assert!(invalidated_binding_slots(&slots, &bindings).is_empty());
     bindings.remove(&id);
-    assert!(binding_slots_invalidated(&slots, &bindings));
+    assert_eq!(
+        invalidated_binding_slots(&slots, &bindings),
+        HashSet::from_iter([id])
+    );
     slots.clear();
-    assert!(!binding_slots_invalidated(&slots, &bindings));
+    assert!(invalidated_binding_slots(&slots, &bindings).is_empty());
 }
 
 #[test]

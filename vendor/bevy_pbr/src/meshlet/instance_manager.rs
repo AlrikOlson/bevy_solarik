@@ -651,6 +651,8 @@ pub fn extract_meshlet_mesh_entities(
     instance_manager.rebuild_next_extract = false;
     instance_manager.dirty_indices.clear();
 
+    // Source retirement invalidates its users, not unrelated retained assemblies.
+    let mut invalidated_meshes = HashSet::default();
     // Free GPU buffer space for any modified or dropped MeshletMesh assets
     for asset_event in asset_events.read() {
         if let AssetEvent::Unused { id }
@@ -661,7 +663,7 @@ pub fn extract_meshlet_mesh_entities(
                 readiness.revoke(id.untyped());
             }
             meshlet_mesh_manager.remove(id);
-            force_rebuild = true;
+            invalidated_meshes.insert(*id);
         }
     }
 
@@ -676,20 +678,39 @@ pub fn extract_meshlet_mesh_entities(
         instance_manager.material_receipt != mesh_material_ids.instances.receipt();
     let bindings_changed =
         !binding_slots_match(&instance_manager.binding_receipt, &render_material_bindings);
-    let bindings_invalidated =
-        binding_slots_invalidated(&instance_manager.binding_receipt, &render_material_bindings);
+    let invalidated_bindings =
+        invalidated_binding_slots(&instance_manager.binding_receipt, &render_material_bindings);
+    let invalidated_roots = assembly_extract::invalidated_sources(
+        &assemblies_query,
+        &invalidated_meshes,
+        &invalidated_bindings,
+    );
+    let mut changed_roots = assembly_changes.collect();
+    changed_roots.extend(invalidated_roots.iter().copied());
     let assembly_roots = assembly_extract::targets(
         &instance_manager,
         &assemblies_query,
-        assembly_changes.collect(),
-        force_rebuild || bindings_invalidated,
+        changed_roots,
+        force_rebuild,
     );
+    for (name, count) in [
+        ("meshlet.global_source_rebuild", usize::from(force_rebuild)),
+        ("meshlet.invalidated_meshes", invalidated_meshes.len()),
+        ("meshlet.invalidated_bindings", invalidated_bindings.len()),
+        (
+            "meshlet.invalidated_assembly_roots",
+            invalidated_roots.len(),
+        ),
+    ] {
+        bevy_render::diagnostic::profile_value(name, count as f64, "count");
+    }
     let unchanged_inputs = input_changes.unchanged()
         && instances_query.iter().len() == instance_manager.query_slots.len()
         && instance_manager.query_publication == instance_manager.slots.publication
         && instance_manager.query_slots.len() + instance_manager.assembly_part_count
             == instance_manager.slots.active_indices().len();
     if !force_rebuild
+        && invalidated_meshes.is_empty()
         && assembly_roots.is_empty()
         && instance_manager.scene_matches(
             instances_query.iter(),
@@ -782,6 +803,7 @@ pub fn extract_meshlet_mesh_entities(
             instance_manager.binding_slots[i]
         };
         let reused = !force_rebuild
+            && !invalidated_meshes.contains(&meshlet_mesh.id())
             && known
             && instance_manager
                 .inputs
@@ -844,7 +866,8 @@ pub fn extract_meshlet_mesh_entities(
         &mut instance_manager,
         &assemblies_query,
         &assembly_roots,
-        force_rebuild || bindings_invalidated,
+        force_rebuild,
+        &invalidated_roots,
         &asset_server,
         &mut assets,
         &mut meshlet_mesh_manager,
@@ -909,15 +932,19 @@ fn serialization_bytes(manager: &InstanceManager) -> usize {
 
 // Newly available materials are handled by changed or pending assembly roots.
 // Only removing or remapping an existing slot invalidates retained ready roots.
-fn binding_slots_invalidated(
+fn invalidated_binding_slots(
     slots: &HashMap<UntypedAssetId, u32>,
     bindings: &RenderMaterialBindings,
-) -> bool {
-    slots.iter().any(|(id, slot)| {
-        bindings
-            .get(id)
-            .is_none_or(|binding| binding.slot.0 != *slot)
-    })
+) -> HashSet<UntypedAssetId> {
+    slots
+        .iter()
+        .filter_map(|(id, slot)| {
+            bindings
+                .get(id)
+                .is_none_or(|binding| binding.slot.0 != *slot)
+                .then_some(*id)
+        })
+        .collect()
 }
 
 fn binding_slots_match(

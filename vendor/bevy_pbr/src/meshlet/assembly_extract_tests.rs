@@ -50,6 +50,7 @@ fn assert_same(actual: &InstanceManager, expected: &InstanceManager) {
                         uniform.flags,
                         manager.instance_cutouts.get()[i],
                         manager.instance_material_assets[i],
+                        manager.binding_slots[i],
                         manager.bvh_depths[i],
                         manager.instance_bvh_root_nodes.get()[i],
                         manager.instances[i].clone(),
@@ -76,10 +77,32 @@ fn sync(
     force: bool,
     blocked: bool,
 ) -> (usize, usize, Vec<(SceneInstance, SceneSlot)>) {
+    sync_sources(
+        world,
+        state,
+        manager,
+        force,
+        &HashSet::default(),
+        &HashSet::default(),
+        &RenderMaterialBindings::default(),
+        &mut |part| if blocked { None } else { prepared(part) },
+    )
+}
+fn sync_sources(
+    world: &mut World,
+    state: &mut State,
+    manager: &mut InstanceManager,
+    force: bool,
+    meshes: &HashSet<AssetId<MeshletMesh>>,
+    materials: &HashSet<UntypedAssetId>,
+    bindings: &RenderMaterialBindings,
+    prepare: &mut impl FnMut(&MeshletAssemblyPart) -> Option<Prepared>,
+) -> (usize, usize, Vec<(SceneInstance, SceneSlot)>) {
     let (rows, mut changes) = state.get_mut(world).unwrap();
-    let roots = targets(manager, &rows, changes.collect(), force);
-    let bindings = RenderMaterialBindings::default();
-    let mut prepare = |part: &MeshletAssemblyPart| if blocked { None } else { prepared(part) };
+    let invalidated = invalidated_sources(&rows, meshes, materials);
+    let mut changed = changes.collect();
+    changed.extend(invalidated.iter().copied());
+    let roots = targets(manager, &rows, changed, force);
     manager.slots.begin();
     let mut removed = Vec::new();
     let mut parts = 0;
@@ -88,9 +111,9 @@ fn sync(
             manager,
             root,
             rows.get(root).ok(),
-            force,
-            &bindings,
-            &mut prepare,
+            force || invalidated.contains(&root),
+            bindings,
+            prepare,
             &mut removed,
         )
         .1;
@@ -110,8 +133,8 @@ fn sync(
             row.0,
             Some(row),
             true,
-            &bindings,
-            &mut prepare,
+            bindings,
+            prepare,
             &mut Vec::new(),
         );
     }
@@ -376,4 +399,215 @@ fn assembly_removal_never_retires_an_ordinary_part_on_the_same_entity() {
     manager.refresh_scene_metadata();
     assert_eq!(manager.max_bvh_depth, 8);
     assert_eq!(manager.scene_instance_count, 1);
+}
+
+fn distinct_source(
+    meshes: &Assets<MeshletMesh>,
+    materials: &Assets<StandardMaterial>,
+) -> MeshletAssembly3d {
+    let mut source = assembly(&[0.0, 1.0]);
+    let mesh = meshes.reserve_handle();
+    let material = materials.reserve_handle();
+    for part in Arc::make_mut(&mut source.0) {
+        part.mesh = mesh.clone();
+        part.material = material.clone();
+    }
+    source
+}
+
+struct SourceState {
+    bindings: RenderMaterialBindings,
+    geometry: HashMap<AssetId<MeshletMesh>, Option<u32>>,
+}
+impl SourceState {
+    fn sync(
+        &self,
+        world: &mut World,
+        state: &mut State,
+        manager: &mut InstanceManager,
+        force: bool,
+        meshes: &[AssetId<MeshletMesh>],
+        materials: &[UntypedAssetId],
+    ) -> (usize, usize, Vec<(SceneInstance, SceneSlot)>) {
+        sync_sources(
+            world,
+            state,
+            manager,
+            force,
+            &meshes.iter().copied().collect(),
+            &materials.iter().copied().collect(),
+            &self.bindings,
+            &mut |part| {
+                self.bindings.get(&part.material.id().untyped())?;
+                let revision = self.geometry.get(&part.mesh.id()).copied().flatten()?;
+                let mut data = prepared(part)?;
+                data.0 += revision * 1000;
+                Some(data)
+            },
+        )
+    }
+}
+
+#[test]
+fn source_changes_preserve_unrelated_slots_and_match_full_publication() {
+    let mut world = World::new();
+    let mut state = State::new(&mut world);
+    let first = assembly(&[0.0, 1.0]);
+    let meshes = Assets::<MeshletMesh>::default();
+    let materials = Assets::<StandardMaterial>::default();
+    let second = distinct_source(&meshes, &materials);
+    let mesh = first.0[0].mesh.id();
+    let other_mesh = second.0[0].mesh.id();
+    let material = first.0[0].material.id().untyped();
+    let other_material = second.0[0].material.id().untyped();
+    let a = world.spawn((first.clone(), GlobalTransform::IDENTITY)).id();
+    // Same source IDs in a different allocation must still invalidate.
+    let independent = MeshletAssembly3d::new(first.0.to_vec());
+    let b = world.spawn((independent, GlobalTransform::IDENTITY)).id();
+    let c = world.spawn((second, GlobalTransform::IDENTITY)).id();
+    let mut sources = SourceState {
+        bindings: RenderMaterialBindings::default(),
+        geometry: HashMap::from_iter([(mesh, Some(0)), (other_mesh, Some(0))]),
+    };
+    sources
+        .bindings
+        .insert(material, MaterialBindingId::default());
+    sources
+        .bindings
+        .insert(other_material, MaterialBindingId::default());
+    let mut manager = InstanceManager::new();
+    assert_eq!(
+        sources
+            .sync(&mut world, &mut state, &mut manager, false, &[], &[])
+            .1,
+        6
+    );
+    let retained = manager.assembly_inputs[&c].slots.clone();
+    let stable = manager.assembly_inputs[&a].slots.clone();
+    let unrelated_mesh = meshes.reserve_handle();
+    assert_eq!(
+        sources
+            .sync(
+                &mut world,
+                &mut state,
+                &mut manager,
+                false,
+                &[unrelated_mesh.id()],
+                &[]
+            )
+            .0,
+        0
+    );
+
+    sources.geometry.insert(mesh, Some(1));
+    let changed = sources.sync(&mut world, &mut state, &mut manager, false, &[mesh], &[]);
+    assert_eq!((changed.0, changed.1), (2, 4));
+    assert_eq!(manager.assembly_inputs[&a].slots, stable);
+    assert_eq!(manager.assembly_inputs[&c].slots, retained);
+    sources.bindings.get_mut(&other_material).unwrap().slot.0 = 7;
+    let changed = sources.sync(
+        &mut world,
+        &mut state,
+        &mut manager,
+        false,
+        &[],
+        &[other_material],
+    );
+    assert_eq!((changed.0, changed.1), (1, 2));
+
+    sources.geometry.insert(mesh, None);
+    sources.sync(&mut world, &mut state, &mut manager, false, &[mesh], &[]);
+    assert_eq!(manager.assembly_pending, HashSet::from_iter([a, b]));
+    assert_eq!(manager.scene_instance_count, 2);
+    sources.geometry.insert(mesh, Some(2));
+    assert_eq!(
+        sources
+            .sync(&mut world, &mut state, &mut manager, false, &[], &[])
+            .1,
+        4
+    );
+    assert!(manager.assembly_pending.is_empty());
+    sources.bindings.remove(&material);
+    sources.sync(
+        &mut world,
+        &mut state,
+        &mut manager,
+        false,
+        &[],
+        &[material],
+    );
+    assert_eq!(manager.scene_instance_count, 2);
+    sources
+        .bindings
+        .insert(material, MaterialBindingId::default());
+    assert_eq!(
+        sources
+            .sync(&mut world, &mut state, &mut manager, false, &[], &[])
+            .1,
+        4
+    );
+
+    world.despawn(a);
+    let replacement = world.spawn((first, GlobalTransform::IDENTITY)).id();
+    assert_ne!(replacement, a);
+    sources.sync(&mut world, &mut state, &mut manager, false, &[mesh], &[]);
+    assert!(!manager.assembly_inputs.contains_key(&a));
+    assert!(manager.assembly_inputs.contains_key(&replacement));
+    assert_eq!(manager.assembly_inputs[&c].slots, retained);
+    // Atlas/receipt invalidation must continue to visit every source.
+    let full = sources.sync(&mut world, &mut state, &mut manager, true, &[], &[]);
+    assert_eq!((full.0, full.1), (3, 6));
+}
+
+#[test]
+#[ignore = "full forest target-selection diagnostic; run explicitly in release"]
+fn full_bank_resource_invalidation_targets_only_source_users() {
+    let mut world = World::new();
+    let forest = assembly(&[0.0, 1.0, 2.0]);
+    let terrain = distinct_source(&Assets::default(), &Assets::default());
+    for _ in 0..262_144 {
+        world.spawn((forest.clone(), GlobalTransform::IDENTITY));
+    }
+    let ground: HashSet<_> = (0..16)
+        .map(|_| {
+            world
+                .spawn((terrain.clone(), GlobalTransform::IDENTITY))
+                .id()
+        })
+        .collect();
+    let mut state = SystemState::<AssemblyRows>::new(&mut world);
+    let rows = state.get(&world).unwrap();
+    let mut manager = InstanceManager::new();
+    for row in &rows {
+        manager
+            .assembly_inputs
+            .insert(row.0, AssemblyInput::new(row));
+    }
+    let start = std::time::Instant::now();
+    let invalidated = invalidated_sources(
+        &rows,
+        &HashSet::from_iter([terrain.0[0].mesh.id()]),
+        &HashSet::default(),
+    );
+    assert_eq!(invalidated, ground);
+    let selected = targets(&manager, &rows, invalidated, false);
+    let elapsed = start.elapsed();
+    let full = targets(&manager, &rows, HashSet::default(), true);
+    assert_eq!(full.len(), 262_160);
+    assert_eq!(selected.len(), 16);
+    assert!(selected.len() * 10 < full.len());
+    assert_eq!(
+        invalidated_sources(
+            &rows,
+            &HashSet::default(),
+            &HashSet::from_iter([terrain.0[0].material.id().untyped()])
+        ),
+        ground
+    );
+    println!(
+        "forest source invalidation: {} roots retained; {} roots visited; selection {:?}",
+        full.len() - selected.len(),
+        selected.len(),
+        elapsed
+    );
 }
