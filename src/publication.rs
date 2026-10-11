@@ -4,17 +4,28 @@
 //! polling a replacement, then commit before extraction. This publication epoch
 //! is distinct from the scene's actually rendered generation/history. Physical
 //! emptiness belongs to the producer and is never inferred from missing assets.
+use alloc::sync::Arc;
 use bevy_app::{App, Plugin, PostUpdate};
 use bevy_asset::{AssetEvent, Assets, Handle, RenderAssetUsages};
-use bevy_camera::primitives::{Aabb, MeshAabb};
+use bevy_camera::{
+    primitives::{Aabb, MeshAabb},
+    visibility::VisibilityRange,
+};
 use bevy_ecs::{
-    component::Component, entity::Entity, message::MessageReader, resource::Resource, system::Res,
-    world::World,
+    component::Component, entity::Entity, message::MessageReader, resource::Resource,
+    schedule::IntoScheduleConfigs, system::Res, world::World,
 };
 use bevy_material::AlphaMode;
 use bevy_mesh::{Mesh, Mesh3d, PrimitiveTopology};
-use bevy_pbr::StandardMaterial;
-use bevy_render::scene_readiness::SceneGeometryReadiness;
+use bevy_pbr::{Lightmap, StandardMaterial};
+use bevy_render::{
+    Render, RenderApp, RenderSystems, extract_resource::ExtractResourcePlugin,
+    scene_readiness::SceneGeometryReadiness,
+};
+use core::sync::atomic::Ordering;
+
+mod pipelines;
+pub use pipelines::RasterPipelineReadiness;
 
 use crate::{material::MaterialRegistration, scene::RaytracingMesh3d};
 
@@ -38,6 +49,7 @@ pub enum PublicationError {
     Stale,
     AlreadyPublished,
     EpochExhausted,
+    UnsupportedRasterState,
 }
 impl core::fmt::Display for PublicationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -50,6 +62,7 @@ impl core::fmt::Display for PublicationError {
             Self::Stale => "a newer publication request superseded this replacement",
             Self::AlreadyPublished => "this replacement was already published",
             Self::EpochExhausted => "publication epoch exhausted",
+            Self::UnsupportedRasterState => "static publication does not support skin, morph, lightmap or visibility-range variants",
         })
     }
 }
@@ -94,6 +107,12 @@ impl PreparedProduct {
         {
             return Err(PublicationError::InvalidGeometry);
         }
+        if mesh.has_morph_targets()
+            || mesh.contains_attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
+            || mesh.contains_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)
+        {
+            return Err(PublicationError::UnsupportedRasterState);
+        }
         let bounds = mesh
             .compute_aabb()
             .ok_or(PublicationError::InvalidGeometry)?;
@@ -115,6 +134,7 @@ impl PreparedProduct {
     /// Request an immutable candidate, leaving all current drawing components intact.
     pub fn stage(self, world: &mut World, entity: Entity) -> Result<Replacement, PublicationError> {
         let previous = Previous::capture(world, entity)?;
+        supported_entity(world, entity)?;
         let alpha = world
             .get_resource::<Assets<StandardMaterial>>()
             .and_then(|assets| assets.get(self.material.base()))
@@ -144,6 +164,7 @@ impl PreparedProduct {
             readiness.request_alpha(mesh.id().untyped());
         }
         readiness.request(self.material.base().id().untyped());
+        let pipeline = pipelines::request(world, entity, mesh.id(), self.material.raster_id());
         world.resource_mut::<Epochs>().0 = epoch.0;
         world.entity_mut(entity).insert(Wanted(epoch));
         Ok(Replacement {
@@ -155,6 +176,7 @@ impl PreparedProduct {
                 material: self.material,
                 bounds: self.bounds,
                 retain_cpu,
+                pipeline: Some(pipeline),
             },
             published: false,
         })
@@ -167,6 +189,7 @@ struct Product {
     material: MaterialRegistration,
     bounds: Aabb,
     retain_cpu: bool,
+    pipeline: Option<Arc<pipelines::Request>>,
 }
 impl Product {
     fn mesh_available(&self, world: &World) -> bool {
@@ -185,11 +208,14 @@ impl Product {
             return false;
         }
         world
-            .get_resource::<SceneGeometryReadiness>()
-            .is_some_and(|ready| {
-                ready.ready(self.mesh.id().untyped())
-                    && ready.ready(self.material.base().id().untyped())
-            })
+            .get_resource::<RasterPipelineReadiness>()
+            .is_some_and(|ready| ready.ready(self.mesh.id()))
+            && world
+                .get_resource::<SceneGeometryReadiness>()
+                .is_some_and(|ready| {
+                    ready.ready(self.mesh.id().untyped())
+                        && ready.ready(self.material.base().id().untyped())
+                })
     }
 }
 
@@ -200,6 +226,17 @@ pub struct ActiveProduct {
     product: Product,
 }
 impl ActiveProduct {
+    /// Actual first-frame specialization: pending, zero if a pipeline was missing,
+    /// or the number of compiled variants selected before the first visible draw.
+    #[must_use]
+    pub fn first_frame_raster_pipelines(&self) -> Option<usize> {
+        self.product
+            .pipeline
+            .as_ref()?
+            .first_frame
+            .load(Ordering::Acquire)
+            .checked_sub(1)
+    }
     #[must_use]
     pub fn epoch(&self) -> PublicationEpoch {
         self.epoch
@@ -246,6 +283,9 @@ impl Previous {
                     mesh: raster.0.clone(),
                     material,
                     bounds,
+                    pipeline: world
+                        .get::<ActiveProduct>(entity)
+                        .and_then(|active| active.product.pipeline.clone()),
                     retain_cpu: world.get::<ActiveProduct>(entity).map_or_else(
                         || {
                             world
@@ -302,6 +342,14 @@ impl Replacement {
     pub fn material(&self) -> &MaterialRegistration {
         &self.next.material
     }
+    /// Number of required variants observed as actual compiled GPU pipelines.
+    #[must_use]
+    pub fn compiled_raster_pipelines(&self) -> usize {
+        self.next
+            .pipeline
+            .as_ref()
+            .map_or(0, |p| p.compiled.load(Ordering::Acquire))
+    }
     #[must_use]
     pub fn epoch(&self) -> PublicationEpoch {
         self.epoch
@@ -351,6 +399,7 @@ impl Replacement {
         if !self.previous.matches(world, self.entity) {
             return Err(PublicationError::OwnerChanged);
         }
+        supported_entity(world, self.entity)?;
         if !self.next.mesh_available(world) {
             return Err(PublicationError::MissingMesh);
         }
@@ -377,6 +426,9 @@ impl Replacement {
         let bound = self.next.material.bind(world, self.entity);
         assert!(bound, "exclusive publication retains its validated entity");
         self.published = true;
+        if let Some(pipeline) = &self.next.pipeline {
+            pipeline.published.store(true, Ordering::Release);
+        }
         Ok(Some(Published {
             epoch: self.epoch,
             retired: self.previous.product.take().map(RetiringProduct),
@@ -418,7 +470,34 @@ pub struct PublicationPlugin;
 impl Plugin for PublicationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SceneGeometryReadiness>()
+            .init_resource::<pipelines::Requests>()
+            .init_resource::<RasterPipelineReadiness>()
             .add_message::<AssetEvent<Mesh>>()
             .add_systems(PostUpdate, retire_meshes);
     }
+
+    fn finish(&self, app: &mut App) {
+        if app.get_sub_app(RenderApp).is_some() {
+            app.add_plugins(ExtractResourcePlugin::<pipelines::Requests>::default());
+            app.sub_app_mut(RenderApp).add_systems(
+                Render,
+                pipelines::prepare_pipelines.in_set(RenderSystems::PrepareBindGroups),
+            );
+        }
+    }
+}
+
+fn supported_entity(world: &World, entity: Entity) -> Result<(), PublicationError> {
+    if world.get::<Lightmap>(entity).is_some()
+        || world.get::<VisibilityRange>(entity).is_some()
+        || world
+            .get::<bevy_mesh::skinning::SkinnedMesh>(entity)
+            .is_some()
+        || world
+            .get::<bevy_mesh::morph::MeshMorphWeights>(entity)
+            .is_some()
+    {
+        return Err(PublicationError::UnsupportedRasterState);
+    }
+    Ok(())
 }

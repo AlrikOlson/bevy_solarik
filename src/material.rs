@@ -173,7 +173,7 @@ impl MaterialRegistration {
         }
     }
 
-    fn raster_id(&self) -> UntypedAssetId {
+    pub(crate) fn raster_id(&self) -> UntypedAssetId {
         match &self.0.raster {
             Raster::Standard => self.0.base.id().untyped(),
             Raster::Gaussian(handle) => handle.id().untyped(),

@@ -9,7 +9,10 @@ use bevy_render::scene_readiness::SceneGeometryReadiness;
 use bevy_solarik::{
     material::{MaterialModel, MaterialRegistration},
     prelude::RaytracingMesh3d,
-    publication::{ActiveProduct, PreparedProduct, ProductState, PublicationError, Replacement},
+    publication::{
+        ActiveProduct, PreparedProduct, ProductState, PublicationError, RasterPipelineReadiness,
+        Replacement,
+    },
 };
 use bevy_transform::components::Transform;
 
@@ -36,6 +39,9 @@ fn ready(world: &World, next: &Replacement) {
     let ready = world.resource::<SceneGeometryReadiness>();
     ready.publish(next.mesh().id().untyped(), true);
     ready.publish(next.material().base().id().untyped(), true);
+    world
+        .resource::<RasterPipelineReadiness>()
+        .publish(next.mesh().id(), true);
 }
 fn initial(world: &mut World) -> Entity {
     let entity = world.spawn(Transform::from_xyz(7., 8., 9.)).id();
@@ -63,6 +69,11 @@ fn incomplete_product_preserves_both_paths_until_one_complete_commit() {
     let readiness = world.resource::<SceneGeometryReadiness>().clone();
     readiness.publish(next.mesh().id().untyped(), true);
     assert!(next.try_publish(&mut world).unwrap().is_none());
+    readiness.publish(next.material().base().id().untyped(), true);
+    assert!(
+        next.try_publish(&mut world).unwrap().is_none(),
+        "asset readiness alone cannot publish an uncompiled pipeline"
+    );
     assert_eq!(world.get::<Mesh3d>(entity).unwrap().0, old);
     assert_eq!(world.get::<RaytracingMesh3d>(entity).unwrap().0, old);
     assert_eq!(
@@ -173,6 +184,46 @@ fn empty_or_nonfinite_geometry_is_an_error_not_physical_emptiness() {
         PreparedProduct::new(mesh, material).unwrap_err(),
         PublicationError::InvalidGeometry
     );
+}
+
+#[test]
+fn unsupported_static_variant_keeps_the_last_drawable_owner() {
+    use bevy_camera::visibility::VisibilityRange;
+    let mut world = world();
+    let entity = initial(&mut world);
+    let old = world.get::<Mesh3d>(entity).unwrap().0.clone();
+    let mut next = stage(&mut world, entity, 4.);
+    ready(&world, &next);
+    world.entity_mut(entity).insert(VisibilityRange::default());
+    assert_eq!(
+        next.try_publish(&mut world).unwrap_err(),
+        PublicationError::UnsupportedRasterState
+    );
+    assert_eq!(world.get::<Mesh3d>(entity).unwrap().0, old);
+    assert_eq!(world.get::<RaytracingMesh3d>(entity).unwrap().0, old);
+    assert_eq!(
+        prepared(&mut world, 6.)
+            .stage(&mut world, entity)
+            .unwrap_err(),
+        PublicationError::UnsupportedRasterState
+    );
+}
+
+#[test]
+fn revoked_pipeline_receipt_preserves_old_coverage() {
+    let mut world = world();
+    let entity = initial(&mut world);
+    let old = world.get::<Mesh3d>(entity).unwrap().0.clone();
+    let mut next = stage(&mut world, entity, 4.);
+    ready(&world, &next);
+    world
+        .resource::<RasterPipelineReadiness>()
+        .publish(next.mesh().id(), false);
+    assert_eq!(next.state(&world), ProductState::Uploading);
+    assert!(next.try_publish(&mut world).unwrap().is_none());
+    assert_eq!(world.get::<Mesh3d>(entity).unwrap().0, old);
+    next.cancel();
+    assert_eq!(world.get::<RaytracingMesh3d>(entity).unwrap().0, old);
 }
 
 #[test]
