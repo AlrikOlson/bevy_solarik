@@ -8,7 +8,7 @@ use bevy_material::{
     AlphaMode, MaterialProperties, OpaqueRendererMethod,
     key::{ErasedMaterialPipelineKey, ErasedMeshPipelineKey},
 };
-use bevy_mesh::Mesh;
+use bevy_mesh::{Mesh, Mesh3d};
 use bevy_pbr::{
     LightKeyCache, MeshPipelineKey, PreparedMaterial, PrepassFragmentShader, PrepassVertexShader,
     RenderMaterialInstances, RenderMeshInstances, SpecializedMaterialPipelineCache,
@@ -23,7 +23,7 @@ use bevy_render::{
     render_resource::PipelineCache,
     scene_readiness::SceneGeometryReadiness,
     sync_world::MainEntity,
-    view::{ExtractedView, Msaa},
+    view::{ExtractedView, Msaa, RenderVisibleEntities},
 };
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -282,7 +282,20 @@ pub(super) fn prepare_pipelines(world: &mut World) {
 
 // Observe the actual production specialization caches after extraction selected
 // this replacement, before its first draw. Zero reports a queued/failed pipeline.
-fn first_frame(world: &World, request: &Request) -> Option<usize> {
+fn first_frame(world: &mut World, request: &Request) -> Option<usize> {
+    let visible = world
+        .query::<&RenderVisibleEntities>()
+        .iter(world)
+        .any(|view| {
+            view.get::<Mesh3d>().is_some_and(|entities| {
+                entities
+                    .iter_visible()
+                    .any(|(_, entity)| *entity == request.entity)
+            })
+        });
+    if !visible {
+        return None;
+    }
     let mesh = world
         .get_resource::<RenderMeshInstances>()?
         .render_mesh_queue_data(request.entity)?;
@@ -316,7 +329,7 @@ fn first_frame(world: &World, request: &Request) -> Option<usize> {
         );
     }
     if ids.is_empty() {
-        return None;
+        return Some(0);
     }
     let cache = world.get_resource::<PipelineCache>()?;
     Some(
