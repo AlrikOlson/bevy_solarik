@@ -9,6 +9,10 @@ unchanged. Each unique dependency still undergoes submission and use validation.
 The companion wgpu-hal patch appends native instance bytes without an allocation
 per instance. Resource identity uses the owned Arc's address, which remains stable
 through encoding even when device-local tracker indices overlap.
+Before tracking or emitting HAL commands, each TLAS and unique BLAS must belong
+to the command encoder's device. This rejects foreign resources before their
+device-local tracker indices or GPU addresses can be consumed. Valid same-device
+commands keep the original instance representation and trace format.
 
 Reason: the production forest's 789,000-instance sparse-update probe measured
 29–30 ms encoding, 48–53 ms finishing, and 13–16 ms submitting with the original
@@ -20,7 +24,9 @@ invalid custom indices, unbuilt distinct BLAS and BLAS rebuilt after their TLAS.
 Upstream context: https://github.com/gfx-rs/wgpu/issues/9946 and
 https://github.com/gfx-rs/wgpu/issues/10450 (reviewed 2026-10-10).
 
-Controls live in ../../tests/scene_tlas_scale.rs and ../../tests/scene_tlas.rs.
+Controls live in ../../tests/scene_tlas_scale.rs, ../../tests/scene_tlas.rs and
+../../tests/scene_tlas_validation.rs. They include caller-handle removal after
+encoding, multiple TLAS packages, masked instances, and foreign BLAS/TLAS rejection.
 This patch does not introduce the proposed GPU-instance-buffer API or unsafe HAL
 access. Remove it when an upstream version provides equivalent behavior and passes
 the same production-path controls.

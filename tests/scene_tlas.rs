@@ -233,5 +233,72 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
                 original = Some(tlas.clone());
             }
         }
+
+        // Encoding must own a snapshot even after all caller-side instances and
+        // BLAS handles disappear. Separate packages must not share index tables.
+        let mut second = raw.create_tlas(&wgpu::CreateTlasDescriptor {
+            label: None,
+            max_instances: 8,
+            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+        });
+        for (slot, x, custom, mask) in [(3, 0.0, 11, 255), (7, 2.0, 22, 0)] {
+            second[slot] = Some(wgpu::TlasInstance::new(
+                &blas,
+                [1., 0., 0., x, 0., 1., 0., 0., 0., 0., 1., 0.],
+                custom,
+                mask,
+            ));
+        }
+        let second_group = raw.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: second.as_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output.as_entire_binding(),
+                },
+            ],
+        });
+        let both = raw.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = raw.create_command_encoder(&Default::default());
+        encoder.build_acceleration_structures(&[], [cache.get().unwrap(), &second]);
+        cache
+            .retained(6)
+            .unwrap()
+            .get_mut_slice(0..6)
+            .unwrap()
+            .fill(None);
+        second.get_mut_slice(0..8).unwrap().fill(None);
+        drop(original);
+        drop(cache);
+        drop(second);
+        drop(blas);
+        for (index, group) in [retained_group.unwrap(), second_group].iter().enumerate() {
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, group, &[]);
+                pass.dispatch_workgroups(2, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&output, 0, &both, index as u64 * 8, 8);
+        }
+        queue.submit([encoder.finish()]);
+        both.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+        raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(
+            bytemuck::cast_slice::<u8, u32>(&both.get_mapped_range(..)),
+            [0, 6, 12, 0]
+        );
+        both.unmap();
     });
 }

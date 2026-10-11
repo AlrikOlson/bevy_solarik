@@ -24,7 +24,7 @@ use crate::{
         ArcTlasPackage, BlasBuildEntry, BlasGeometries, BuildAccelerationStructureError,
         OwnedBlasBuildEntry, OwnedTlasPackage, TlasPackage,
     },
-    resource::{Blas, BlasCompactState, Labeled, StagingBuffer, Tlas},
+    resource::{Blas, BlasCompactState, Labeled, ParentDevice, StagingBuffer, Tlas},
     scratch::ScratchBuffer,
     snatch::SnatchGuard,
 };
@@ -220,6 +220,7 @@ pub(crate) fn build_acceleration_structures(
 
     for package in tlas.iter() {
         let tlas = &package.tlas;
+        tlas.same_device(state.device)?;
         state.tracker.tlas_s.insert_single(tlas.clone());
 
         let scratch_buffer_offset = scratch_buffer_tlas_size;
@@ -246,6 +247,7 @@ pub(crate) fn build_acceleration_structures(
             // across resources originating from different devices.
             let first_reference = dependency_objects.insert(Arc::as_ptr(blas));
             if first_reference {
+                blas.same_device(state.device)?;
                 state.tracker.blas_s.insert_single(blas.clone());
             }
 

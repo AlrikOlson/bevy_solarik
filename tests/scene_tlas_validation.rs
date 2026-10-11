@@ -149,5 +149,63 @@ enable wgpu_ray_query;
             .await
             .expect("invalid custom index on repeated BLAS must fail");
         assert!(error.to_string().contains("24"), "{error}");
+
+        // Same hub, different device: full resource IDs are distinct while
+        // device-local tracker indices can overlap. Reject before HAL encoding.
+        let (foreign_device, _) = resources
+            .3
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: device.features(),
+                required_limits: device.limits(),
+                experimental_features: ray_query_test_features(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let foreign_blas = foreign_device.create_blas(
+            &wgpu::CreateBlasDescriptor {
+                label: None,
+                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+                update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+            },
+            wgpu::BlasGeometrySizeDescriptors::Triangles {
+                descriptors: vec![size],
+            },
+        );
+        scene[1023] = Some(wgpu::TlasInstance::new(&foreign_blas, transform, 1023, 255));
+        let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.build_acceleration_structures(&[], [&scene]);
+        let _ = encoder.finish();
+        let error = errors
+            .pop()
+            .await
+            .expect("foreign BLAS must fail before submission");
+        assert!(error.to_string().contains("doesn't match Device"), "{error}");
+
+        let foreign_tlas = foreign_device.create_tlas(&wgpu::CreateTlasDescriptor {
+            label: None,
+            max_instances: 1,
+            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+        });
+        let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.build_acceleration_structures(&[], [&foreign_tlas]);
+        let _ = encoder.finish();
+        let error = errors
+            .pop()
+            .await
+            .expect("foreign TLAS must fail before submission");
+        assert!(error.to_string().contains("doesn't match Device"), "{error}");
     });
+}
+
+#[allow(
+    unsafe_code,
+    reason = "The test explicitly opts into wgpu's experimental ray-query API"
+)]
+fn ray_query_test_features() -> wgpu::ExperimentalFeatures {
+    // SAFETY: this is the API opt-in token, not unchecked resource or HAL access.
+    unsafe { wgpu::ExperimentalFeatures::enabled() }
 }
