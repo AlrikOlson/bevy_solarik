@@ -181,7 +181,10 @@ enable wgpu_ray_query;
             .pop()
             .await
             .expect("foreign BLAS must fail before submission");
-        assert!(error.to_string().contains("doesn't match Device"), "{error}");
+        assert!(
+            error.to_string().contains("doesn't match Device"),
+            "{error}"
+        );
 
         let foreign_tlas = foreign_device.create_tlas(&wgpu::CreateTlasDescriptor {
             label: None,
@@ -197,7 +200,10 @@ enable wgpu_ray_query;
             .pop()
             .await
             .expect("foreign TLAS must fail before submission");
-        assert!(error.to_string().contains("doesn't match Device"), "{error}");
+        assert!(
+            error.to_string().contains("doesn't match Device"),
+            "{error}"
+        );
     });
 }
 
