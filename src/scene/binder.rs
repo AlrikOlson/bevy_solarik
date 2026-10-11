@@ -3,6 +3,8 @@
 mod input_tests;
 #[path = "publication_delta.rs"]
 mod publication_delta;
+#[path = "publication_rows.rs"]
+mod publication_rows;
 
 use super::collimated::CollimatedMaterials;
 use super::instance_rows::SceneRows;
@@ -853,6 +855,10 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     }
 
     let instances_profile = bevy_render::diagnostic::profile_scope("scene.prepare_instances");
+    let dirty_transforms = super::tlas::DirtySlots::new(slot_capacity, &dirty_indices);
+    let initialize_transforms = dense_reference
+        || transforms.buffer().is_none()
+        || previous_frame_transforms.buffer().is_none();
     let mut instance_id = 0;
     let mut material_transport_flags = 0;
     // Invocation-local: allocator slabs and BLAS handles cannot outlive this
@@ -866,7 +872,9 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         let entity = input.entity;
         let mesh = input.mesh;
         let material = input.material;
-        let slot = slots.get_part(entity).expect("retained ray part");
+        let slot = slots
+            .get_part_at(index as u32, entity)
+            .expect("retained ray part at its owned address");
         let Some(material_id) = material_id_map.get(&material).copied() else {
             slots.deactivate(slot);
             continue;
@@ -919,17 +927,23 @@ pub(crate) fn prepare_raytracing_scene_bindings(
                 .glass_entities
                 .insert(entity.entity);
         }
-        let transform = Mat4::from(input.transform);
         assert!(slot.index < (1 << 24), "TLAS custom slot capacity");
-        transforms.get_mut()[index] = transform;
-        previous_frame_transforms.get_mut()[index] = Mat4::from(input.previous);
-        slots.activate(slot);
-
-        if geometry_ids.get()[index] != *geometry || material_ids.get()[index] != material_id {
+        if publication_rows::write(
+            index,
+            input,
+            (geometry, material_id),
+            (
+                transforms.get_mut(),
+                previous_frame_transforms.get_mut(),
+                geometry_ids.get_mut(),
+                material_ids.get_mut(),
+            ),
+            initialize_transforms || dirty_transforms.contains(slot.index),
+        ) {
             dirty_indices.push(slot.index);
         }
-        geometry_ids.get_mut()[index] = geometry.clone();
-        material_ids.get_mut()[index] = material_id;
+        let transform = transforms.get()[index];
+        slots.activate(slot);
 
         if material.emissive != Vec3::ZERO {
             // Texture-average emission is not available on the CPU. The

@@ -131,6 +131,15 @@ impl SceneSlots {
     pub fn get_part(&self, entity: SceneInstance) -> Option<SceneSlot> {
         self.entities.get(&entity).copied()
     }
+    /// Resolve a known address only if its exact entity and assembly part still own it.
+    /// Returns the current generation, including when its source is not ready.
+    pub fn get_part_at(&self, index: u32, entity: SceneInstance) -> Option<SceneSlot> {
+        let entry = self.entries.get(index as usize)?;
+        (entry.entity == Some(entity)).then_some(SceneSlot {
+            index,
+            generation: entry.generation,
+        })
+    }
     /// Return the live owner of a persistent address.
     pub fn entity(&self, index: u32) -> Option<Entity> {
         self.entries
@@ -274,6 +283,38 @@ impl SceneSlots {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn indexed_lookup_rejects_wrong_parts_retirement_and_recycled_owners() {
+        let mut slots = SceneSlots::default();
+        slots.begin();
+        let owner = SceneInstance {
+            entity: Entity::from_bits(7),
+            part: 2,
+        };
+        let slot = slots.touch_part(owner);
+        assert_eq!(slots.get_part_at(slot.index, owner), Some(slot));
+        assert_eq!(
+            slots.get_part_at(slot.index, SceneInstance { part: 1, ..owner }),
+            None
+        );
+        let next = SceneInstance {
+            entity: Entity::from_bits(7 + (1u64 << 32)),
+            ..owner
+        };
+        assert_eq!(slots.get_part_at(slot.index, next), None);
+        assert_eq!(slots.get_part_at(u32::MAX, owner), None);
+        slots.activate(slot);
+        slots.retire(&[slot]);
+        assert_eq!(slots.get_part_at(slot.index, owner), None);
+        slots.completed.store(slots.fence, Ordering::Release);
+        slots.begin();
+        let reused = slots.touch_part(next);
+        assert_eq!(reused.index, slot.index);
+        assert_ne!(reused.generation, slot.generation);
+        assert_eq!(slots.get_part_at(slot.index, owner), None);
+        assert_eq!(slots.get_part_at(slot.index, next), Some(reused));
+        assert!(!slots.is_active(reused));
+    }
     #[test]
     fn paged_slots_partition_addresses_and_reuse_only_completed_generations() {
         let mut slots = SceneSlots::default();
