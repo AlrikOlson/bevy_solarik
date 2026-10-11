@@ -36,6 +36,7 @@ fn assembly_only_materials_reach_preparation_and_queue_through_lifecycle() {
     for &index in &[0, 2] {
         manager.update_slot_metadata(parts[index], ids[index], 1);
         manager.slots.activate(parts[index]);
+        manager.dirty_indices.push(parts[index].index);
     }
     manager.refresh_scene_metadata();
     let mut ordinary = RenderMaterialInstances::default();
@@ -179,6 +180,7 @@ fn material_journal_matches_full_reference_after_delta_mapping_and_readiness() {
     for &slot in &slots {
         manager.update_slot_metadata(slot, ids[0], 1);
         manager.slots.activate(slot);
+        manager.dirty_indices.push(slot.index);
     }
     manager.get_material_id(ids[0]);
     manager.get_material_id(ids[1]);
@@ -223,7 +225,7 @@ fn material_journal_matches_full_reference_after_delta_mapping_and_readiness() {
     assert_eq!(manager.unresolved_material_instances, 1);
     manager.dirty_indices.clear();
     manager.get_material_id(ids[2]);
-    assert_eq!(manager.refresh_material_ids(), 1023);
+    assert_eq!(manager.refresh_material_ids(), 1);
     compare(&manager);
     for &slot in &slots {
         manager.deactivate_slot(slot);
@@ -234,6 +236,8 @@ fn material_journal_matches_full_reference_after_delta_mapping_and_readiness() {
 }
 
 use super::*;
+#[path = "instance_manager_material_tests.rs"]
+mod material_tests;
 use bevy_ecs::world::World;
 use bevy_math::{Affine3A, Vec3};
 

@@ -155,6 +155,7 @@ pub struct InstanceManager {
     /// Includes shared parts without a standalone `MeshMaterial3d` owner.
     scene_metadata: scene_metadata::SceneMetadata,
     unresolved_material_instances: usize,
+    unresolved_material_slots: HashSet<u32>,
     /// Persistent instance buffers only need publication after exact scene changes.
     pub instance_upload_dirty: bool,
     pub rebuild_next_extract: bool,
@@ -242,6 +243,7 @@ impl InstanceManager {
             instance_material_assets: Vec::new(),
             scene_metadata: scene_metadata::SceneMetadata::default(),
             unresolved_material_instances: 0,
+            unresolved_material_slots: HashSet::default(),
             instance_upload_dirty: true,
             rebuild_next_extract: false,
             material_mapping_dirty: true,
@@ -487,6 +489,7 @@ impl InstanceManager {
 
     fn deactivate_slot(&mut self, slot: SceneSlot) {
         if self.slots.deactivate(slot) {
+            self.unresolved_material_slots.remove(&slot.index);
             let i = slot.index as usize;
             self.scene_metadata
                 .remove(self.instance_material_assets[i], self.bvh_depths[i]);
@@ -504,15 +507,10 @@ impl InstanceManager {
                 self.material_ids_present_in_scene.insert(id);
             }
         }
-        // A new mapping can resolve any previously unprepared row. Otherwise,
-        // every changed source row is already in the publication journal.
-        let rows = if self.material_mapping_dirty {
-            self.slots.active_indices().to_vec()
-        } else {
-            self.dirty_indices.clone()
-        };
+        let rows = self.material_rows();
         for &slot in &rows {
             if self.slots.entity(slot).is_none() {
+                self.unresolved_material_slots.remove(&slot);
                 continue;
             }
             let i = slot as usize;
@@ -521,6 +519,11 @@ impl InstanceManager {
                 .get(&self.instance_material_assets[i])
                 .copied()
                 .unwrap_or(0);
+            if material_id == 0 {
+                self.unresolved_material_slots.insert(slot);
+            } else {
+                self.unresolved_material_slots.remove(&slot);
+            }
             if self.instance_material_ids.get()[i] != material_id {
                 self.instance_material_ids.get_mut()[i] = material_id;
                 self.dirty_indices.push(slot);
@@ -529,6 +532,18 @@ impl InstanceManager {
         }
         self.material_mapping_dirty = false;
         rows.len()
+    }
+
+    fn material_rows(&self) -> Vec<u32> {
+        let mut rows = self.dirty_indices.clone();
+        // Material IDs only append: a new mapping cannot alter a resolved row.
+        // Revisit pending IDs and actual source changes, including their overlap.
+        if self.material_mapping_dirty {
+            rows.extend(self.unresolved_material_slots.iter().copied());
+        }
+        rows.sort_unstable();
+        rows.dedup();
+        rows
     }
 
     fn refresh_scene_metadata(&mut self) {
