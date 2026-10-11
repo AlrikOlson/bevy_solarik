@@ -193,7 +193,7 @@ struct Product {
 }
 impl Product {
     fn mesh_available(&self, world: &World) -> bool {
-        // Render-only meshes leave Assets during extraction, before GPU preparation.
+        // Render-only extraction moves the CPU payload; a metadata entry may remain.
         !self.retain_cpu
             || world
                 .get_resource::<Assets<Mesh>>()
