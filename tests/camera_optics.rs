@@ -1,24 +1,10 @@
 //! Production compute equations; rgba32 storage isolates math from half-float rounding.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 fn shader(definition: &str) -> String {
-    let mut stack = vec![true];
-    let mut out = String::new();
-    for line in include_str!("../src/optics/camera.wgsl").lines() {
-        if let Some(d) = line.strip_prefix("#ifdef ") {
-            stack.push(*stack.last().unwrap() && d == definition);
-        } else if let Some(d) = line.strip_prefix("#ifndef ") {
-            stack.push(*stack.last().unwrap() && d != definition);
-        } else if line == "#else" {
-            let v = stack.pop().unwrap();
-            stack.push(*stack.last().unwrap() && !v);
-        } else if line == "#endif" {
-            stack.pop();
-        } else if *stack.last().unwrap() {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out.replace("rgba16float", "rgba32float")
+    preprocess::select(include_str!("../src/optics/camera.wesl"), &[definition])
+        .replace("rgba16float", "rgba32float")
 }
 #[test]
 #[ignore = "production Vulkan camera optics readback"]
@@ -33,7 +19,7 @@ fn physical_meter_and_conservative_scatter() {
         let pipelines: [_; 3] = ["METER", "HORIZONTAL", ""].map(|d| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: None,
-                source: wgpu::ShaderSource::Wgsl(shader(d).into()),
+                source: preprocess::wgsl(shader(d).into()),
             });
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
@@ -224,7 +210,10 @@ fn physical_meter_and_conservative_scatter() {
                 .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             rx.recv().unwrap().unwrap();
-            let data = staging.slice(..).get_mapped_range();
+            let data = staging
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let output = bytemuck::cast_slice::<u8, f32>(&data);
             if case < 3 {
                 for channel in 0..3 {

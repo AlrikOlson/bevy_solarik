@@ -28,7 +28,7 @@ use std::time::Instant;
 pub struct CameraOpticsPlugin;
 impl Plugin for CameraOpticsPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "camera.wgsl");
+        embedded_asset!(app, "camera.wesl");
         app.add_plugins((
             ExtractComponentPlugin::<CameraOptics>::default(),
             ExtractComponentPlugin::<OpticsReadback>::default(),
@@ -118,7 +118,7 @@ fn initialize(mut commands: Commands, server: Res<AssetServer>, cache: Res<Pipel
             let pipeline = cache.queue_compute_pipeline(ComputePipelineDescriptor {
                 label: Some("camera optics".into()),
                 layout: vec![layout.clone()],
-                shader: load_embedded_asset!(&*server, "camera.wgsl"),
+                shader: load_embedded_asset!(&*server, "camera.wesl"),
                 shader_defs: defs,
                 entry_point: Some(if i == 0 { "meter" } else { "scatter" }.into()),
                 ..Default::default()
@@ -308,10 +308,11 @@ fn readback(
         let mapped = buffer.clone();
         buffer.slice(..).map_async(MapMode::Read, move |result| {
             if result.is_ok() {
-                let bytes = mapped.slice(..).get_mapped_range();
-                *destination.lock().expect("camera meter snapshot") =
-                    Some(*bytemuck::from_bytes::<[f32; 12]>(&bytes));
-                drop(bytes);
+                if let Ok(bytes) = mapped.slice(..).get_mapped_range() {
+                    *destination.lock().expect("camera meter snapshot") =
+                        Some(*bytemuck::from_bytes::<[f32; 12]>(&bytes));
+                    drop(bytes);
+                }
                 mapped.unmap();
             }
             pending.store(false, Ordering::Release);

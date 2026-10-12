@@ -28,6 +28,7 @@ use bevy_shader::load_shader_library;
 /// Equirectangular RGB cd/m² field; +X at u=0, -Z at u=1/4, +Y at v=0.
 /// Linear float texture, no exposure baked in. Alpha ignored. Does not light surfaces.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(RenderApp)]
 #[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct RadianceSky(pub Handle<Image>);
 /// Additive measured fields. RGB layers use cd/m²; monochromatic scalar fields
@@ -54,6 +55,7 @@ impl RadianceLayer {
 }
 /// Independent layers add to `RadianceSky`, if both components are present.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(RenderApp)]
 #[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct RadianceSkyLayers(pub Vec<RadianceLayer>);
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -66,8 +68,8 @@ struct Gpu {
 }
 impl Plugin for RadianceSkyPlugin {
     fn build(&self, app: &mut App) {
-        load_shader_library!(app, "radiance_sky_sample.wgsl");
-        embedded_asset!(app, "radiance_sky.wgsl");
+        load_shader_library!(app, "radiance_sky_sample.wesl");
+        embedded_asset!(app, "radiance_sky.wesl");
         app.add_plugins(ExtractComponentPlugin::<RadianceSky>::default());
         app.add_plugins(ExtractComponentPlugin::<RadianceSkyLayers>::default());
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
@@ -99,7 +101,7 @@ fn initialize(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pipel
     let pipeline = cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("radiance_sky".into()),
         layout: vec![layout.clone()],
-        shader: load_embedded_asset!(assets.as_ref(), "radiance_sky.wgsl"),
+        shader: load_embedded_asset!(assets.as_ref(), "radiance_sky.wesl"),
         ..Default::default()
     });
     commands.insert_resource(Gpu { layout, pipeline });
@@ -126,7 +128,7 @@ fn compose(
     };
     let (Some(pipeline), Some(depth), Some(view_binding)) = (
         cache.get_compute_pipeline(gpu.pipeline),
-        prepass.depth_view(),
+        prepass.depth_only_view(),
         uniforms.uniforms.binding(),
     ) else {
         return;

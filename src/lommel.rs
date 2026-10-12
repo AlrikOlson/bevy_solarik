@@ -27,7 +27,7 @@ impl Default for LommelSeeliger {
 }
 impl MaterialExtension for LommelSeeliger {
     fn fragment_shader() -> ShaderRef {
-        "embedded://bevy_solarik/lommel_material.wgsl".into()
+        "embedded://bevy_solarik/lommel_material.wesl".into()
     }
     fn deferred_fragment_shader() -> ShaderRef {
         Self::fragment_shader()
@@ -36,12 +36,13 @@ impl MaterialExtension for LommelSeeliger {
 pub type LommelMaterial = ExtendedMaterial<StandardMaterial, LommelSeeliger>;
 /// Ray proxies using the same disk law. Caller owns entry lifetime.
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct LommelRayMaterials(pub HashSet<AssetId<StandardMaterial>>);
 pub struct LommelSeeligerPlugin;
 impl Plugin for LommelSeeligerPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "lommel_material.wgsl");
-        load_shader_library!(app, "lommel_math.wgsl");
+        embedded_asset!(app, "lommel_material.wesl");
+        load_shader_library!(app, "lommel_math.wesl");
         app.init_resource::<LommelRayMaterials>();
         app.add_plugins(ExtractResourcePlugin::<LommelRayMaterials>::default());
         app.add_plugins(MaterialPlugin::<LommelMaterial>::default());

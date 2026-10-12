@@ -1,3 +1,5 @@
+#[path = "preprocess.rs"]
+mod preprocess;
 use super::{
     acceleration::Scene,
     appearance_input::{Appearance, Request},
@@ -65,7 +67,7 @@ pub fn pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipeline {
         .join("\n");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("source appearance cook and material probes"),
-        source: wgpu::ShaderSource::Wgsl(
+        source: preprocess::wgsl(
             format!(
                 "enable wgpu_ray_query;\n{shared}\n{}\n{}",
                 include_str!("../coarse_appearance.wgsl"),
@@ -210,7 +212,12 @@ pub fn run<T: bytemuck::Pod>(
     readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     (
-        bytemuck::cast_slice::<u8, T>(&readback.get_mapped_range(..)).to_vec(),
+        bytemuck::cast_slice::<u8, T>(
+            &readback
+                .get_mapped_range(..)
+                .expect("completed GPU readback range"),
+        )
+        .to_vec(),
         total,
     )
 }

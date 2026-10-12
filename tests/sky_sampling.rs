@@ -1,4 +1,6 @@
 //! Executes the actual sky-distribution WGSL with analytic sky inputs.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 #[test]
@@ -17,7 +19,7 @@ fn sky_distribution_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let source = include_str!("../src/realtime/sky_sampling.wgsl")
+        let source = include_str!("../src/realtime/sky_sampling.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
@@ -63,7 +65,7 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("actual sky WGSL with analytic sky"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let distribution = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -173,7 +175,10 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU finished");
             receiver.recv().expect("map callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             for sample in samples {
                 assert!(

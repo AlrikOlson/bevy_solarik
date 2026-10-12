@@ -21,20 +21,20 @@ fn primary_glass_gpu() {
             .expect("device");
         let production = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/realtime/primary_glass.wgsl"
+            "/src/realtime/primary_glass.wesl"
         ))
         .expect("primary glass shader");
         let start = production
             .find("fn composite_primary_glass(")
             .expect("production compositor");
-        let glass = include_str!("../src/scene/thin_glass.wgsl")
+        let glass = include_str!("../src/scene/thin_glass.wesl")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("primary glass transport"),
-            source: wgpu::ShaderSource::Wgsl(
+            source: preprocess::wgsl(
                 format!(
                     "{glass}\n{}\n{}",
                     preprocess::select(&production[start..], &[]),
@@ -230,7 +230,10 @@ fn primary_glass_gpu() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU completed");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let values: &[f32] = bytemuck::cast_slice(&data);
             for (actual, expected) in values.iter().zip(expected) {
                 assert!(

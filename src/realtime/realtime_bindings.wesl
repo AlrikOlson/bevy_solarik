@@ -1,0 +1,92 @@
+import bevy_render::view::View;
+import bevy_pbr::prepass::bindings::PreviousViewUniforms;
+import bevy_solarik::scene::sampling::LightSample;
+
+enable wgpu_ray_query;
+
+
+
+@group(1) @binding(0) var view_output: texture_storage_2d<rgba16float, read_write>;
+@group(1) @binding(1) var<storage, read_write> light_tile_samples: array<LightSample>;
+@group(1) @binding(2) var<storage, read_write> light_tile_resolved_samples: array<ResolvedLightSamplePacked>;
+@group(1) @binding(3) var di_reservoirs_a: texture_storage_2d<rgba32uint, read_write>;
+@group(1) @binding(4) var di_reservoirs_b: texture_storage_2d<rgba32uint, read_write>;
+@group(1) @binding(5) var<storage, read_write> gi_reservoirs_a: array<Reservoir>;
+@group(1) @binding(6) var<storage, read_write> gi_reservoirs_b: array<Reservoir>;
+@group(1) @binding(7) var gbuffer: texture_2d<u32>;
+@group(1) @binding(8) var depth_buffer: texture_depth_2d;
+@group(1) @binding(9) var motion_vectors: texture_2d<f32>;
+@group(1) @binding(10) var previous_gbuffer: texture_2d<u32>;
+@group(1) @binding(11) var previous_depth_buffer: texture_depth_2d;
+@group(1) @binding(12) var<uniform> view: View;
+@group(1) @binding(13) var<uniform> previous_view: PreviousViewUniforms;
+
+@group(1) @binding(14) var<storage, read_write> world_cache_checksums: array<atomic<u32>, constants::WORLD_CACHE_SIZE>;
+@if((WORLD_CACHE_NON_ATOMIC_LIFE_BUFFER))
+@group(1) @binding(15) var<storage, read_write> world_cache_life: array<u32, constants::WORLD_CACHE_SIZE>;
+@if((!(WORLD_CACHE_NON_ATOMIC_LIFE_BUFFER)))
+@group(1) @binding(15) var<storage, read_write> world_cache_life: array<atomic<u32>, constants::WORLD_CACHE_SIZE>;
+@group(1) @binding(16) var<storage, read_write> world_cache_radiance: array<vec4<f32>, constants::WORLD_CACHE_SIZE>;
+@group(1) @binding(17) var<storage, read_write> world_cache_geometry_data: array<WorldCacheGeometryData, constants::WORLD_CACHE_SIZE>;
+@group(1) @binding(18) var<storage, read_write> world_cache_luminance_deltas: array<f32, constants::WORLD_CACHE_SIZE>;
+@group(1) @binding(19) var<storage, read_write> world_cache_active_cells_new_radiance: array<vec4<f32>, constants::WORLD_CACHE_SIZE>;
+@group(1) @binding(20) var<storage, read_write> world_cache_a: array<u32, constants::WORLD_CACHE_SIZE>;
+@if((WORLD_CACHE_PRIORITY_ATOMIC_BUFFER))
+@group(1) @binding(21) var<storage, read_write> world_cache_b: array<atomic<u32>, 1024u>;
+@if((!(WORLD_CACHE_PRIORITY_ATOMIC_BUFFER)))
+@group(1) @binding(21) var<storage, read_write> world_cache_b: array<u32, 1024u>;
+@group(1) @binding(22) var<storage, read_write> world_cache_active_cell_indices: array<u32, constants::WORLD_CACHE_SIZE>;
+@group(1) @binding(23) var<storage, read_write> world_cache_active_cells_count: u32;
+
+@if((DLSS_RR_GUIDE_BUFFERS))
+@group(2) @binding(0) var diffuse_albedo: texture_storage_2d<rgba8unorm, write>;
+@if((DLSS_RR_GUIDE_BUFFERS))
+@group(2) @binding(1) var specular_albedo: texture_storage_2d<rgba8unorm, write>;
+@if((DLSS_RR_GUIDE_BUFFERS))
+@group(2) @binding(2) var normal_roughness: texture_storage_2d<rgba16float, write>;
+@if((DLSS_RR_GUIDE_BUFFERS))
+@group(2) @binding(3) var dlss_rr_depth: texture_storage_2d<r32float, write>;
+@if((DLSS_RR_GUIDE_BUFFERS))
+@group(2) @binding(4) var specular_motion_vectors: texture_storage_2d<rg16float, write>;
+
+// frame_index retains the renderer's scrambled RNG seed. It is not a clock.
+// reset bit 0: all history; bit 1: geometry changed; bit 2: regional support available.
+// A finite stable_radius bounds the region untouched by changed occluders.
+struct PushConstants { frame_index: u32, reset: u32, render_frame: u32, stable_radius: f32 }
+var<immediate> constants: PushConstants;
+
+// Don't adjust the size of this struct without also adjusting `prepare::RESOLVED_LIGHT_SAMPLE_STRUCT_SIZE`.
+struct ResolvedLightSamplePacked {
+    world_position_x: f32,
+    world_position_y: f32,
+    world_position_z: f32,
+    world_normal: u32,
+    radiance: u32,
+    inverse_pdf: f32,
+    // Point/spot lights: octahedral cone axis, cos(outer)/cos(inner) as two
+    // f16, and the range (negative for every other kind of light).
+    spot_direction: u32,
+    spot_cos: u32,
+    range: f32,
+}
+
+// Don't adjust the size of this struct without also adjusting `prepare::GI_RESERVOIR_STRUCT_SIZE`.
+struct Reservoir {
+    sample_point_world_position: vec3<f32>,
+    // Frames since this endpoint radiance was sampled; preserved by spatial reuse.
+    sample_age: f32,
+    radiance: vec3<f32>,
+    confidence_weight: f32,
+    sample_point_world_normal: vec3<f32>,
+    unbiased_contribution_weight: f32,
+    // Sphere about sample_point_world_position enclosing retained dependencies.
+    @if((REGIONAL_HISTORY)) support_radius: f32, 
+}
+
+struct WorldCacheGeometryData {
+    world_position: vec3<f32>,
+    last_traced_frame: u32,
+    world_normal: vec3<f32>,
+    // Conservative support of every contribution retained in radiance.
+    support_radius: f32
+}

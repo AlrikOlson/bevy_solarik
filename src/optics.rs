@@ -14,10 +14,12 @@ use std::sync::Mutex;
 /// automatic flag, manual EV100, input centre HDR luminance, pre-exposure,
 /// followed by the centre RGBA after optical scattering and exposure.
 #[derive(Component, Clone, Default, ExtractComponent)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct OpticsReadback(pub Arc<Mutex<Option<[f32; 12]>>>);
 
 /// A generated camera, not an empirical model of a particular lens or eye.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct CameraOptics {
     pub automatic: bool,
     /// Positive compensation makes the image brighter.

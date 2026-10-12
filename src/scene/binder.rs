@@ -65,6 +65,7 @@ const LIGHT_NOT_PRESENT_THIS_FRAME: u32 = u32::MAX;
 /// intensity of zero, means no sky (upstream behaviour: escaped rays are
 /// black).
 #[derive(Resource, ExtractResource, Clone)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct SolarikSkyLight {
     /// A cubemap (`TextureViewDimension::Cube`) in the scene's radiance units.
     pub image: Option<Handle<Image>>,
@@ -86,6 +87,7 @@ impl Default for SolarikSkyLight {
 /// does. Off is the escape hatch for a scene where the any-hit cost is too
 /// high.
 #[derive(Resource, ExtractResource, Clone, Copy, Debug)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct SolarikAlphaTesting(pub bool);
 
 impl Default for SolarikAlphaTesting {
@@ -1472,7 +1474,7 @@ struct GpuMaterial {
     gaussian: Vec4,
 }
 
-/// `Material.flags` bits, mirrored in `raytracing_scene_bindings.wgsl`.
+/// `Material.flags` bits, mirrored in `raytracing_scene_bindings.wesl`.
 const MATERIAL_FLAG_OPAQUE: u32 = 1;
 const MATERIAL_FLAG_ALPHA_MASK: u32 = 2;
 const MATERIAL_FLAG_ALPHA_BLEND: u32 = 4;
@@ -1574,7 +1576,7 @@ impl GpuLightSource {
     }
 }
 
-/// `LightSource.kind` values, mirrored in `raytracing_scene_bindings.wgsl`.
+/// `LightSource.kind` values, mirrored in `raytracing_scene_bindings.wesl`.
 /// The low bit clear is an emissive mesh (upstream: the triangle count sits
 /// above it); the low bit set is any other light, with the kind above it.
 const LIGHT_SOURCE_KIND_DIRECTIONAL: u32 = 1;
@@ -1587,7 +1589,7 @@ const LIGHT_SOURCE_KIND_SPOT: u32 = 5;
 const LOCAL_LIGHT_MIN_RADIUS: f32 = 0.01;
 
 /// A point or spot light as a sphere light. Mirrors `LocalLight` in
-/// `raytracing_scene_bindings.wgsl`.
+/// `raytracing_scene_bindings.wesl`.
 #[derive(ShaderType, Default, Debug, Clone, Copy, PartialEq)]
 struct GpuLocalLight {
     position: Vec3,
@@ -1657,7 +1659,7 @@ impl GpuDirectionalLight {
     }
 }
 
-/// Mirrors `SkyLight` in `raytracing_scene_bindings.wgsl`.
+/// Mirrors `SkyLight` in `raytracing_scene_bindings.wesl`.
 #[derive(ShaderType, Default)]
 struct GpuSkyLight {
     intensity: f32,
@@ -1667,7 +1669,7 @@ struct GpuSkyLight {
     medium: GpuLightMedium,
 }
 
-/// Mirrors `LightMedium` in `light_medium.wgsl`. Metres.
+/// Mirrors `LightMedium` in `light_medium.wesl`. Metres.
 #[derive(ShaderType, Clone, Copy, Debug, PartialEq, Default)]
 struct GpuLightMedium {
     centre: Vec3,

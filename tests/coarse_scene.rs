@@ -82,7 +82,7 @@ fn immutable_coarse_sources_decode_and_lookup_exactly_on_gpu() {
         }
         let report = format!(
             "{{\"adapter\":{:?},\"sources\":[{}],\"bit_exact\":true}}\n",
-            format!("{:?}", **resources.2),
+            format!("{:?}", *resources.2),
             reports.join(",")
         );
         let mut file = std::fs::OpenOptions::new()

@@ -4,7 +4,7 @@ use crate::coarse_cache::{DIRECTIONS, Directional, SourceCache};
 #[path = "coarse_appearance_codec.rs"]
 mod codec;
 pub use codec::{decode, encode};
-pub const SHADER: &str = include_str!("coarse_appearance.wgsl");
+pub const SHADER: &str = include_str!("coarse_appearance.wesl");
 pub const MAX_BYTES: usize = 128 << 20;
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]

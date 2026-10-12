@@ -48,7 +48,7 @@ fn source_coverage_matches_analytic_and_independent_cpu_rays() {
         }
         let report = format!(
             "{{\"adapter\":{:?},\"sources\":[{}],\"analytic_controls\":8,\"overflow_detected\":true}}\n",
-            format!("{:?}", **resources.2),
+            format!("{:?}", *resources.2),
             reports.join(",")
         );
         input::write(&Path::new(&output).join("gpu.json"), report.as_bytes());

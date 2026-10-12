@@ -66,12 +66,12 @@ impl Plugin for RaytracingScenePlugin {
         app.add_plugins(crate::rings::RingPlugin);
         app.add_plugins(crate::filtered_canopy::CanopyPlugin);
         crate::coarse_scene::load_shader(app);
-        load_shader_library!(app, "brdf.wgsl");
-        load_shader_library!(app, "light_medium.wgsl");
-        load_shader_library!(app, "thin_glass.wgsl");
-        load_shader_library!(app, "scene_hit.wgsl");
-        load_shader_library!(app, "raytracing_scene_bindings.wgsl");
-        load_shader_library!(app, "sampling.wgsl");
+        load_shader_library!(app, "brdf.wesl");
+        load_shader_library!(app, "light_medium.wesl");
+        load_shader_library!(app, "thin_glass.wesl");
+        load_shader_library!(app, "scene_hit.wesl");
+        load_shader_library!(app, "raytracing_scene_bindings.wesl");
+        load_shader_library!(app, "sampling.wesl");
 
         // The sky is optional; the resource exists so the binder can read it
         // (no image = no sky, upstream behaviour).

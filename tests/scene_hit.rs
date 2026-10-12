@@ -11,6 +11,8 @@ mod acceleration;
 )]
 #[path = "support/source_coverage_input.rs"]
 mod input;
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
 use wgpu::util::DeviceExt;
 
@@ -31,22 +33,7 @@ fn function(source: &str, name: &str) -> String {
     panic!("unterminated function {name}");
 }
 fn default_definitions(source: String) -> String {
-    let mut depth = 0;
-    source
-        .lines()
-        .filter(|line| {
-            if line.trim_start().starts_with("#ifdef") {
-                depth += 1;
-                false
-            } else if line.trim_start().starts_with("#endif") {
-                depth -= 1;
-                false
-            } else {
-                depth == 0
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    preprocess::select(&source, &[])
 }
 #[test]
 fn tagged_hits_preserve_triangle_queries_and_reject_foreign_payloads_on_vulkan() {
@@ -115,12 +102,8 @@ fn tagged_hits_preserve_triangle_queries_and_reject_foreign_payloads_on_vulkan()
             }
         }
         assert_eq!(rays.len(), 480);
-        let source = include_str!("../src/scene/raytracing_scene_bindings.wgsl");
-        let shared = include_str!("../src/scene/scene_hit.wgsl")
-            .lines()
-            .filter(|l| !l.starts_with('#'))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let source = include_str!("../src/scene/raytracing_scene_bindings.wesl");
+        let shared = preprocess::select(include_str!("../src/scene/scene_hit.wesl"), &[]);
         let functions = [
             "trace_ray",
             "trace_glass_ray",
@@ -137,7 +120,7 @@ fn tagged_hits_preserve_triangle_queries_and_reject_foreign_payloads_on_vulkan()
         .join("\n");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production scene hit boundary"),
-            source: wgpu::ShaderSource::Wgsl(
+            source: preprocess::wgsl(
                 format!(
                     "enable wgpu_ray_query;\n{shared}\n{functions}\n{}",
                     include_str!("scene_hit.wgsl")
@@ -199,7 +182,9 @@ fn tagged_hits_preserve_triangle_queries_and_reject_foreign_payloads_on_vulkan()
         queue.submit([encoder.finish()]);
         readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        let bytes = readback.get_mapped_range(..);
+        let bytes = readback
+            .get_mapped_range(..)
+            .expect("completed GPU readback range");
         let rows: &[[u32; 8]] = bytemuck::cast_slice(&bytes);
         let mut hits = 0;
         for (i, (row, ray)) in rows.iter().zip(&rays).enumerate() {

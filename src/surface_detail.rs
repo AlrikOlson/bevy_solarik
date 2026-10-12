@@ -133,7 +133,7 @@ pub struct SurfaceDetail {
 
 impl MaterialExtension for SurfaceDetail {
     fn fragment_shader() -> ShaderRef {
-        "embedded://bevy_solarik/surface_detail.wgsl".into()
+        "embedded://bevy_solarik/surface_detail.wesl".into()
     }
     fn deferred_fragment_shader() -> ShaderRef {
         Self::fragment_shader()
@@ -145,6 +145,7 @@ pub type DetailedMaterial = ExtendedMaterial<StandardMaterial, SurfaceDetail>;
 /// Map a custom raster material's ray proxy to the same scan parameters.
 /// The caller owns handle lifetime and removes entries when evicting materials.
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct DetailedRayMaterials(pub HashMap<AssetId<StandardMaterial>, SurfaceDetail>);
 
 #[derive(Clone, Default, ShaderType)]
@@ -161,8 +162,8 @@ pub(crate) struct GpuSurfaceDetail {
 pub struct SurfaceDetailPlugin;
 impl Plugin for SurfaceDetailPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "surface_detail.wgsl");
-        load_shader_library!(app, "detail_sampling.wgsl");
+        embedded_asset!(app, "surface_detail.wesl");
+        load_shader_library!(app, "detail_sampling.wesl");
         app.init_resource::<DetailedRayMaterials>();
         app.add_plugins(ExtractResourcePlugin::<DetailedRayMaterials>::default());
         app.add_plugins(MaterialPlugin::<DetailedMaterial>::default());

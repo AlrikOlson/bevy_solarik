@@ -310,6 +310,19 @@ pub fn prepare_solari_lighting_resources(
             let normal_roughness_view =
                 normal_roughness.create_view(&TextureViewDescriptor::default());
 
+            // Bevy 0.20 reads RR depth separately from the raster depth attachment.
+            let dlss_rr_depth = render_device.create_texture(&TextureDescriptor {
+                label: Some("solarik_lighting_dlss_rr_depth"),
+                size: view_size.to_extents(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::R32Float,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+                view_formats: &[],
+            });
+            let dlss_rr_depth_view = dlss_rr_depth.create_view(&TextureViewDescriptor::default());
+
             let specular_motion_vectors = render_device.create_texture(&TextureDescriptor {
                 label: Some("solarik_lighting_specular_motion_vectors"),
                 size: view_size.to_extents(),
@@ -337,6 +350,10 @@ pub fn prepare_solari_lighting_resources(
                     normal_roughness: CachedTexture {
                         texture: normal_roughness,
                         default_view: normal_roughness_view,
+                    },
+                    depth: CachedTexture {
+                        texture: dlss_rr_depth,
+                        default_view: dlss_rr_depth_view,
                     },
                     specular_motion_vectors: CachedTexture {
                         texture: specular_motion_vectors,

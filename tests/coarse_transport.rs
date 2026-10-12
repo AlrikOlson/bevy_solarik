@@ -101,6 +101,6 @@ fn native_original_and_coarse_transport_images() {
             }
         }
         input::write(&Path::new(&output).join("gpu.json"),format!(r#"{{"adapter":{:?},"side":256,"views":10,"analytic_controls":{analytic},"sources":[{}],"source_transport_accepted":false}}"#,
-            format!("{:?}",**resources.2),reports.join(",")).as_bytes());
+            format!("{:?}",*resources.2),reports.join(",")).as_bytes());
     });
 }

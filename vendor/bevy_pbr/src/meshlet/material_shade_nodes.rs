@@ -81,7 +81,6 @@ pub fn meshlet_main_opaque_pass(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-
     let span = diagnostics.time_span(&mut render_pass, "meshlet/opaque_shade");
 
     if let Some(viewport) =
@@ -189,7 +188,6 @@ pub fn meshlet_prepass(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-
     let span = diagnostics.time_span(&mut render_pass, "meshlet/prepass_shade");
 
     if let Some(viewport) =
@@ -314,7 +312,6 @@ pub fn meshlet_deferred_gbuffer_prepass(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-
     let span = diagnostics.time_span(&mut render_pass, "meshlet/gbuffer_shade");
 
     if let Some(viewport) =

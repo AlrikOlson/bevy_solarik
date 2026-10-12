@@ -23,7 +23,7 @@ use bevy_render::{
     render_resource::*,
     renderer::{RenderDevice, RenderQueue},
     texture::{CachedTexture, TextureCache},
-    view::{ExtractedView, ViewDepthTexture, ViewUniform, ViewUniforms},
+    view::{ExtractedView, ViewDepthStencilTexture, ViewUniform, ViewUniforms},
 };
 use binding_types::*;
 use core::iter;
@@ -1051,7 +1051,11 @@ pub fn prepare_meshlet_view_bind_groups(
     meshlet_mesh_manager: Res<MeshletMeshManager>,
     resource_manager: Res<ResourceManager>,
     instance_manager: Res<InstanceManager>,
-    views: Query<(Entity, &MeshletViewResources, Option<&ViewDepthTexture>)>,
+    views: Query<(
+        Entity,
+        &MeshletViewResources,
+        Option<&ViewDepthStencilTexture>,
+    )>,
     view_uniforms: Res<ViewUniforms>,
     previous_view_uniforms: Res<PreviousViewUniforms>,
     render_device: Res<RenderDevice>,
@@ -1428,7 +1432,11 @@ pub fn prepare_meshlet_view_bind_groups(
                     meshlet_mesh_manager.vertex_normals.binding(),
                     meshlet_mesh_manager.vertex_uvs.binding(),
                     instance_manager.instance_uniforms.binding().unwrap(),
-                    scene_depth.view(),
+                    scene_depth
+                        .attachment
+                        .depth_stencil_views()
+                        .depth_only_view()
+                        .expect("Meshlet materials require the depth aspect"),
                     meshlet_mesh_manager.vertex_tangents.binding(),
                     meshlet_mesh_manager.vertex_tangent_indices.binding(),
                 )),

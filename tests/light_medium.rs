@@ -1,6 +1,8 @@
 //! Transmittance of a distant light through a planet's air, executed against
 //! the production WGSL and compared with 64-bit quadrature of the same
 //! profiles.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 const RADIUS: f64 = 6_360_000.0;
@@ -120,7 +122,7 @@ fn run(cases: &[[f32; 4]]) -> Vec<[f32; 4]> {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let production = include_str!("../src/scene/light_medium.wgsl")
+        let production = include_str!("../src/scene/light_medium.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
@@ -130,7 +132,7 @@ fn run(cases: &[[f32; 4]]) -> Vec<[f32; 4]> {
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production light medium"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -189,7 +191,10 @@ fn run(cases: &[[f32; 4]]) -> Vec<[f32; 4]> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU completed");
         receiver.recv().expect("map callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         bytemuck::cast_slice::<u8, [f32; 4]>(&data).to_vec()
     })
 }

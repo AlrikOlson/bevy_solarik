@@ -41,24 +41,24 @@ pub struct SolarikLightingPlugin;
 
 impl Plugin for SolarikLightingPlugin {
     fn build(&self, app: &mut App) {
-        load_shader_library!(app, "gbuffer_utils.wgsl");
-        load_shader_library!(app, "primary_light_trace.wgsl");
-        load_shader_library!(app, "realtime_bindings.wgsl");
-        load_shader_library!(app, "presample_light_tiles.wgsl");
-        embedded_asset!(app, "restir_di.wgsl");
-        embedded_asset!(app, "restir_gi.wgsl");
-        load_shader_library!(app, "sky_sampling.wgsl");
-        load_shader_library!(app, "specular_gi.wgsl");
-        embedded_asset!(app, "primary_glass.wgsl");
-        embedded_asset!(app, "primary_foliage.wgsl");
-        load_shader_library!(app, "foliage_math.wgsl");
-        load_shader_library!(app, "surface_path.wgsl");
-        load_shader_library!(app, "world_cache_query.wgsl");
-        embedded_asset!(app, "world_cache_compact.wgsl");
-        load_shader_library!(app, "world_cache_priority.wgsl");
-        embedded_asset!(app, "world_cache_update.wgsl");
+        load_shader_library!(app, "gbuffer_utils.wesl");
+        load_shader_library!(app, "primary_light_trace.wesl");
+        load_shader_library!(app, "realtime_bindings.wesl");
+        load_shader_library!(app, "presample_light_tiles.wesl");
+        embedded_asset!(app, "restir_di.wesl");
+        embedded_asset!(app, "restir_gi.wesl");
+        load_shader_library!(app, "sky_sampling.wesl");
+        load_shader_library!(app, "specular_gi.wesl");
+        embedded_asset!(app, "primary_glass.wesl");
+        embedded_asset!(app, "primary_foliage.wesl");
+        load_shader_library!(app, "foliage_math.wesl");
+        load_shader_library!(app, "surface_path.wesl");
+        load_shader_library!(app, "world_cache_query.wesl");
+        embedded_asset!(app, "world_cache_compact.wesl");
+        load_shader_library!(app, "world_cache_priority.wesl");
+        embedded_asset!(app, "world_cache_update.wesl");
 
-        load_shader_library!(app, "resolve_dlss_rr_textures.wgsl");
+        load_shader_library!(app, "resolve_dlss_rr_textures.wesl");
 
         app.insert_resource(DefaultOpaqueRendererMethod::deferred());
     }

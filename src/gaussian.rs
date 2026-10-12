@@ -50,7 +50,7 @@ impl GaussianDielectric {
 }
 impl MaterialExtension for GaussianDielectric {
     fn fragment_shader() -> ShaderRef {
-        "embedded://bevy_solarik/gaussian_material.wgsl".into()
+        "embedded://bevy_solarik/gaussian_material.wesl".into()
     }
     fn deferred_fragment_shader() -> ShaderRef {
         Self::fragment_shader()
@@ -60,13 +60,14 @@ pub type GaussianMaterial = ExtendedMaterial<StandardMaterial, GaussianDielectri
 
 /// Parameters for the `StandardMaterial` ray proxy; caller owns entry lifetime.
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct GaussianRayMaterials(pub HashMap<AssetId<StandardMaterial>, GaussianDielectric>);
 
 pub struct GaussianDielectricPlugin;
 impl Plugin for GaussianDielectricPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "gaussian_material.wgsl");
-        load_shader_library!(app, "gaussian_math.wgsl");
+        embedded_asset!(app, "gaussian_material.wesl");
+        load_shader_library!(app, "gaussian_math.wesl");
         app.init_resource::<GaussianRayMaterials>();
         app.add_plugins(ExtractResourcePlugin::<GaussianRayMaterials>::default());
         app.add_plugins(MaterialPlugin::<GaussianMaterial>::default());

@@ -1,4 +1,6 @@
 //! Precision contract for physically sized scan coordinates.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_math::{DVec3, Vec3};
 use bevy_solarik::surface_detail::DetailCoordinates;
 
@@ -67,31 +69,13 @@ fn gpu_surface_gradient_matches_height_differential() {
             })
             .await
             .unwrap();
-        let mut enabled = true;
-        let production = include_str!("../src/detail_sampling.wgsl")
-            .lines()
-            .filter(|line| {
-                if line.starts_with("#ifdef") {
-                    enabled = true;
-                    return false;
-                }
-                if line.starts_with("#else") {
-                    enabled = false;
-                    return false;
-                }
-                if line.starts_with("#endif") {
-                    enabled = true;
-                    return false;
-                }
-                enabled && !line.starts_with('#')
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let production = include_str!("../src/detail_sampling.wesl")
             .replace(
                 "binding_array<texture_2d_array<f32>>",
                 "binding_array<texture_2d_array<f32>, 2>",
             )
             .replace("binding_array<sampler>", "binding_array<sampler, 2>");
+        let production = preprocess::select(&production, &["BINDLESS_SURFACE_DETAIL"]);
         let source = format!(
             "{production}\n{}",
             r#"
@@ -110,7 +94,7 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production surface-gradient differential"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let mut entries = Vec::new();
         for binding in 0..2 {
@@ -258,7 +242,10 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
         });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         let values: &[[f32; 4]] = bytemuck::cast_slice(&mapped);
         for (i, value) in values.iter().enumerate() {
             let n = Vec3::from_slice(&inputs[2 * i]);

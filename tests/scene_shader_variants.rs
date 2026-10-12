@@ -1,108 +1,26 @@
-//! Compile complete production consumers with Bevy's real shader cache, without a scene load.
-use bevy_asset::Assets;
-use bevy_shader::{Shader, ShaderCache, ShaderCacheSource, ShaderDefVal};
-use std::path::{Path, PathBuf};
-fn sources(root: &Path, result: &mut Vec<PathBuf>) {
-    let mut entries: Vec<_> = std::fs::read_dir(root)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            sources(&path, result);
-        } else if path.extension().is_some_and(|v| v == "wgsl") {
-            result.push(path);
-        }
-    }
-}
+//! Production material/scene consumers through the actual Bevy WESL compiler.
+#[path = "support/shader_graph.rs"]
+mod shader_graph;
+use bevy_shader::ShaderDefVal;
+
 #[test]
-fn complete_scene_consumers_compile_with_supported_shader_variants() {
-    const {
-        assert!(
-            cfg!(debug_assertions),
-            "Bevy's validating composer is required"
-        );
-    }
-    let render = bevy_platform::future::block_on(
-        bevy_render::renderer::initialize_headless_renderer(&bevy_render::settings::WgpuSettings {
-            backends: Some(wgpu::Backends::VULKAN),
-            features: bevy_solarik::SolarikPlugins::required_wgpu_features(),
-            ..Default::default()
-        }),
-    );
-    let mut cache = ShaderCache::new(
-        (),
-        render.0.features(),
-        render.3.get_downlevel_capabilities().flags,
-        |_, source, _| match source {
-            ShaderCacheSource::Naga(module) => Ok(module.entry_points.len()),
-            _ => panic!("expected the production Naga composer"),
-        },
-    );
-    let mut assets = Assets::<Shader>::default();
-    let mut inputs = Vec::new();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    sources(&root.join("src"), &mut inputs);
-    for path in std::env::var("SOLARIK_SHADER_ROOTS")
-        .expect("wrapper supplies locked Bevy sources")
-        .lines()
-    {
-        sources(Path::new(path), &mut inputs);
-    }
-    inputs.sort();
-    inputs.dedup();
-    let mut targets = Vec::new();
+fn scene_consumers_compose_across_production_feature_variants() {
+    let mut graph = shader_graph::Graph::load();
     let consumers = [
-        "src/scene/sampling.wgsl",
-        "src/realtime/primary_foliage.wgsl",
-        "src/realtime/primary_glass.wgsl",
-        "src/realtime/restir_gi.wgsl",
-        "src/realtime/world_cache_update.wgsl",
-        "src/realtime/specular_gi.wgsl",
-        "src/realtime/surface_path.wgsl",
-        "src/pathtracer/pathtracer.wgsl",
-        "src/filtered_canopy_prepass.wgsl",
+        "scene::sampling",
+        "realtime::primary_foliage",
+        "realtime::primary_glass",
+        "realtime::restir_gi",
+        "realtime::world_cache_update",
+        "realtime::specular_gi",
+        "realtime::surface_path",
+        "pathtracer::pathtracer",
+        "filtered_canopy_prepass",
     ];
-    for path in inputs {
-        let source = std::fs::read_to_string(&path).unwrap();
-        let mut shader = Shader::from_wgsl(source, path.to_string_lossy().into_owned());
-        // Same imported module settings as MeshRenderPlugin in pinned Bevy.
-        if path.ends_with("mesh_view_types.wgsl") {
-            shader.shader_defs = vec![
-                ShaderDefVal::UInt(
-                    "MAX_DIRECTIONAL_LIGHTS".into(),
-                    bevy_pbr::MAX_DIRECTIONAL_LIGHTS as u32,
-                ),
-                ShaderDefVal::UInt(
-                    "MAX_CASCADES_PER_LIGHT".into(),
-                    bevy_pbr::MAX_CASCADES_PER_LIGHT as u32,
-                ),
-                ShaderDefVal::UInt("MAX_RECT_LIGHTS".into(), bevy_pbr::MAX_RECT_LIGHTS as u32),
-            ];
-        }
-        let handle = assets.add(shader.clone());
-        cache.set_shader(handle.id(), shader);
-        if consumers.iter().any(|p| path == root.join(p)) {
-            targets.push((path, handle));
-        }
-    }
-    assert_eq!(targets.len(), consumers.len());
     for bits in 0..16 {
         let mut definitions = vec![
             ShaderDefVal::UInt("WORLD_CACHE_SIZE".into(), 1 << 20),
-            ShaderDefVal::UInt(
-                "RASTER_SUBPIXEL_BITS".into(),
-                render
-                    .3
-                    .raster_subpixel_precision_bits()
-                    .unwrap_or(4)
-                    .min(24),
-            ),
-            ShaderDefVal::UInt(
-                "AVAILABLE_STORAGE_BUFFER_BINDINGS".into(),
-                render.0.limits().max_storage_buffers_per_shader_stage,
-            ),
+            ShaderDefVal::UInt("RASTER_SUBPIXEL_BITS".into(), 8),
             "BINDLESS_SURFACE_DETAIL".into(),
         ];
         for (index, name) in [
@@ -111,42 +29,36 @@ fn complete_scene_consumers_compile_with_supported_shader_variants() {
             "DLSS_RR_GUIDE_BUFFERS",
             "FOLIAGE_TRANSMISSION",
         ]
-        .into_iter()
+        .iter()
         .enumerate()
         {
             if bits & (1 << index) != 0 {
-                definitions.push(name.into());
+                definitions.push((*name).into());
             }
         }
-        for (path, handle) in &targets {
+        for consumer in consumers {
+            let module = format!("bevy_solarik::{consumer}");
             let mut stage_definitions = definitions.clone();
-            if path.ends_with("filtered_canopy_prepass.wgsl") && bits & 1 != 0 {
+            if consumer == "filtered_canopy_prepass" && bits & 1 != 0 {
                 stage_definitions.push("WRITE_NORMAL".into());
             }
-            // The production pipeline factory specializes the shared world-cache module.
-            if path.ends_with("world_cache_update.wgsl") {
+            if consumer == "realtime::world_cache_update" {
                 stage_definitions.push("WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into());
                 stage_definitions.push("ADAPTIVE_CACHE_BUDGET".into());
                 if bits & 8 != 0 {
                     stage_definitions.push("WORLD_CACHE_QUERY_ATOMIC_MAX_LIFETIME".into());
                 }
             }
-            if path.ends_with("restir_gi.wgsl") && bits & 8 != 0 {
+            if consumer == "realtime::restir_gi" && bits & 8 != 0 {
                 stage_definitions.push("WORLD_CACHE_FIRST_BOUNCE_LIGHT_LEAK_PREVENTION".into());
             }
-            if let Err(error) = cache.get(bits, handle.id(), &stage_definitions) {
-                panic!("{} variant{bits}: {error:?}", path.display());
-            }
-            if path.ends_with("primary_foliage.wgsl") {
+            graph.validate(&module, &stage_definitions);
+            if consumer == "realtime::primary_foliage" {
                 let mut direct_definitions = stage_definitions.clone();
                 direct_definitions.push("PRIMARY_CANOPY_DIRECT_ONLY".into());
-                if let Err(error) = cache.get(bits + 32, handle.id(), &direct_definitions) {
-                    panic!("{} direct-only variant{bits}: {error:?}", path.display());
-                }
+                graph.validate(&module, &direct_definitions);
                 stage_definitions.push("PRIMARY_CANOPY_QUERY_ONLY".into());
-                if let Err(error) = cache.get(bits + 16, handle.id(), &stage_definitions) {
-                    panic!("{} query-only variant{bits}: {error:?}", path.display());
-                }
+                graph.validate(&module, &stage_definitions);
             }
         }
     }

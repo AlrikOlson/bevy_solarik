@@ -119,7 +119,7 @@ fn cook_original_source_cells() {
         }
         let report = format!(
             "{{\"adapter\":{:?},\"levels\":[{}],\"analytic_controls\":{controls}}}\n",
-            format!("{:?}", **resources.2),
+            format!("{:?}", *resources.2),
             reports.join(",")
         );
         input::write(&Path::new(&output).join("gpu.json"), report.as_bytes());

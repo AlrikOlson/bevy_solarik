@@ -1,4 +1,6 @@
 //! Production mask/composition shader: neural surfaces survive, physical sky does too.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 #[test]
 #[ignore = "production Vulkan background preservation readback"]
@@ -12,7 +14,7 @@ fn preserve_only_guide_free_background() {
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(
+            source: preprocess::wgsl(
                 include_str!("../src/optics/background.wgsl")
                     .replace("rgba16float", "rgba32float")
                     .into(),
@@ -175,7 +177,10 @@ fn preserve_only_guide_free_background() {
                 .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             rx.recv().unwrap().unwrap();
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let values = bytemuck::cast_slice::<u8, f32>(&data[..16]);
             assert_eq!(
                 values,

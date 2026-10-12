@@ -1,4 +1,6 @@
 use super::acceleration::Scene;
+#[path = "preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 pub fn pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
     let shared = bevy_solarik::coarse_spatial::PACK_SHADER
@@ -8,7 +10,7 @@ pub fn pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
         .join("\n");
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("original spatial hit bake"),
-        source: wgpu::ShaderSource::Wgsl(
+        source: preprocess::wgsl(
             format!(
                 "enable wgpu_ray_query;\n{shared}\n{}",
                 include_str!("../coarse_spatial_cook.wgsl")
@@ -98,5 +100,10 @@ pub fn run(
     queue.submit([encoder.finish()]);
     readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    bytemuck::cast_slice::<u8, [u32; 64]>(&readback.get_mapped_range(..)).to_vec()
+    bytemuck::cast_slice::<u8, [u32; 64]>(
+        &readback
+            .get_mapped_range(..)
+            .expect("completed GPU readback range"),
+    )
+    .to_vec()
 }

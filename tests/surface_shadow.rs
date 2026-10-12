@@ -40,9 +40,9 @@ fn surface_shadow_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let sampling = include_str!("../src/scene/sampling.wgsl");
-        let surface = include_str!("../src/realtime/surface_path.wgsl");
-        let glass = include_str!("../src/scene/thin_glass.wgsl")
+        let sampling = include_str!("../src/scene/sampling.wesl");
+        let surface = include_str!("../src/realtime/surface_path.wesl");
+        let glass = include_str!("../src/scene/thin_glass.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
@@ -59,7 +59,7 @@ fn surface_shadow_gpu() {
         }
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production emitter MIS"),
-            source: wgpu::ShaderSource::Wgsl(preprocess::select(&source, &[]).into()),
+            source: preprocess::wgsl(preprocess::select(&source, &[]).into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -138,7 +138,10 @@ fn surface_shadow_gpu() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             let tint = color.map(f64::from);
             for (channel, tint) in tint.iter().enumerate() {

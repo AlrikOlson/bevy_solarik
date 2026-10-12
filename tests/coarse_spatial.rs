@@ -3,6 +3,8 @@
 mod controls;
 #[path = "support/coarse_spatial_gpu.rs"]
 mod gpu;
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
 use bevy_solarik::{
     coarse_cache,
@@ -37,7 +39,7 @@ fn pipeline(device: &bevy_render::renderer::RenderDevice, entry: &str) -> wgpu::
     .join("\n");
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("spatial source hit traversal"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: preprocess::wgsl(source.into()),
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -140,6 +142,6 @@ fn native_spatial_source_visibility() {
                 reports.push(format!(r#"{{"prototype":{id},"resolution":{resolution},"rays":655360,"hits":{hits},"unresolved_rays":{unresolved},"columns_visited":{visited},"bit_exact_words":{decoded_words},"packed_bytes":{packed_bytes},"explicit_fixture_bytes":{bytes},"trace_host_seconds":{elapsed}}}"#));
             }
         }
-        write(&Path::new(&output).join("gpu.json"),format!(r#"{{"adapter":{:?},"sources":[{}],"side":256,"views":10,"analytic_controls":{analytic},"source_transport_accepted":false}}"#,format!("{:?}",**resources.2),reports.join(",")).as_bytes());
+        write(&Path::new(&output).join("gpu.json"),format!(r#"{{"adapter":{:?},"sources":[{}],"side":256,"views":10,"analytic_controls":{analytic},"source_transport_accepted":false}}"#,format!("{:?}",*resources.2),reports.join(",")).as_bytes());
     });
 }

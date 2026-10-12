@@ -5,6 +5,8 @@
 //! and mapped shading normals can point past the viewer's horizon at grazing
 //! angles; a BRDF that returns zero there outlines the silhouette of every
 //! normal-mapped surface in black pixels.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 
 const SAMPLES: usize = 65536;
 
@@ -22,7 +24,7 @@ fn run_probe() -> Vec<[f32; 4]> {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let production = include_str!("../src/scene/brdf.wgsl")
+        let production = include_str!("../src/scene/brdf.wesl")
             .lines()
             .filter(|line| !line.starts_with('#') && !line.starts_with("enable "))
             .collect::<Vec<_>>()
@@ -33,12 +35,12 @@ fn run_probe() -> Vec<[f32; 4]> {
             "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
             "return select(vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0)), vec2(0.5, 0.05), perceptual_roughness > 0.5);"
         );
-        let gaussian = include_str!("../src/gaussian_math.wgsl")
+        let gaussian = include_str!("../src/gaussian_math.wesl")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        let lommel = include_str!("../src/lommel_math.wgsl")
+        let lommel = include_str!("../src/lommel_math.wesl")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
@@ -47,7 +49,7 @@ fn run_probe() -> Vec<[f32; 4]> {
         let source = format!("{production}\n{}", include_str!("view_facing_fixture.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production BRDF, view-facing normals"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -94,7 +96,10 @@ fn run_probe() -> Vec<[f32; 4]> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU completed");
         receiver.recv().expect("map callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         bytemuck::cast_slice::<u8, [f32; 4]>(&data).to_vec()
     })
 }

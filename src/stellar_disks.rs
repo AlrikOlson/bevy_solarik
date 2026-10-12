@@ -23,6 +23,7 @@ use bevy_render::{
 /// in radians. Irradiance.rgb is linear RGB lux at the observer. Zero disables.
 /// Direct surface illumination must be supplied separately with matching values.
 #[derive(Component, Clone, ExtractComponent, ShaderType)]
+#[extract_app(RenderApp)]
 #[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct StellarDisks {
     pub direction: [Vec4; 2],
@@ -38,7 +39,7 @@ struct Gpu {
 }
 impl Plugin for StellarDisksPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "stellar_disks.wgsl");
+        embedded_asset!(app, "stellar_disks.wesl");
         app.add_plugins(ExtractComponentPlugin::<StellarDisks>::default());
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.add_systems(RenderStartup, initialize).add_systems(
@@ -69,7 +70,7 @@ fn initialize(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pipel
     let pipeline = cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("stellar_disks".into()),
         layout: vec![layout.clone()],
-        shader: load_embedded_asset!(assets.as_ref(), "stellar_disks.wgsl"),
+        shader: load_embedded_asset!(assets.as_ref(), "stellar_disks.wesl"),
         ..Default::default()
     });
     commands.insert_resource(Gpu { layout, pipeline });
@@ -94,7 +95,7 @@ fn compose(
     };
     let (Some(pipeline), Some(depth), Some(view_binding)) = (
         cache.get_compute_pipeline(gpu.pipeline),
-        prepass.depth_view(),
+        prepass.depth_only_view(),
         uniforms.uniforms.binding(),
     ) else {
         return;

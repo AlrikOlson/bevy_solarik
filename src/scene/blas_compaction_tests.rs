@@ -99,9 +99,9 @@ fn compaction_upload_schedule_keeps_compacted_geometry_visible() {
         world.insert_resource(device.clone());
         world.insert_resource(queue.clone());
         world.insert_resource(manager);
-        let compaction = IntoSystem::into_system(compact_raytracing_blas);
+        let mut compaction = IntoSystem::into_system(compact_raytracing_blas);
         // Fail immediately on a scheduling regression instead of hanging in wgpu.
-        assert!(compaction.is_exclusive());
+        assert!(compaction.initialize(&mut world).is_exclusive());
         let mut schedule = Schedule::default();
         schedule.add_systems((compaction, upload, upload, upload, upload));
         for _ in 0..4 {
@@ -215,7 +215,11 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
         raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         assert_eq!(
-            bytemuck::cast_slice::<u8, u32>(&readback.get_mapped_range(..)),
+            bytemuck::cast_slice::<u8, u32>(
+                &readback
+                    .get_mapped_range(..)
+                    .expect("completed GPU readback range")
+            ),
             &[24, 25, 26, 27, 28, 29, 30, 31]
         );
         readback.unmap();

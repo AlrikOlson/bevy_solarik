@@ -11,7 +11,7 @@ pub use wgpu_types::error::ErrorType;
 use crate::{
     FutureRenderResources, RenderStartup, insert_future_resources,
     render_resource::PipelineCache,
-    renderer::{RenderDevice, WgpuWrapper},
+    renderer::{RenderDevice, wgpu_wrapper},
     settings::RenderCreation,
 };
 
@@ -82,13 +82,18 @@ impl Default for RenderErrorHandler {
     }
 }
 
+wgpu_wrapper! {
+    #[derive(Debug)]
+    pub struct WgpuErrorSource(ErrorSource);
+}
+
 /// An error encountered during rendering. These are errors reported by wgpu validation layers,
 /// and typically indicate problems in the way it is being used.
 #[derive(Debug)]
 pub struct RenderError {
     pub ty: ErrorType,
     pub description: String,
-    pub source: Option<WgpuWrapper<ErrorSource>>,
+    pub source: Option<WgpuErrorSource>,
 }
 
 /// The current state of the renderer.
@@ -104,11 +109,13 @@ pub(crate) enum RenderState {
     Reinitializing,
 }
 
+wgpu_wrapper!(struct WgpuError(wgpu::Error));
+
 /// Resource to allow polling wgpu error handlers.
 #[derive(Resource)]
 pub(crate) struct DeviceErrorHandler {
     device_lost: Arc<Mutex<Option<(wgpu::DeviceLostReason, String)>>>,
-    uncaptured: Arc<Mutex<Option<WgpuWrapper<wgpu::Error>>>>,
+    uncaptured: Arc<Mutex<Option<WgpuError>>>,
 }
 
 impl DeviceErrorHandler {
@@ -129,10 +136,7 @@ impl DeviceErrorHandler {
             });
             device.on_uncaptured_error(Arc::new(move |e| {
                 bevy_log::error!("Caught rendering error: {e}");
-                uncaptured
-                    .lock()
-                    .unwrap()
-                    .get_or_insert(WgpuWrapper::new(e));
+                uncaptured.lock().unwrap().get_or_insert(WgpuError::new(e));
             }));
         }
         Self {
@@ -168,7 +172,7 @@ impl DeviceErrorHandler {
             return Some(RenderError {
                 ty,
                 description,
-                source: Some(WgpuWrapper::new(source)),
+                source: Some(WgpuErrorSource::new(source)),
             });
         }
         None

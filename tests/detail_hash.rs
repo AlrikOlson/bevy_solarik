@@ -1,4 +1,6 @@
 //! Regression for correlated two-dimensional scan-patch translations.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 #[test]
@@ -12,7 +14,7 @@ fn scan_translations_cover_two_dimensions() {
         });
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-        let production = include_str!("../src/detail_sampling.wgsl");
+        let production = include_str!("../src/detail_sampling.wesl");
         let start = production.find("fn detail_hash(").unwrap();
         let end = production.find("fn detail_plane(").unwrap();
         let shader = format!(
@@ -34,7 +36,7 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
         );
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production scan translation hash"),
-            source: wgpu::ShaderSource::Wgsl(shader.into()),
+            source: preprocess::wgsl(shader.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -79,7 +81,10 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
             .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let bytes = readback.slice(..).get_mapped_range();
+        let bytes = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         let values: &[[f32; 4]] = bytemuck::cast_slice(&bytes);
         let mut turns = [0usize; 4];
         let mut histogram = [0usize; 256];

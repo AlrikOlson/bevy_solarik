@@ -1,4 +1,6 @@
 //! Production `ReSTIR` GI foliage endpoint energy, side support, PDFs and history.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -23,25 +25,7 @@ fn function(source: &str, name: &str) -> String {
 }
 
 fn preprocess(source: &str, defines: &[&str]) -> String {
-    let mut enabled = vec![true];
-    let mut result = String::new();
-    for line in source.lines() {
-        if let Some(name) = line.strip_prefix("#ifdef ") {
-            enabled.push(*enabled.last().expect("parent") && defines.contains(&name));
-        } else if let Some(name) = line.strip_prefix("#ifndef ") {
-            enabled.push(*enabled.last().expect("parent") && !defines.contains(&name));
-        } else if line == "#else" {
-            let previous = enabled.pop().expect("branch");
-            enabled.push(*enabled.last().expect("parent") && !previous);
-        } else if line == "#endif" {
-            enabled.pop().expect("branch");
-        } else if *enabled.last().expect("state") {
-            result.push_str(line);
-            result.push('\n');
-        }
-    }
-    assert_eq!(enabled, [true], "balanced shader conditionals");
-    result
+    preprocess::select(source, defines)
 }
 
 async fn probe(source: String, inputs: &[[[f32; 4]; 6]]) -> Vec<Vec<[f32; 4]>> {
@@ -59,7 +43,7 @@ async fn probe(source: String, inputs: &[[[f32; 4]; 6]]) -> Vec<Vec<[f32; 4]>> {
         .expect("device");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("production foliage cache"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: preprocess::wgsl(source.into()),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -119,7 +103,10 @@ async fn probe(source: String, inputs: &[[[f32; 4]; 6]]) -> Vec<Vec<[f32; 4]>> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU");
         receiver.recv().expect("callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         results.push(bytemuck::cast_slice(&data).to_vec());
         drop(data);
         readback.unmap();
@@ -128,8 +115,8 @@ async fn probe(source: String, inputs: &[[[f32; 4]; 6]]) -> Vec<Vec<[f32; 4]>> {
 }
 
 fn check_endpoints(no_cache: bool) {
-    let gi = include_str!("../src/realtime/restir_gi.wgsl");
-    let sampling = include_str!("../src/scene/sampling.wgsl");
+    let gi = include_str!("../src/realtime/restir_gi.wesl");
+    let sampling = include_str!("../src/scene/sampling.wesl");
     let mut source = include_str!("gi_foliage_fixture.wgsl").to_owned();
     for name in [
         "generate_initial_reservoir",
@@ -145,7 +132,7 @@ fn check_endpoints(no_cache: bool) {
         ));
     }
     source.push_str(&function(
-        include_str!("../src/realtime/world_cache_query.wgsl"),
+        include_str!("../src/realtime/world_cache_query.wesl"),
         "query_two_sided_world_cache",
     ));
     for name in [

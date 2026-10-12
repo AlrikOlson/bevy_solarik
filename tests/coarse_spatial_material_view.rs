@@ -5,6 +5,8 @@
 )]
 #[path = "support/coarse_spatial_material_view_gpu.rs"]
 mod gpu;
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
 use bevy_solarik::{
     coarse_appearance, coarse_cache,
@@ -81,7 +83,7 @@ fn native_spatial_material_views() {
         let raw = device.wgpu_device();
         let module = raw.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(shader.into()),
+            source: preprocess::wgsl(shader.into()),
         });
         let pipeline = raw.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,

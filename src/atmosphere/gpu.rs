@@ -38,6 +38,7 @@ use bevy_shader::load_shader_library;
 /// Enables the atmosphere sky and aerial perspective on a camera.
 /// Requires an HDR, non-MSAA view with storage usage on its main texture.
 #[derive(Component, ExtractComponent, Debug, Clone, Copy, Default)]
+#[extract_app(RenderApp)]
 #[require(Hdr, DepthPrepass, Msaa::Off,
     CameraMainTextureUsages = CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct AtmosphereCamera;
@@ -53,6 +54,7 @@ pub struct AtmosphereBackground;
 /// Disk-free radiance cubemap for `SolarikSkyLight` and `GeneratedEnvironmentMapLight`.
 /// It is allocated once and written on the GPU; its image data is never uploaded per frame.
 #[derive(Resource, ExtractResource, Debug, Clone)]
+#[extract_app(RenderApp)]
 pub struct AtmosphereEnvironment {
     pub image: Handle<Image>,
 }
@@ -87,9 +89,9 @@ pub struct AtmospherePlugin;
 
 impl Plugin for AtmospherePlugin {
     fn build(&self, app: &mut App) {
-        load_shader_library!(app, "model.wgsl");
-        embedded_asset!(app, "luts.wgsl");
-        embedded_asset!(app, "view.wgsl");
+        load_shader_library!(app, "model.wesl");
+        embedded_asset!(app, "luts.wesl");
+        embedded_asset!(app, "view.wesl");
         app.init_resource::<AtmosphereState>().add_plugins((
             ExtractResourcePlugin::<AtmosphereState>::default(),
             ExtractResourcePlugin::<PlanetaryAtmosphere>::default(),
@@ -258,9 +260,9 @@ fn initialize_atmosphere(
         });
         let layout = BindGroupLayoutDescriptor::new(definition, &entries);
         let shader = if index < 4 {
-            load_embedded_asset!(assets.as_ref(), "luts.wgsl")
+            load_embedded_asset!(assets.as_ref(), "luts.wesl")
         } else {
-            load_embedded_asset!(assets.as_ref(), "view.wgsl")
+            load_embedded_asset!(assets.as_ref(), "view.wesl")
         };
         let pipeline = cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some(format!("atmosphere_{definition}").into()),
@@ -546,7 +548,7 @@ fn compose_atmosphere<const BACKGROUND: bool>(
         return;
     }
     let (Some(depth), Some(view_binding), Some(parameters)) = (
-        prepass.depth_view(),
+        prepass.depth_only_view(),
         uniforms.uniforms.binding(),
         gpu.uniform.binding(),
     ) else {

@@ -2,10 +2,11 @@
 use bevy_asset::Assets;
 use bevy_camera::primitives::Aabb;
 use bevy_ecs::{entity::Entity, world::World};
-use bevy_math::{Vec3A, primitives::Cuboid};
+use bevy_math::Vec3A;
 use bevy_mesh::{Mesh, Mesh3d};
 use bevy_pbr::{MeshMaterial3d, StandardMaterial};
 use bevy_render::scene_readiness::SceneGeometryReadiness;
+use bevy_shape::Cuboid;
 use bevy_solarik::{
     material::{MaterialModel, MaterialRegistration},
     prelude::RaytracingMesh3d,

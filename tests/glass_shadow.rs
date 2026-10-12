@@ -1,4 +1,6 @@
 //! Deterministic production shadow traversal through synthetic pane intersections.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 #[test]
@@ -17,7 +19,7 @@ fn glass_shadow_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let sampling = include_str!("../src/scene/sampling.wgsl");
+        let sampling = include_str!("../src/scene/sampling.wesl");
         let start = sampling
             .find("fn trace_shadow_transmission(")
             .expect("shadow transport");
@@ -25,7 +27,7 @@ fn glass_shadow_gpu() {
             .find("// End shadow transport")
             .expect("end shadow transport")
             + start;
-        let glass = include_str!("../src/scene/thin_glass.wgsl")
+        let glass = include_str!("../src/scene/thin_glass.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
@@ -43,7 +45,7 @@ fn glass_shadow_gpu() {
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production shadow transport"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -140,7 +142,10 @@ fn glass_shadow_gpu() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let result: &[f32] = bytemuck::cast_slice(&data);
             let f = 0.04 + 0.96 * (1.0 - cosine).powi(5);
             let reflection = 2.0 * f / (1.0 + f);

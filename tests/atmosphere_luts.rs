@@ -1,4 +1,6 @@
 //! Executes the production LUT shaders and checks unexposed radiance in cd/m².
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_math::{DVec3, Vec3};
 use bevy_solarik::atmosphere::AtmosphereState;
 use wgpu::util::DeviceExt;
@@ -114,28 +116,13 @@ fn unresolved_and_resolved_disks_conserve_projected_flux() {
 }
 
 fn lut_source(definition: &str) -> String {
-    let model = include_str!("../src/atmosphere/model.wgsl")
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut active = true;
-    let body = include_str!("../src/atmosphere/luts.wgsl")
-        .lines()
-        .filter(|line| {
-            if let Some(name) = line.strip_prefix("#ifdef ") {
-                active = name == definition;
-                return false;
-            }
-            if line.starts_with("#endif") {
-                active = true;
-                return false;
-            }
-            active && !line.starts_with('#')
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("{model}\n{body}")
+    let model = include_str!("../src/atmosphere/model.wesl");
+    let body = include_str!("../src/atmosphere/luts.wesl");
+    format!(
+        "{}\n{}",
+        preprocess::select(model, &[]),
+        preprocess::select(body, &[definition])
+    )
 }
 
 fn parameters(state: &AtmosphereState) -> [[f32; 4]; 17] {
@@ -193,7 +180,10 @@ fn mapped(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<[f32; 4]> {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("GPU completed");
     recv.recv().expect("callback received").expect("mapped");
-    let data = buffer.slice(..).get_mapped_range();
+    let data = buffer
+        .slice(..)
+        .get_mapped_range()
+        .expect("completed GPU readback range");
     let result = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     buffer.unmap();
@@ -230,7 +220,7 @@ impl Luts {
             .map(|name| {
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(name),
-                    source: wgpu::ShaderSource::Wgsl(lut_source(name).into()),
+                    source: preprocess::wgsl(lut_source(name).into()),
                 });
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(name),
@@ -718,7 +708,7 @@ impl Luts {
         params: &[[f32; 4]; 17],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
-        let model = include_str!("../src/atmosphere/model.wgsl")
+        let model = include_str!("../src/atmosphere/model.wesl")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
@@ -745,7 +735,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: None,
-                source: wgpu::ShaderSource::Wgsl(code.into()),
+                source: preprocess::wgsl(code.into()),
             });
         let pipeline = self
             .device
@@ -1069,7 +1059,7 @@ fn droplet_fit() -> (f64, f64, f64, f64) {
 }
 
 fn shader_constant(name: &str) -> f64 {
-    let source = include_str!("../src/atmosphere/model.wgsl");
+    let source = include_str!("../src/atmosphere/model.wesl");
     let declaration = format!("const {name}: f32 = ");
     let start = source.find(&declaration).expect("declared constant") + declaration.len();
     let end = start + source[start..].find(';').expect("constant terminator");

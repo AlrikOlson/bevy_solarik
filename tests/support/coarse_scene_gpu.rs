@@ -1,4 +1,6 @@
 use super::{Probe, Request};
+#[path = "preprocess.rs"]
+mod preprocess;
 use bevy_solarik::coarse_scene::{self, PackedSource};
 use wgpu::util::DeviceExt;
 
@@ -10,7 +12,7 @@ pub fn pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipeline {
         .join("\n");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("production coarse sparse lookup/decoder"),
-        source: wgpu::ShaderSource::Wgsl(format!("{shared}\n{entry}").into()),
+        source: preprocess::wgsl(format!("{shared}\n{entry}").into()),
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -84,7 +86,12 @@ pub fn run(
     readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     (
-        bytemuck::cast_slice::<u8, Probe>(&readback.get_mapped_range(..)).to_vec(),
+        bytemuck::cast_slice::<u8, Probe>(
+            &readback
+                .get_mapped_range(..)
+                .expect("completed GPU readback range"),
+        )
+        .to_vec(),
         total,
     )
 }

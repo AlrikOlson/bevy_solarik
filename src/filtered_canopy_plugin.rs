@@ -17,11 +17,11 @@ use bevy_shader::load_shader_library;
 pub struct CanopyPlugin;
 impl Plugin for CanopyPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "filtered_canopy_prepass.wgsl");
-        load_shader_library!(app, "filtered_canopy_transport.wgsl");
-        load_shader_library!(app, "filtered_canopy_region.wgsl");
-        load_shader_library!(app, "filtered_canopy_scene.wgsl");
-        load_shader_library!(app, "filtered_canopy_conditioning.wgsl");
+        embedded_asset!(app, "filtered_canopy_prepass.wesl");
+        load_shader_library!(app, "filtered_canopy_transport.wesl");
+        load_shader_library!(app, "filtered_canopy_region.wesl");
+        load_shader_library!(app, "filtered_canopy_scene.wesl");
+        load_shader_library!(app, "filtered_canopy_conditioning.wesl");
         app.init_asset::<CanopyRegion>()
             .init_resource::<CanopySources>()
             .init_resource::<SceneGeometryReadiness>()

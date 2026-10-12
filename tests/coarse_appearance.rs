@@ -132,7 +132,7 @@ fn original_materials_cook_without_changing_geometric_coverage() {
         }
         let report = format!(
             r#"{{"adapter":{:?},"levels":[{}],"analytic_controls":{analytic},"source_coverage_counts_exact":true}}"#,
-            format!("{:?}", **resources.2),
+            format!("{:?}", *resources.2),
             reports.join(",")
         );
         input::write(&Path::new(&output).join("gpu.json"), report.as_bytes());

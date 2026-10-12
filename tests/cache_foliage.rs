@@ -39,7 +39,7 @@ async fn probe(source: String, inputs: &[[[f32; 4]; 4]]) -> Vec<Vec<[f32; 4]>> {
         .expect("device");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("production foliage cache"),
-        source: wgpu::ShaderSource::Wgsl(preprocess::select(&source, &[]).into()),
+        source: preprocess::wgsl(preprocess::select(&source, &[]).into()),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -109,7 +109,10 @@ async fn probe(source: String, inputs: &[[[f32; 4]; 4]]) -> Vec<Vec<[f32; 4]>> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU");
         receiver.recv().expect("callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         results.push(bytemuck::cast_slice(&data).to_vec());
         drop(data);
         readback.unmap();
@@ -120,10 +123,14 @@ async fn probe(source: String, inputs: &[[[f32; 4]; 4]]) -> Vec<Vec<[f32; 4]>> {
 #[test]
 #[ignore = "requires Vulkan; run separately from builds and captures"]
 fn cache_foliage_propagation_gpu() {
-    let cache = include_str!("../src/realtime/world_cache_update.wgsl");
+    let cache = include_str!("../src/realtime/world_cache_update.wesl");
     let mut source = include_str!("cache_foliage_fixture.wgsl").to_owned();
     source.push_str(&function(
-        include_str!("../src/realtime/world_cache_query.wgsl"),
+        include_str!("../src/filtered_canopy_scene.wesl"),
+        "forest_set_seed",
+    ));
+    source.push_str(&function(
+        include_str!("../src/realtime/world_cache_query.wesl"),
         "query_two_sided_world_cache_with_support",
     ));
     source.push_str(
@@ -214,31 +221,13 @@ fn cache_foliage_propagation_gpu() {
 }
 
 fn preprocess(source: &str, defines: &[&str]) -> String {
-    let mut enabled = vec![true];
-    let mut result = String::new();
-    for line in source.lines() {
-        if let Some(name) = line.strip_prefix("#ifdef ") {
-            enabled.push(*enabled.last().expect("parent") && defines.contains(&name));
-        } else if let Some(name) = line.strip_prefix("#ifndef ") {
-            enabled.push(*enabled.last().expect("parent") && !defines.contains(&name));
-        } else if line == "#else" {
-            let previous = enabled.pop().expect("branch");
-            enabled.push(*enabled.last().expect("parent") && !previous);
-        } else if line == "#endif" {
-            enabled.pop().expect("branch");
-        } else if *enabled.last().expect("state") {
-            result.push_str(line);
-            result.push('\n');
-        }
-    }
-    assert_eq!(enabled, [true], "balanced shader conditionals");
-    result
+    preprocess::select(source, defines)
 }
 
 #[test]
 #[ignore = "requires Vulkan; run separately from builds and captures"]
 fn cache_foliage_identity_gpu() {
-    let cache = include_str!("../src/realtime/world_cache_query.wgsl");
+    let cache = include_str!("../src/realtime/world_cache_query.wesl");
     let fixture = r#"
 @group(0) @binding(0) var<storage, read> config: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> output: array<vec4<f32>>;
@@ -309,7 +298,7 @@ fn probe() {
                     "WORLD_CACHE_QUERY_ATOMIC_MAX_LIFETIME",
                 ],
             )
-            .replace("#{WORLD_CACHE_SIZE}", "32u")
+            .replace("constants::WORLD_CACHE_SIZE", "32u")
             .replace(
                 "return wrap_key(key);",
                 "return select(wrap_key(key), 31u, config[1].w > 0.0);",

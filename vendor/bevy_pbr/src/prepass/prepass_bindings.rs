@@ -1,12 +1,10 @@
 use bevy_core_pipeline::prepass::ViewPrepassTextures;
 use bevy_render::render_resource::{
-    BindGroupLayoutEntryBuilder, TextureAspect, TextureSampleType, TextureView,
-    TextureViewDescriptor,
+    BindGroupLayoutEntryBuilder, TextureSampleType, TextureView,
     binding_types::{
         texture_2d, texture_2d_multisampled, texture_depth_2d, texture_depth_2d_multisampled,
     },
 };
-use bevy_utils::default;
 
 use crate::MeshPipelineViewLayoutKey;
 
@@ -57,17 +55,8 @@ pub fn get_bind_group_layout_entries(
 }
 
 pub fn get_bindings(prepass_textures: Option<&ViewPrepassTextures>) -> [Option<TextureView>; 4] {
-    let depth_desc = TextureViewDescriptor {
-        label: Some("prepass_depth"),
-        aspect: TextureAspect::DepthOnly,
-        ..default()
-    };
-    let depth_view = prepass_textures
-        .and_then(|x| x.depth.as_ref())
-        .map(|texture| texture.texture.texture.create_view(&depth_desc));
-
     [
-        depth_view,
+        prepass_textures.and_then(|pt| pt.depth_only_view().cloned()),
         prepass_textures.and_then(|pt| pt.normal_view().cloned()),
         prepass_textures.and_then(|pt| pt.motion_vectors_view().cloned()),
         prepass_textures.and_then(|pt| pt.deferred_view().cloned()),

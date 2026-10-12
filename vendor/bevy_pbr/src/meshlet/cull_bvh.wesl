@@ -1,0 +1,135 @@
+import bevy_pbr::meshlet::bindings::InstancedOffset;
+import bevy_pbr::meshlet::bindings::get_aabb;
+import bevy_pbr::meshlet::bindings::get_aabb_error;
+import bevy_pbr::meshlet::bindings::get_aabb_child_offset;
+import bevy_pbr::meshlet::bindings::constants;
+import bevy_pbr::meshlet::bindings::meshlet_bvh_nodes;
+import bevy_pbr::meshlet::bindings::meshlet_cull_data;
+import bevy_pbr::meshlet::bindings::meshlet_bvh_cull_count_read;
+import bevy_pbr::meshlet::bindings::meshlet_bvh_cull_count_write;
+import bevy_pbr::meshlet::bindings::meshlet_bvh_cull_dispatch;
+import bevy_pbr::meshlet::bindings::meshlet_bvh_cull_queue;
+import bevy_pbr::meshlet::bindings::meshlet_meshlet_cull_count_early;
+import bevy_pbr::meshlet::bindings::meshlet_meshlet_cull_count_late;
+import bevy_pbr::meshlet::bindings::meshlet_meshlet_cull_dispatch_early;
+import bevy_pbr::meshlet::bindings::meshlet_meshlet_cull_dispatch_late;
+import bevy_pbr::meshlet::bindings::meshlet_meshlet_cull_queue;
+import bevy_pbr::meshlet::bindings::meshlet_second_pass_bvh_count;
+import bevy_pbr::meshlet::bindings::meshlet_second_pass_bvh_dispatch;
+import bevy_pbr::meshlet::bindings::meshlet_second_pass_bvh_queue;
+import bevy_pbr::meshlet::cull_shared::lod_error_is_imperceptible;
+import bevy_pbr::meshlet::cull_shared::aabb_in_frustum;
+import bevy_pbr::meshlet::cull_shared::should_occlusion_cull_aabb;
+import bevy_pbr::meshlet::cull_dispatch::cull_dispatch_size;
+import bevy_pbr::meshlet::cull_dispatch::cull_dispatch_index;
+
+
+@compute
+@workgroup_size(128, 1, 1) // 8 threads per node, 16 nodes per workgroup
+fn cull_bvh(@builtin(global_invocation_id) global_invocation_id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    // Calculate the queue ID for this thread
+    let dispatch_id = cull_dispatch_index(global_invocation_id, groups);
+    var node = dispatch_id >> 3u;
+    let subnode = dispatch_id & 7u;
+    if node >= meshlet_bvh_cull_count_read { return; }
+
+    node = select(node, constants.rightmost_slot - node, constants.read_from_front == 0u);
+    let instanced_offset = meshlet_bvh_cull_queue[node];
+    let instance_id = instanced_offset.instance_id;
+    let bvh_node = &meshlet_bvh_nodes[instanced_offset.offset];
+
+    var aabb_error_offset = (*bvh_node).aabbs[subnode];
+    let aabb = get_aabb(&aabb_error_offset);
+    let parent_error = get_aabb_error(&aabb_error_offset);
+    let lod_sphere = (*bvh_node).lod_bounds[subnode];
+
+    let parent_is_imperceptible = lod_error_is_imperceptible(lod_sphere, parent_error, instance_id);
+    // Error and frustum cull, in both passes
+    if parent_is_imperceptible || !aabb_in_frustum(aabb, instance_id) { return; }
+
+    let child_offset = get_aabb_child_offset(&aabb_error_offset);
+    let index = subnode >> 2u;
+    let bit_offset = subnode & 3u;
+    let packed_child_count = (*bvh_node).child_counts[index];
+    let child_count = extractBits(packed_child_count, bit_offset * 8u, 8u);
+    var value = InstancedOffset(instance_id, child_offset);
+
+    // If we pass, try occlusion culling
+    // If this node was occluded, push it's children to the second pass to check against this frame's HZB
+    if should_occlusion_cull_aabb(aabb, instance_id) {
+        @if(MESHLET_FIRST_CULLING_PASS)
+        if child_count == 255u {
+            let id = atomicAdd(&meshlet_second_pass_bvh_count, 1u);
+            meshlet_second_pass_bvh_queue[id] = value;
+            if ((id & 15u) == 0u) {
+                let size = cull_dispatch_size(id + 1u, 16u);
+                atomicMax(&meshlet_second_pass_bvh_dispatch.x, size.x);
+                atomicMax(&meshlet_second_pass_bvh_dispatch.y, size.y);
+            }
+        } else {
+            queue_meshlets(value, child_count, true);
+        }
+        return;
+    }
+
+    // If we pass, push the children to the next BVH cull
+    if child_count == 255u {
+        let id = atomicAdd(&meshlet_bvh_cull_count_write, 1u);
+        let index = select(constants.rightmost_slot - id, id, constants.read_from_front == 0u);
+        meshlet_bvh_cull_queue[index] = value;
+        if ((id & 15u) == 0u) {
+            let size = cull_dispatch_size(id + 1u, 16u);
+            atomicMax(&meshlet_bvh_cull_dispatch.x, size.x);
+            atomicMax(&meshlet_bvh_cull_dispatch.y, size.y);
+        }
+    } else {
+@if(MESHLET_FIRST_CULLING_PASS) {
+        queue_meshlets(value, child_count, false);
+}
+@if(!(MESHLET_FIRST_CULLING_PASS)) {
+        queue_meshlets(value, child_count, true);
+}
+    }
+}
+
+// Apply the same own-error predicate as cull_clusters before reserving slots.
+// 255 denotes an internal node, so a leaf has at most 254 children.
+fn queue_meshlets(value: InstancedOffset, child_count: u32, late: bool) {
+    // At most 254 children: eight eligibility words preserve ascending offsets
+    // without a dynamically indexed kilobyte of private scratch per invocation.
+    var selected: array<u32, 8>;
+    var count = 0u;
+    for (var child = 0u; child < child_count; child++) {
+        let offset = value.offset + child;
+        let data = meshlet_cull_data[offset];
+        var aabb = data.aabb;
+        if lod_error_is_imperceptible(data.lod_group_sphere, get_aabb_error(&aabb), value.instance_id) {
+            selected[child >> 5u] |= 1u << (child & 31u);
+            count += 1u;
+        }
+    }
+    if count == 0u { return; }
+    var base: u32;
+    if late {
+        base = atomicAdd(&meshlet_meshlet_cull_count_late, count);
+        let size = cull_dispatch_size(base + count, 128u);
+        atomicMax(&meshlet_meshlet_cull_dispatch_late.x, size.x);
+        atomicMax(&meshlet_meshlet_cull_dispatch_late.y, size.y);
+    } else {
+        base = atomicAdd(&meshlet_meshlet_cull_count_early, count);
+        let size = cull_dispatch_size(base + count, 128u);
+        atomicMax(&meshlet_meshlet_cull_dispatch_early.x, size.x);
+        atomicMax(&meshlet_meshlet_cull_dispatch_early.y, size.y);
+    }
+    var written = 0u;
+    for (var word = 0u; word < 8u; word++) {
+        var bits = selected[word];
+        while bits != 0u {
+            let child = (word << 5u) + firstTrailingBit(bits);
+            let slot = select(base + written, constants.rightmost_slot - base - written, late);
+            meshlet_meshlet_cull_queue[slot] = InstancedOffset(value.instance_id, value.offset + child);
+            written += 1u;
+            bits &= bits - 1u;
+        }
+    }
+}

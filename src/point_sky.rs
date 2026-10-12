@@ -38,6 +38,7 @@ pub struct PhotometricPoint {
 /// Point positions and observer must use the same physical length unit.
 /// A camera-only sky: no secondary-ray illumination or stellar surface geometry.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(RenderApp)]
 #[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct PointSky {
     pub points: Arc<Vec<PhotometricPoint>>,
@@ -62,7 +63,7 @@ struct Gpu {
 }
 impl Plugin for PointSkyPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "point_sky.wgsl");
+        embedded_asset!(app, "point_sky.wesl");
         app.add_plugins(ExtractComponentPlugin::<PointSky>::default());
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render
@@ -99,7 +100,7 @@ fn initialize(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pipel
         cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some(format!("point_sky_{entry}").into()),
             layout: vec![layout.clone()],
-            shader: load_embedded_asset!(assets.as_ref(), "point_sky.wgsl"),
+            shader: load_embedded_asset!(assets.as_ref(), "point_sky.wesl"),
             entry_point: Some(entry.into()),
             ..Default::default()
         })
@@ -139,7 +140,7 @@ fn compose(
     let (Some(scatter), Some(composite), Some(depth), Some(view_binding)) = (
         cache.get_compute_pipeline(gpu.scatter),
         cache.get_compute_pipeline(gpu.compose),
-        prepass.depth_view(),
+        prepass.depth_only_view(),
         uniforms.uniforms.binding(),
     ) else {
         return;

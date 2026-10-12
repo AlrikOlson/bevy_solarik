@@ -1,4 +1,6 @@
 //! Read back the production sky interpolation, including the longitude seam.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 #[test]
 #[ignore = "Vulkan GPU; run serially with builds/captures"]
 fn physical_float_radiance_survives_sampling() {
@@ -9,7 +11,7 @@ fn physical_float_radiance_survives_sampling() {
         });
         let adapter = instance.request_adapter(&Default::default()).await.unwrap();
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-        let production = include_str!("../src/radiance_sky_sample.wgsl")
+        let production = include_str!("../src/radiance_sky_sample.wesl")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
@@ -35,7 +37,7 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
 "#;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(format!("{production}\n{fixture}").into()),
+            source: preprocess::wgsl(format!("{production}\n{fixture}").into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -153,7 +155,10 @@ fn probe(@builtin(global_invocation_id) id:vec3<u32>) {
             .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         rx.recv().unwrap().unwrap();
-        let bytes = read.slice(..).get_mapped_range();
+        let bytes = read
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         let actual = bytemuck::cast_slice::<u8, [f32; 4]>(&bytes);
         for (i, value) in actual.iter().enumerate().take(32) {
             // Poles have arbitrary longitude; test finite radiance and the correct latitude.

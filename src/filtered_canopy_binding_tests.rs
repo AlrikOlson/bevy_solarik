@@ -4,7 +4,6 @@
     reason = "The explicit GPU regression emits adapter and readback evidence under --nocapture."
 )]
 use super::*;
-use bevy_render::renderer::WgpuWrapper;
 use core::time::Duration;
 
 fn rows(count: u32, frame: u32) -> Vec<[u32; 4]> {
@@ -33,10 +32,7 @@ async fn device() -> (RenderDevice, RenderQueue) {
     let adapter = instance.request_adapter(&Default::default()).await.unwrap();
     println!("CANOPY_BINDING_ADAPTER {:?}", adapter.get_info());
     let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
-    (
-        RenderDevice::from(device),
-        RenderQueue(Arc::new(WgpuWrapper::new(queue))),
-    )
+    (RenderDevice::from(device), RenderQueue::new(queue))
 }
 
 struct Probe {
@@ -116,8 +112,13 @@ impl Probe {
                 timeout: Some(Duration::from_secs(10)),
             })
             .unwrap();
-        let result =
-            bytemuck::from_bytes::<[u32; 4]>(&self.readback.get_mapped_range(..)).to_owned();
+        let result = bytemuck::from_bytes::<[u32; 4]>(
+            &self
+                .readback
+                .get_mapped_range(..)
+                .expect("completed GPU readback range"),
+        )
+        .to_owned();
         self.readback.unmap();
         result
     }

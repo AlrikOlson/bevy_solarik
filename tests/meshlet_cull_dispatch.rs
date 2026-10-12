@@ -3,107 +3,30 @@
     clippy::print_stdout,
     reason = "The GPU diagnostic emits actual dispatch coverage receipts."
 )]
+#[path = "support/preprocess.rs"]
+mod preprocess;
+#[path = "support/shader_graph.rs"]
+mod shader_graph;
 use wgpu::util::DeviceExt;
 
 #[test]
 fn production_cull_and_raster_shaders_compile() {
-    use bevy_asset::Assets;
-    use bevy_shader::{Shader, ShaderCache, ShaderCacheSource, ShaderDefVal};
-    use std::path::{Path, PathBuf};
-    fn sources(root: &Path, result: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(root).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                sources(&path, result);
-            } else if path.extension().is_some_and(|v| v == "wgsl") {
-                result.push(path);
-            }
-        }
-    }
-    const {
-        assert!(cfg!(debug_assertions), "validating Bevy composer required");
-    }
-    let render = bevy_platform::future::block_on(
-        bevy_render::renderer::initialize_headless_renderer(&bevy_render::settings::WgpuSettings {
-            backends: Some(wgpu::Backends::VULKAN),
-            features: wgpu::Features::TEXTURE_INT64_ATOMIC
-                | wgpu::Features::TEXTURE_ATOMIC
-                | wgpu::Features::SHADER_INT64
-                | wgpu::Features::SUBGROUP
-                | wgpu::Features::DEPTH_CLIP_CONTROL
-                | wgpu::Features::IMMEDIATES,
-            ..Default::default()
-        }),
-    );
-    let mut cache = ShaderCache::new(
-        (),
-        render.0.features(),
-        render.3.get_downlevel_capabilities().flags,
-        |_, source, _| match source {
-            ShaderCacheSource::Naga(module) => Ok(module.entry_points.len()),
-            _ => panic!("expected production Naga composer"),
-        },
-    );
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor/bevy_pbr/src/meshlet");
-    let names = [
-        "cull_instances.wgsl",
-        "cull_bvh.wgsl",
-        "cull_clusters.wgsl",
-        "visibility_buffer_software_raster.wgsl",
-        "visibility_buffer_hardware_raster.wgsl",
-    ];
-    let mut files = Vec::new();
-    for path in std::env::var("SOLARIK_SHADER_ROOTS").unwrap().lines() {
-        sources(Path::new(path), &mut files);
-    }
-    files.sort();
-    files.dedup();
-    let mut assets = Assets::<Shader>::default();
-    let mut targets = Vec::new();
-    for path in files {
-        let mut shader = Shader::from_wgsl(
-            std::fs::read_to_string(&path).unwrap(),
-            path.to_string_lossy().into_owned(),
-        );
-        if path.ends_with("mesh_view_types.wgsl") {
-            shader.shader_defs = vec![
-                ShaderDefVal::UInt(
-                    "MAX_DIRECTIONAL_LIGHTS".into(),
-                    bevy_pbr::MAX_DIRECTIONAL_LIGHTS as u32,
-                ),
-                ShaderDefVal::UInt(
-                    "MAX_CASCADES_PER_LIGHT".into(),
-                    bevy_pbr::MAX_CASCADES_PER_LIGHT as u32,
-                ),
-                ShaderDefVal::UInt("MAX_RECT_LIGHTS".into(), bevy_pbr::MAX_RECT_LIGHTS as u32),
-            ];
-        }
-        let handle = assets.add(shader.clone());
-        cache.set_shader(handle.id(), shader);
-        if let Some(index) = names.iter().position(|name| path == root.join(name)) {
-            targets.push((index, handle));
-        }
-    }
-    assert_eq!(targets.len(), names.len());
-    for (index, handle) in targets {
+    use bevy_shader::ShaderDefVal;
+    let mut graph = shader_graph::Graph::load();
+    for (index, name) in [
+        "cull_instances",
+        "cull_bvh",
+        "cull_clusters",
+        "visibility_buffer_software_raster",
+        "visibility_buffer_hardware_raster",
+    ]
+    .iter()
+    .enumerate()
+    {
         for variant in 0..2 {
             let mut defs = vec![
-                ShaderDefVal::UInt(
-                    "CULL_DISPATCH_WIDTH".into(),
-                    render.0.limits().max_compute_workgroups_per_dimension,
-                ),
-                ShaderDefVal::UInt(
-                    "AVAILABLE_STORAGE_BUFFER_BINDINGS".into(),
-                    render.0.limits().max_storage_buffers_per_shader_stage,
-                ),
-                ShaderDefVal::UInt(
-                    "RASTER_SUBPIXEL_BITS".into(),
-                    render
-                        .3
-                        .raster_subpixel_precision_bits()
-                        .unwrap_or(4)
-                        .min(24),
-                ),
+                ShaderDefVal::UInt("CULL_DISPATCH_WIDTH".into(), 65535),
+                ShaderDefVal::UInt("RASTER_SUBPIXEL_BITS".into(), 8),
             ];
             if index < 3 {
                 defs.push(
@@ -129,9 +52,7 @@ fn production_cull_and_raster_shaders_compile() {
                     defs.push("MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT".into());
                 }
             }
-            cache
-                .get(index * 2 + variant, handle.id(), &defs)
-                .unwrap_or_else(|error| panic!("{} variant {variant}: {error:?}", names[index]));
+            graph.validate(&format!("bevy_pbr::meshlet::{name}"), &defs);
         }
     }
 }
@@ -150,18 +71,18 @@ fn cull_grid_visits_every_item_once_across_limit_and_reuse() {
         let boundary = width * 128;
         let maximum = boundary + 257_588;
         // Use the exact production functions, with the same pipeline constant.
-        let production = include_str!("../vendor/bevy_pbr/src/meshlet/cull_dispatch.wgsl");
+        let production = include_str!("../vendor/bevy_pbr/src/meshlet/cull_dispatch.wesl");
         let functions = production.split("fn cull_dispatch_size").nth(1).unwrap();
         let structure = production
             .split("struct CullDispatchArgs")
             .nth(1)
             .unwrap()
-            .split("#ifdef")
+            .split("@if(")
             .next()
             .unwrap();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production cull dispatch boundary"),
-            source: wgpu::ShaderSource::Wgsl(format!(
+            source: preprocess::wgsl(format!(
                 "struct CullDispatchArgs{structure}\nconst CULL_WIDTH:u32={width}u;\nfn cull_dispatch_size{functions}\n{}",
                 include_str!("meshlet_cull_dispatch.wgsl")
             ).into()),
@@ -263,7 +184,10 @@ fn cull_grid_visits_every_item_once_across_limit_and_reuse() {
             });
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             receive.recv().unwrap().unwrap();
-            let mapped = readback.slice(..).get_mapped_range();
+            let mapped = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let values: &[u32] = bytemuck::cast_slice(&mapped);
             let grid = &values[..3];
             assert!(grid[0] <= width && grid[1] <= width);

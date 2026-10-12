@@ -4,7 +4,12 @@ mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn shader_body(source: &str, rr: bool) -> String {
-    preprocess::select(source, if rr { &["DLSS_RR_GUIDE_BUFFERS"] } else { &[] })
+    // Replace fixture I/O before WESL formatting changes the source spelling.
+    let source = source.replace("arrayLength(&light_sources)", "arrayLength(&config)")
+        .replace(
+            "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
+            "return vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0));");
+    preprocess::select(&source, if rr { &["DLSS_RR_GUIDE_BUFFERS"] } else { &[] })
 }
 
 #[test]
@@ -23,29 +28,31 @@ fn glossy_foliage_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let glossy = include_str!("../src/realtime/specular_gi.wgsl");
+        let glossy = include_str!("../src/realtime/specular_gi.wesl");
         let start = glossy
             .find("fn trace_glossy_path(")
             .expect("production path");
         let end = glossy
-            .find("#ifdef DLSS_RR_GUIDE_BUFFERS\n// https://en.wikipedia.org/wiki/Householder_transformation")
+            .find("// https://en.wikipedia.org/wiki/Householder_transformation")
             .expect("PSR helpers");
         let samples = 32768usize;
         for rr in [false, true] {
             let glossy = shader_body(&glossy[start..end], rr);
-            let surface = shader_body(include_str!("../src/realtime/surface_path.wgsl"), rr)
-                .replace("arrayLength(&light_sources)", "arrayLength(&config)");
-            let brdf = format!("{}\n{}\n{}", shader_body(include_str!("../src/lommel_math.wgsl"), rr), shader_body(include_str!("../src/gaussian_math.wgsl"), rr), shader_body(include_str!("../src/scene/brdf.wgsl"), rr)).replace(
-                "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
-                "return vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0));");
-            let glass = shader_body(include_str!("../src/scene/thin_glass.wgsl"), rr);
+            let surface = shader_body(include_str!("../src/realtime/surface_path.wesl"), rr);
+            let brdf = format!(
+                "{}\n{}\n{}",
+                shader_body(include_str!("../src/lommel_math.wesl"), rr),
+                shader_body(include_str!("../src/gaussian_math.wesl"), rr),
+                shader_body(include_str!("../src/scene/brdf.wesl"), rr)
+            );
+            let glass = shader_body(include_str!("../src/scene/thin_glass.wesl"), rr);
             let source = format!(
                 "{glossy}\n{surface}\n{brdf}\n{glass}\n{}",
                 include_str!("glossy_foliage_fixture.wgsl")
             );
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("production reflected foliage"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
+                source: preprocess::wgsl(source.into()),
             });
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
@@ -127,7 +134,10 @@ fn glossy_foliage_gpu() {
                     .poll(wgpu::PollType::wait_indefinitely())
                     .expect("GPU complete");
                 receiver.recv().expect("map callback").expect("map");
-                let data = readback.slice(..).get_mapped_range();
+                let data = readback
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("completed GPU readback range");
                 let values: &[[f32; 4]] = bytemuck::cast_slice(&data);
                 let mut mean = [0.0f64; 3];
                 for sample in values.chunks_exact(2) {

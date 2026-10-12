@@ -3,7 +3,7 @@ use bevy_render::{
     render_resource::{Buffer, BufferInitDescriptor, BufferUsages},
     renderer::RenderDevice,
 };
-pub const SHADER: &str = include_str!("coarse_spatial_scene.wgsl");
+pub const SHADER: &str = include_str!("coarse_spatial_scene.wesl");
 pub const MISSING: u32 = u32::MAX;
 pub struct PackedSpatial {
     pub rows: Vec<[u32; 4]>,

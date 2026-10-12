@@ -1,4 +1,6 @@
 //! Numerical GPU readback of the production Lommel-Seeliger optical model.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 const SAMPLES: usize = 64;
 fn run_probe() -> Vec<[f32; 4]> {
     futures_lite::future::block_on(async {
@@ -17,13 +19,13 @@ fn run_probe() -> Vec<[f32; 4]> {
             })
             .await
             .expect("device");
-        let production = include_str!("../src/thin_volume_math.wgsl")
+        let production = include_str!("../src/thin_volume_math.wesl")
             .lines()
             .filter(|line| !line.starts_with('#') && !line.starts_with("enable "))
             .collect::<Vec<_>>()
             .join("\n");
         let source = format!("{production}\n{}", include_str!("thin_volume_fixture.wgsl"));
-        let composite = include_str!("../src/thin_volume.wgsl")
+        let composite = include_str!("../src/thin_volume.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
@@ -33,7 +35,7 @@ fn run_probe() -> Vec<[f32; 4]> {
         );
         let composite_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production volume compositor syntax and bindings"),
-            source: wgpu::ShaderSource::Wgsl(full.into()),
+            source: preprocess::wgsl(full.into()),
         });
         let _compositor = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -45,7 +47,7 @@ fn run_probe() -> Vec<[f32; 4]> {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production finite Gaussian ray integration"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -92,7 +94,10 @@ fn run_probe() -> Vec<[f32; 4]> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU completed");
         receiver.recv().expect("map callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         bytemuck::cast_slice::<u8, [f32; 4]>(&data).to_vec()
     })
 }

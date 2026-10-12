@@ -3,6 +3,8 @@
     clippy::print_stdout,
     reason = "The explicit GPU diagnostic emits measured TLAS stage timings."
 )]
+#[path = "support/preprocess.rs"]
+mod preprocess;
 #[path = "../src/scene/tlas.rs"]
 #[expect(
     dead_code,
@@ -102,7 +104,7 @@ fn scale_same_blas_build_cost() {
         };
         let shader = raw.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(r#"
+            source: preprocess::wgsl(r#"
 enable wgpu_ray_query;
 @group(0) @binding(0) var scene:acceleration_structure;
 @group(0) @binding(1) var<storage,read_write> output:array<u32>;
@@ -194,7 +196,9 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
                 readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
                 raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
                 {
-                    let bytes = readback.get_mapped_range(..);
+                    let bytes = readback
+                        .get_mapped_range(..)
+                        .expect("completed GPU readback range");
                     let expected = if moved { [0, 2] } else { [1, 2] };
                     assert_eq!(bytemuck::cast_slice::<u8, u32>(&bytes), expected);
                 }

@@ -20,8 +20,8 @@ mod plugin;
 #[path = "filtered_canopy_prepass.rs"]
 mod prepass;
 pub use plugin::CanopyPlugin;
-pub const TRANSPORT_SHADER: &str = include_str!("filtered_canopy_transport.wgsl");
-pub const REGION_SHADER: &str = include_str!("filtered_canopy_region.wgsl");
+pub const TRANSPORT_SHADER: &str = include_str!("filtered_canopy_transport.wesl");
+pub const REGION_SHADER: &str = include_str!("filtered_canopy_region.wesl");
 pub const MAX_CELLS: usize = 16_384;
 /// Fixed slots make producer admission sufficient even after arbitrary retirement.
 pub const REGION_ALLOCATION_BYTES: usize = 4 << 20;

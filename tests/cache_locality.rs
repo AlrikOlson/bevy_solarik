@@ -6,6 +6,8 @@
 )]
 #[path = "../src/scene/history.rs"]
 mod history;
+#[path = "support/preprocess.rs"]
+mod preprocess;
 #[path = "../src/scene/tlas.rs"]
 #[expect(
     dead_code,
@@ -90,7 +92,7 @@ fn cache_support_rejects_moving_distant_blockers_and_preserves_bounded_unaffecte
             &[],
         );
         queue.submit([encoder.finish()]);
-        let sampling = include_str!("../src/scene/sampling.wgsl");
+        let sampling = include_str!("../src/scene/sampling.wesl");
         let support_struct = &sampling[sampling.find("struct ShadowTransmission").unwrap()
             ..sampling.find("fn trace_light_transmission(").unwrap()];
         let source = format!(
@@ -98,13 +100,13 @@ fn cache_support_rejects_moving_distant_blockers_and_preserves_bounded_unaffecte
             include_str!("cache_locality_fixture.wgsl"),
             function(sampling, "trace_shadow_transmission_with_support"),
             function(
-                include_str!("../src/realtime/world_cache_compact.wgsl"),
+                include_str!("../src/realtime/world_cache_compact.wesl"),
                 "cache_support_is_valid"
             )
         );
         let shader = raw.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production bounded cache validity with actual TLAS"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = raw.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -257,7 +259,9 @@ fn cache_support_rejects_moving_distant_blockers_and_preserves_bounded_unaffecte
             readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
             raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             {
-                let bytes = readback.get_mapped_range(..);
+                let bytes = readback
+                    .get_mapped_range(..)
+                    .expect("completed GPU readback range");
                 let result: &[[f32; 4]] = bytemuck::cast_slice(&bytes);
                 for i in 0..2 {
                     assert_eq!(result[i][0], validity[i], "case {case}, cell {i}: reuse");

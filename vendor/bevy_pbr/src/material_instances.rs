@@ -117,7 +117,7 @@ impl DerefMut for MaterialInstanceMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DUMMY_MESH_MATERIAL, RenderMaterialInstances};
+    use crate::{RenderMaterialInstances, StandardMaterial};
     use bevy_ecs::{change_detection::Tick, entity::Entity};
 
     #[test]
@@ -126,7 +126,7 @@ mod tests {
         let a = Entity::from_raw_u32(7).unwrap().into();
         let b = Entity::from_raw_u32(8).unwrap().into();
         let value = || RenderMaterialInstance {
-            asset_id: DUMMY_MESH_MATERIAL.untyped(),
+            asset_id: bevy_asset::AssetId::<StandardMaterial>::default().untyped(),
             last_change_tick: Tick::new(1),
         };
         let start = map.receipt();
@@ -176,7 +176,7 @@ mod tests {
         materials.instances.insert(
             entity,
             RenderMaterialInstance {
-                asset_id: DUMMY_MESH_MATERIAL.untyped(),
+                asset_id: bevy_asset::AssetId::<StandardMaterial>::default().untyped(),
                 last_change_tick: Tick::new(1),
             },
         );

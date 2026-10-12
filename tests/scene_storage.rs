@@ -4,6 +4,8 @@
     clippy::print_stderr,
     reason = "GPU publication tests emit byte counts and measured timing receipts."
 )]
+#[path = "support/preprocess.rs"]
+mod preprocess;
 
 #[path = "scene_storage/material_cost.rs"]
 mod material_cost;
@@ -66,7 +68,9 @@ fn forest_scale_sparse_publication_copies_changed_records_only() {
         queue.submit([encoder.finish()]);
         readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
         raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        let bytes = readback.get_mapped_range(..);
+        let bytes = readback
+            .get_mapped_range(..)
+            .expect("completed GPU readback range");
         let words: &[u32] = bytemuck::cast_slice(&bytes);
         for (sample, &index) in indices.iter().enumerate() {
             let start = sample * 2 * WORDS;
@@ -283,10 +287,9 @@ fn uneven_full_ray_bank_remaps_bound_copies_and_preserve_queued_values() {
     });
 }
 
-use bevy_platform::sync::Arc;
 use bevy_render::{
     render_resource::{ShaderType, StorageBuffer},
-    renderer::{RenderDevice, RenderQueue, WgpuWrapper},
+    renderer::{RenderDevice, RenderQueue},
 };
 
 async fn device() -> (RenderDevice, RenderQueue) {
@@ -306,10 +309,7 @@ async fn device_with_limits(limits: wgpu::Limits) -> (RenderDevice, RenderQueue)
         })
         .await
         .unwrap();
-    (
-        RenderDevice::from(device),
-        RenderQueue(Arc::new(WgpuWrapper::new(queue))),
-    )
+    (RenderDevice::from(device), RenderQueue::new(queue))
 }
 
 fn read<T: ShaderType + bevy_render::render_resource::encase::internal::WriteInto>(
@@ -337,7 +337,7 @@ fn read<T: ShaderType + bevy_render::render_resource::encase::internal::WriteInt
     });
     let shader = raw.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
-        source: wgpu::ShaderSource::Wgsl(
+        source: preprocess::wgsl(
             r#"
 @group(0) @binding(0) var<storage,read> input:array<u32>;
 @group(0) @binding(1) var<storage,read_write> output:array<u32>;
@@ -387,7 +387,9 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>, @builtin(num_workgroups) gr
     queue.submit([encoder.finish()]);
     readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let bytes = readback.get_mapped_range(..);
+    let bytes = readback
+        .get_mapped_range(..)
+        .expect("completed GPU readback range");
     bytemuck::cast_slice(&bytes).to_vec()
 }
 

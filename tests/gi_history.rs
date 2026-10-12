@@ -1,4 +1,6 @@
 //! Production GI history expires old radiance even after repeated spatial reuse.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -31,20 +33,7 @@ fn gi_history_gpu() {
 }
 
 fn preprocess(source: &str, regional: bool) -> String {
-    let mut output = String::new();
-    let mut enabled = true;
-    for line in source.lines() {
-        match line.trim() {
-            "#ifdef REGIONAL_HISTORY" => enabled = regional,
-            "#endif" => enabled = true,
-            _ if enabled => {
-                output.push_str(line);
-                output.push('\n');
-            }
-            _ => {}
-        }
-    }
-    output
+    preprocess::select(source, if regional { &["REGIONAL_HISTORY"] } else { &[] })
 }
 
 fn run(regional: bool) {
@@ -61,9 +50,9 @@ fn run(regional: bool) {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let gi = include_str!("../src/realtime/restir_gi.wgsl");
-        let sampling = include_str!("../src/scene/sampling.wgsl");
-        let mut source = include_str!("gi_history_fixture.wgsl").to_owned();
+        let gi = include_str!("../src/realtime/restir_gi.wesl");
+        let sampling = include_str!("../src/scene/sampling.wesl");
+        let mut source = include_str!("gi_history_fixture.wesl").to_owned();
         for name in [
             "empty_reservoir",
             "merge_reservoirs",
@@ -85,7 +74,7 @@ fn run(regional: bool) {
         }
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production GI connection reuse"),
-            source: wgpu::ShaderSource::Wgsl(preprocess(&source, regional).into()),
+            source: preprocess::wgsl(preprocess(&source, regional).into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -151,7 +140,10 @@ fn run(regional: bool) {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             for (channel, expected) in tint[..3].iter().enumerate() {
                 for sample in &samples[..1] {

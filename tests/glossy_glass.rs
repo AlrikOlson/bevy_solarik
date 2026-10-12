@@ -20,12 +20,12 @@ fn glossy_glass_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let source = include_str!("../src/realtime/specular_gi.wgsl");
+        let source = include_str!("../src/realtime/specular_gi.wesl");
         let start = source
             .find("fn trace_glossy_path(")
             .expect("production path");
         let end = source
-            .find("#ifdef DLSS_RR_GUIDE_BUFFERS\n// https://en.wikipedia.org/wiki/Householder_transformation")
+            .find("// https://en.wikipedia.org/wiki/Householder_transformation")
             .expect("PSR helpers");
         for rr_guides in [false, true] {
             // Only RR guide writes vary here; material footprints have their
@@ -38,7 +38,7 @@ fn glossy_glass_gpu() {
                     &[]
                 },
             );
-            let glass = include_str!("../src/scene/thin_glass.wgsl")
+            let glass = include_str!("../src/scene/thin_glass.wesl")
                 .lines()
                 .filter(|line| !line.starts_with('#'))
                 .collect::<Vec<_>>()
@@ -49,7 +49,7 @@ fn glossy_glass_gpu() {
             );
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("production glossy transport"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
+                source: preprocess::wgsl(source.into()),
             });
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
@@ -230,7 +230,10 @@ fn glossy_glass_gpu() {
                     .poll(wgpu::PollType::wait_indefinitely())
                     .expect("GPU complete");
                 receiver.recv().expect("map callback").expect("map");
-                let data = readback.slice(..).get_mapped_range();
+                let data = readback
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("completed GPU readback range");
                 let result: &[f32] = bytemuck::cast_slice(&data);
                 for (actual, expected) in result[..3].iter().zip(expected) {
                     assert!(

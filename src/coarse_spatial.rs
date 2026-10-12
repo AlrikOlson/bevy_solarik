@@ -1,7 +1,7 @@
 //! Spatial source observations for an inactive coarse visibility experiment.
 use crate::coarse_cache::{self, SourceCache};
-pub const PACK_SHADER: &str = include_str!("coarse_spatial_pack.wgsl");
-pub const SHADER: &str = include_str!("coarse_spatial.wgsl");
+pub const PACK_SHADER: &str = include_str!("coarse_spatial_pack.wesl");
+pub const SHADER: &str = include_str!("coarse_spatial.wesl");
 pub const WORDS_PER_CELL: usize = 6 * 64;
 pub const MAX_BYTES: usize = 128 << 20;
 const HEADER: usize = 120;

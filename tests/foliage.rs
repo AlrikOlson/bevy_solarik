@@ -1,4 +1,6 @@
 //! Numerical contracts executed against the production foliage diffuse BSDF WGSL.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 #[test]
@@ -18,7 +20,7 @@ fn foliage_gpu() {
             .await
             .expect("device");
 
-        let production = include_str!("../src/scene/brdf.wgsl")
+        let production = include_str!("../src/scene/brdf.wesl")
             .lines()
             .filter(|line| !line.starts_with('#') && !line.starts_with("enable "))
             .collect::<Vec<_>>()
@@ -29,17 +31,17 @@ fn foliage_gpu() {
             "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
             "return vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0));"
         );
-        let math = include_str!("../src/realtime/foliage_math.wgsl")
+        let math = include_str!("../src/realtime/foliage_math.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        let gaussian = include_str!("../src/gaussian_math.wgsl")
+        let gaussian = include_str!("../src/gaussian_math.wesl")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
-        let lommel = include_str!("../src/lommel_math.wgsl")
+        let lommel = include_str!("../src/lommel_math.wesl")
             .lines()
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
@@ -51,7 +53,7 @@ fn foliage_gpu() {
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production foliage BRDF"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -112,7 +114,10 @@ fn foliage_gpu() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU completed");
             receiver.recv().expect("map callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
 
             let mut back = 0;

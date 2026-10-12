@@ -13,6 +13,7 @@ const MIN_CLOUD_SHELL: f32 = 500.0;
 /// The application updates the observer after motion and removes this resource
 /// to restore the original local-ground atmosphere. One observer is supported.
 #[derive(Resource, ExtractResource, Debug, Clone, PartialEq)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct PlanetaryAtmosphere {
     pub radius: f32,
     pub height: f32,

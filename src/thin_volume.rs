@@ -79,6 +79,7 @@ impl GaussianKernel {
     }
 }
 #[derive(Component, Clone, Default, ExtractComponent)]
+#[extract_app(RenderApp)]
 #[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct ThinVolumes(pub Vec<GaussianKernel>);
 pub struct ThinVolumePlugin;
@@ -89,8 +90,8 @@ struct Gpu {
 }
 impl Plugin for ThinVolumePlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "thin_volume.wgsl");
-        load_shader_library!(app, "thin_volume_math.wgsl");
+        embedded_asset!(app, "thin_volume.wesl");
+        load_shader_library!(app, "thin_volume_math.wesl");
         app.add_plugins(ExtractComponentPlugin::<ThinVolumes>::default());
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.add_systems(RenderStartup, initialize).add_systems(
@@ -121,7 +122,7 @@ fn initialize(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pipel
     let pipeline = cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("thin_volume".into()),
         layout: vec![layout.clone()],
-        shader: load_embedded_asset!(assets.as_ref(), "thin_volume.wgsl"),
+        shader: load_embedded_asset!(assets.as_ref(), "thin_volume.wesl"),
         ..Default::default()
     });
     commands.insert_resource(Gpu { layout, pipeline });
@@ -149,7 +150,7 @@ fn compose(
     };
     let (Some(pipeline), Some(depth), Some(view_binding)) = (
         cache.get_compute_pipeline(gpu.pipeline),
-        prepass.depth_view(),
+        prepass.depth_only_view(),
         uniforms.uniforms.binding(),
     ) else {
         return;

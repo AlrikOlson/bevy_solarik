@@ -97,7 +97,7 @@ fn sparse_coarse_intervals_match_independent_f64_cell_intersections() {
         }
         let report = format!(
             "{{\"adapter\":{:?},\"sources\":[{}],\"analytic_controls\":{controls},\"analytic_error\":{analytic_error},\"overflow_detected\":true}}\n",
-            format!("{:?}", **resources.2),
+            format!("{:?}", *resources.2),
             reports.join(",")
         );
         let mut file = std::fs::OpenOptions::new()

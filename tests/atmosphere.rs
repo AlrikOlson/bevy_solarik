@@ -1,5 +1,7 @@
 //! Atmosphere contracts and numerical comparisons, independent of presentation exposure.
 //! GPU tests are ignored by the ordinary gate and run explicitly without parallel captures.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_math::{DVec3, Vec3};
 use wgpu::util::DeviceExt;
 
@@ -67,14 +69,14 @@ fn atmosphere_production_math_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let production = include_str!("../src/atmosphere/model.wgsl")
+        let production = include_str!("../src/atmosphere/model.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production atmosphere mathematics"),
-            source: wgpu::ShaderSource::Wgsl(
+            source: preprocess::wgsl(
                 format!(
                     r#"{production}
 @group(0) @binding(0) var<uniform> parameters: AtmosphereParams;
@@ -196,7 +198,10 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {{
                     .poll(wgpu::PollType::wait_indefinitely())
                     .expect("GPU done");
                 recv.recv().expect("callback received").expect("mapped");
-                let bytes = readback.slice(..).get_mapped_range();
+                let bytes = readback
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("completed GPU readback range");
                 let results: &[[f32; 4]] = bytemuck::cast_slice(&bytes);
                 for (i, direction) in directions.iter().enumerate() {
                     let actual = DVec3::new(

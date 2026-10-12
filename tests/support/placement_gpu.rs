@@ -1,4 +1,6 @@
 use super::Probe;
+#[path = "preprocess.rs"]
+mod preprocess;
 use bevy_solarik::scene::placement::{GpuPlacementPage, SHADER};
 use wgpu::util::DeviceExt;
 
@@ -34,7 +36,7 @@ pub fn run(
     );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("packed placement contract"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: preprocess::wgsl(source.into()),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some(entry),
@@ -101,7 +103,12 @@ fn dispatch(
     queue.submit([encoder.finish()]);
     readback.map_async(wgpu::MapMode::Read, .., |result| result.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    bytemuck::cast_slice::<u8, Probe>(&readback.get_mapped_range(..)).to_vec()
+    bytemuck::cast_slice::<u8, Probe>(
+        &readback
+            .get_mapped_range(..)
+            .expect("completed GPU readback range"),
+    )
+    .to_vec()
 }
 
 fn buffer(device: &wgpu::Device, count: usize, usage: wgpu::BufferUsages) -> wgpu::Buffer {

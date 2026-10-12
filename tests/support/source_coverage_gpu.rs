@@ -1,9 +1,11 @@
 use super::{Probe, acceleration::Scene};
+#[path = "preprocess.rs"]
+mod preprocess;
 
 pub fn pipeline(device: &wgpu::Device, source: &str) -> wgpu::ComputePipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("source reference all intersections"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: preprocess::wgsl(source.into()),
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -77,7 +79,12 @@ pub fn trace(
     queue.submit([encoder.finish()]);
     readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    bytemuck::cast_slice::<u8, Probe>(&readback.get_mapped_range(..)).to_vec()
+    bytemuck::cast_slice::<u8, Probe>(
+        &readback
+            .get_mapped_range(..)
+            .expect("completed GPU readback range"),
+    )
+    .to_vec()
 }
 
 fn buffer(device: &wgpu::Device, count: usize, usage: wgpu::BufferUsages) -> wgpu::Buffer {

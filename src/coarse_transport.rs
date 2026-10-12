@@ -2,7 +2,7 @@
 //! Passive transport is not a claim of source correlation or scattering fidelity.
 use crate::coarse_cache::{DIRECTIONS, SourceCache, directions};
 use bevy_math::DVec3;
-pub const SHADER: &str = include_str!("coarse_transport.wgsl");
+pub const SHADER: &str = include_str!("coarse_transport.wesl");
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct Kernel {

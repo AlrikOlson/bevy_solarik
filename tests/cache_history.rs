@@ -1,4 +1,6 @@
 //! Production cache blending bounds expected decay in frames under update throttling.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -38,7 +40,7 @@ fn cache_history_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let gi = include_str!("../src/realtime/world_cache_update.wgsl");
+        let gi = include_str!("../src/realtime/world_cache_update.wesl");
 
         let mut source = r#"
 @group(0) @binding(0) var<storage,read> config:array<vec4<f32>>;
@@ -88,20 +90,20 @@ fn probe() {
         .to_owned();
         source.push_str(&function(gi, "cache_blend_amount"));
         source.push_str(&function(
-            include_str!("../src/realtime/world_cache_compact.wgsl"),
+            include_str!("../src/realtime/world_cache_compact.wesl"),
             "decay_world_cache_cell",
         ));
         source.push_str(&function(
-            include_str!("../src/realtime/world_cache_compact.wgsl"),
+            include_str!("../src/realtime/world_cache_compact.wesl"),
             "cache_support_is_valid",
         ));
         source.push_str(&function(
-            include_str!("../src/scene/raytracing_scene_bindings.wgsl"),
+            include_str!("../src/scene/raytracing_scene_bindings.wesl"),
             "scene_support_is_valid",
         ));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production cache temporal response"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -161,7 +163,10 @@ fn probe() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             assert!(samples[0][0] > 0.0 && samples[0][0] <= 1.0);
             assert!(

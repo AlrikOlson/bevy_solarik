@@ -14,7 +14,7 @@ use bevy_render::{
         TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect,
     },
     renderer::{RenderDevice, RenderQueue},
-    view::ViewDepthTexture,
+    view::ViewDepthStencilTexture,
 };
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -27,6 +27,7 @@ pub struct DepthRow {
     pub values: Vec<f32>,
 }
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct DepthProbe {
     /// Caller changes this on a camera transition to reject stale data.
     pub ticket: u64,
@@ -46,7 +47,7 @@ impl Plugin for DepthProbePlugin {
     }
 }
 fn read_row(
-    views: Query<&ViewDepthTexture>,
+    views: Query<&ViewDepthStencilTexture>,
     probe: Res<DepthProbe>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
@@ -57,7 +58,7 @@ fn read_row(
     if probe.pending.swap(true, Ordering::AcqRel) {
         return;
     }
-    let (width, height) = (depth.texture.width(), depth.texture.height());
+    let (width, height) = (depth.texture().width(), depth.texture().height());
     let bytes = (width * 4).div_ceil(256) * 256;
     let buffer = Arc::new(device.create_buffer(&BufferDescriptor {
         label: Some("native depth centre row"),
@@ -68,7 +69,7 @@ fn read_row(
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
         TexelCopyTextureInfo {
-            texture: &depth.texture,
+            texture: depth.texture(),
             mip_level: 0,
             origin: Origin3d::ZERO,
             aspect: TextureAspect::DepthOnly,
@@ -94,17 +95,19 @@ fn read_row(
     let mapped = buffer.clone();
     buffer.slice(..).map_async(MapMode::Read, move |result| {
         if result.is_ok() {
-            let data = mapped.slice(..).get_mapped_range();
-            let start = (height / 2 * bytes) as usize;
-            let values =
-                bytemuck::cast_slice::<u8, f32>(&data[start..start + width as usize * 4]).to_vec();
-            *destination.lock().expect("depth snapshot") = Some(DepthRow {
-                ticket,
-                width,
-                height,
-                values,
-            });
-            drop(data);
+            if let Ok(data) = mapped.slice(..).get_mapped_range() {
+                let start = (height / 2 * bytes) as usize;
+                let values =
+                    bytemuck::cast_slice::<u8, f32>(&data[start..start + width as usize * 4])
+                        .to_vec();
+                *destination.lock().expect("depth snapshot") = Some(DepthRow {
+                    ticket,
+                    width,
+                    height,
+                    values,
+                });
+                drop(data);
+            }
             mapped.unmap();
         }
         pending.store(false, Ordering::Release);

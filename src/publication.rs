@@ -113,9 +113,7 @@ impl PreparedProduct {
         {
             return Err(PublicationError::UnsupportedRasterState);
         }
-        let bounds = mesh
-            .compute_aabb()
-            .ok_or(PublicationError::InvalidGeometry)?;
+        let bounds = mesh.get_aabb().ok_or(PublicationError::InvalidGeometry)?;
         if !bounds.center.is_finite() || !bounds.half_extents.is_finite() {
             return Err(PublicationError::InvalidGeometry);
         }
@@ -276,7 +274,7 @@ impl Previous {
                         world
                             .get_resource::<Assets<Mesh>>()?
                             .get(&raster.0)?
-                            .compute_aabb()
+                            .get_aabb()
                     })
                     .ok_or(PublicationError::InvalidGeometry)?;
                 Some(Product {

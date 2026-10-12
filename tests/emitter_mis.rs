@@ -1,4 +1,6 @@
 //! Production emitter MIS PDFs integrated over a square area light.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -38,7 +40,7 @@ fn emitter_mis_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let sampling = include_str!("../src/scene/sampling.wgsl");
+        let sampling = include_str!("../src/scene/sampling.wesl");
         let types_start = sampling
             .find("struct ResolvedLightSample {")
             .expect("types");
@@ -57,7 +59,7 @@ fn emitter_mis_gpu() {
             source.push_str(&function(sampling, name));
         }
         source.push_str(
-            &include_str!("../src/scene/collimated.wgsl")
+            &include_str!("../src/scene/collimated.wesl")
                 .lines()
                 .filter(|line| !line.starts_with('#'))
                 .collect::<Vec<_>>()
@@ -66,7 +68,7 @@ fn emitter_mis_gpu() {
         source.push_str(include_str!("emitter_mis_fixture.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production emitter MIS"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -134,7 +136,10 @@ fn emitter_mis_gpu() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             let mut radiance = 0.0f64;
             for (i, sample) in samples.iter().enumerate() {

@@ -1,4 +1,6 @@
 //! Production DI reservoir reuse and cache RIS with controlled light transport.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -38,9 +40,9 @@ fn restir_shadow_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let di = include_str!("../src/realtime/restir_di.wgsl");
-        let sampling = include_str!("../src/scene/sampling.wgsl");
-        let cache = include_str!("../src/realtime/world_cache_update.wgsl");
+        let di = include_str!("../src/realtime/restir_di.wesl");
+        let sampling = include_str!("../src/scene/sampling.wesl");
+        let cache = include_str!("../src/realtime/world_cache_update.wesl");
         let mut source = include_str!("restir_shadow_fixture.wgsl").to_owned();
         for name in [
             "generate_initial_reservoir",
@@ -56,7 +58,7 @@ fn restir_shadow_gpu() {
         source.push_str(&function(cache, "sample_random_light_ris"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production DI shadow reuse"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -122,7 +124,10 @@ fn restir_shadow_gpu() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             for (channel, expected) in tint[..3].iter().enumerate() {
                 for sample in &samples[..2] {

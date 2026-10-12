@@ -20,6 +20,8 @@ struct Material { base_color: vec3<f32>, diffuse_transmission: f32 }
 struct Hit { world_position: vec3<f32>, geometric_world_normal: vec3<f32>, material: Material }
 var<private> view = View(vec3(0.0, 0.0, 3.0));
 var<private> constants = Constants(0u);
+var<private> forest_query_seed: vec2u;
+var<private> forest_query_index: u32;
 var<private> world_cache_active_cells_count = 1u;
 var<private> world_cache_a: array<u32, 1>;
 fn selected_world_cache_cell_count() -> u32 {

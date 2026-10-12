@@ -1,4 +1,6 @@
 //! Numerical GPU readback of the production Gaussian optical model.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 const SAMPLES: usize = 4096 * 3;
 fn run_probe() -> Vec<[f32; 4]> {
     futures_lite::future::block_on(async {
@@ -14,7 +16,7 @@ fn run_probe() -> Vec<[f32; 4]> {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let production = include_str!("../src/gaussian_math.wgsl")
+        let production = include_str!("../src/gaussian_math.wesl")
             .lines()
             .filter(|line| !line.starts_with('#') && !line.starts_with("enable "))
             .collect::<Vec<_>>()
@@ -22,7 +24,7 @@ fn run_probe() -> Vec<[f32; 4]> {
         let source = format!("{production}\n{}", include_str!("gaussian_fixture.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production BRDF, view-facing normals"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -69,7 +71,10 @@ fn run_probe() -> Vec<[f32; 4]> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU completed");
         receiver.recv().expect("map callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         bytemuck::cast_slice::<u8, [f32; 4]>(&data).to_vec()
     })
 }

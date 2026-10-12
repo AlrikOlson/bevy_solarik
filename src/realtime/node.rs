@@ -189,10 +189,10 @@ pub fn prepare_primary_glass(
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
         let (_, extracted, _, _, textures, _, _, _) = view;
         if textures.deferred_view().is_none()
-            || textures.depth_view().is_none()
+            || textures.depth_only_view().is_none()
             || textures.motion_vectors_view().is_none()
             || textures.previous_deferred_view().is_none()
-            || textures.previous_depth_view().is_none()
+            || textures.previous_depth_only_view().is_none()
         {
             continue;
         }
@@ -328,10 +328,10 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         pipeline_cache.get_compute_pipeline(specular_gi_pipeline),
         &scene_bindings.bind_group,
         view_prepass_textures.deferred_view(),
-        view_prepass_textures.depth_view(),
+        view_prepass_textures.depth_only_view(),
         view_prepass_textures.motion_vectors_view(),
         view_prepass_textures.previous_deferred_view(),
-        view_prepass_textures.previous_depth_view(),
+        view_prepass_textures.previous_depth_only_view(),
         view_uniforms.uniforms.binding(),
         previous_view_uniforms.uniforms.binding(),
     )
@@ -418,6 +418,7 @@ pub fn solarik_lighting<const PRIMARY: bool>(
                 &d.diffuse_albedo.default_view,
                 &d.specular_albedo.default_view,
                 &d.normal_roughness.default_view,
+                &d.depth.default_view,
                 &d.specular_motion_vectors.default_view,
             )),
         )
@@ -799,6 +800,7 @@ pub fn init_solari_lighting_pipelines(
                 texture_storage_2d(TextureFormat::Rgba8Unorm, StorageTextureAccess::WriteOnly),
                 texture_storage_2d(TextureFormat::Rgba8Unorm, StorageTextureAccess::WriteOnly),
                 texture_storage_2d(TextureFormat::Rgba16Float, StorageTextureAccess::WriteOnly),
+                texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
                 texture_storage_2d(TextureFormat::Rg16Float, StorageTextureAccess::WriteOnly),
             ),
         ),
@@ -899,84 +901,84 @@ pub fn init_solari_lighting_pipelines(
         build_sky_rows_pipeline: create_pipeline(
             "solarik_lighting_build_sky_rows_pipeline",
             "build_sky_rows",
-            load_embedded_asset!(asset_server.as_ref(), "sky_sampling.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "sky_sampling.wesl"),
             None,
             vec![],
         ),
         build_sky_marginal_pipeline: create_pipeline(
             "solarik_lighting_build_sky_marginal_pipeline",
             "build_sky_marginal",
-            load_embedded_asset!(asset_server.as_ref(), "sky_sampling.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "sky_sampling.wesl"),
             None,
             vec![],
         ),
         decay_world_cache_pipeline: create_pipeline(
             "solarik_lighting_decay_world_cache_pipeline",
             "decay_world_cache",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_NON_ATOMIC_LIFE_BUFFER".into()],
         ),
         compact_world_cache_single_block_pipeline: create_pipeline(
             "solarik_lighting_compact_world_cache_single_block_pipeline",
             "compact_world_cache_single_block",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_NON_ATOMIC_LIFE_BUFFER".into()],
         ),
         compact_world_cache_blocks_pipeline: create_pipeline(
             "solarik_lighting_compact_world_cache_blocks_pipeline",
             "compact_world_cache_blocks",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec![],
         ),
         compact_world_cache_write_active_cells_pipeline: create_pipeline(
             "solarik_lighting_compact_world_cache_write_active_cells_pipeline",
             "compact_world_cache_write_active_cells",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_compact.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_NON_ATOMIC_LIFE_BUFFER".into()],
         ),
         clear_world_cache_priority_pipeline: create_pipeline(
             "solarik_lighting_clear_world_cache_priority_pipeline",
             "clear_world_cache_priority",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         histogram_world_cache_priority_pipeline: create_pipeline(
             "solarik_lighting_histogram_world_cache_priority_pipeline",
             "histogram_world_cache_priority",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         budget_world_cache_priority_pipeline: create_pipeline(
             "solarik_lighting_budget_world_cache_priority_pipeline",
             "budget_world_cache_priority",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         select_world_cache_priority_pipeline: create_pipeline(
             "solarik_lighting_select_world_cache_priority_pipeline",
             "select_world_cache_priority",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_priority.wesl"),
             Some(&bind_group_layout_world_cache_active_cells_dispatch),
             vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         sample_di_for_world_cache_pipeline: create_pipeline(
             "solarik_lighting_sample_di_for_world_cache_pipeline",
             "sample_di",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wesl"),
             None,
             vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         sample_gi_for_world_cache_pipeline: create_pipeline(
             "solarik_lighting_sample_gi_for_world_cache_pipeline",
             "sample_gi",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wesl"),
             None,
             vec![
                 "WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into(),
@@ -987,35 +989,35 @@ pub fn init_solari_lighting_pipelines(
         blend_new_world_cache_samples_pipeline: create_pipeline(
             "solarik_lighting_blend_new_world_cache_samples_pipeline",
             "blend_new_samples",
-            load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "world_cache_update.wesl"),
             None,
             vec!["WORLD_CACHE_PRIORITY_ATOMIC_BUFFER".into()],
         ),
         presample_light_tiles_pipeline: create_pipeline(
             "solarik_lighting_presample_light_tiles_pipeline",
             "presample_light_tiles",
-            load_embedded_asset!(asset_server.as_ref(), "presample_light_tiles.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "presample_light_tiles.wesl"),
             None,
             vec![],
         ),
         di_initial_and_temporal_pipeline: create_pipeline(
             "solarik_lighting_di_initial_and_temporal_pipeline",
             "initial_and_temporal",
-            load_embedded_asset!(asset_server.as_ref(), "restir_di.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "restir_di.wesl"),
             None,
             vec![],
         ),
         di_spatial_and_shade_pipeline: create_pipeline(
             "solarik_lighting_di_spatial_and_shade_pipeline",
             "spatial_and_shade",
-            load_embedded_asset!(asset_server.as_ref(), "restir_di.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "restir_di.wesl"),
             None,
             vec![],
         ),
         gi_initial_and_temporal_pipeline: create_pipeline(
             "solarik_lighting_gi_initial_and_temporal_pipeline",
             "initial_and_temporal",
-            load_embedded_asset!(asset_server.as_ref(), "restir_gi.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "restir_gi.wesl"),
             None,
             vec![
                 "WORLD_CACHE_FIRST_BOUNCE_LIGHT_LEAK_PREVENTION".into(),
@@ -1025,14 +1027,14 @@ pub fn init_solari_lighting_pipelines(
         gi_spatial_and_shade_pipeline: create_pipeline(
             "solarik_lighting_gi_spatial_and_shade_pipeline",
             "spatial_and_shade",
-            load_embedded_asset!(asset_server.as_ref(), "restir_gi.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "restir_gi.wesl"),
             None,
             vec![],
         ),
         primary_foliage_pipeline: create_pipeline(
             "solarik_primary_foliage",
             "primary_foliage",
-            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wesl"),
             None,
             vec!["FOLIAGE_TRANSMISSION".into()],
         ),
@@ -1040,7 +1042,7 @@ pub fn init_solari_lighting_pipelines(
         primary_foliage_rr_pipeline: create_pipeline(
             "solarik_primary_foliage_rr",
             "primary_foliage",
-            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wesl"),
             Some(&bind_group_layout_resolve_dlss_rr_textures),
             vec![
                 "FOLIAGE_TRANSMISSION".into(),
@@ -1050,7 +1052,7 @@ pub fn init_solari_lighting_pipelines(
         primary_glass_pipeline: create_pipeline(
             "solarik_primary_glass",
             "primary_glass",
-            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wesl"),
             None,
             vec!["FOLIAGE_TRANSMISSION".into()],
         ),
@@ -1058,7 +1060,7 @@ pub fn init_solari_lighting_pipelines(
         primary_glass_rr_pipeline: create_pipeline(
             "solarik_primary_glass_rr",
             "primary_glass",
-            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wesl"),
             Some(&bind_group_layout_resolve_dlss_rr_textures),
             vec![
                 "FOLIAGE_TRANSMISSION".into(),
@@ -1068,7 +1070,7 @@ pub fn init_solari_lighting_pipelines(
         specular_gi_pipeline: create_pipeline(
             "solarik_lighting_specular_gi_pipeline",
             "specular_gi",
-            load_embedded_asset!(asset_server.as_ref(), "specular_gi.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "specular_gi.wesl"),
             None,
             vec!["FOLIAGE_TRANSMISSION".into()],
         ),
@@ -1076,7 +1078,7 @@ pub fn init_solari_lighting_pipelines(
         specular_gi_with_psr_pipeline: create_pipeline(
             "solarik_lighting_specular_gi_with_psr_pipeline",
             "specular_gi",
-            load_embedded_asset!(asset_server.as_ref(), "specular_gi.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "specular_gi.wesl"),
             Some(&bind_group_layout_resolve_dlss_rr_textures),
             vec![
                 "FOLIAGE_TRANSMISSION".into(),
@@ -1087,7 +1089,7 @@ pub fn init_solari_lighting_pipelines(
         resolve_dlss_rr_textures_pipeline: create_pipeline(
             "solarik_lighting_resolve_dlss_rr_textures_pipeline",
             "resolve_dlss_rr_textures",
-            load_embedded_asset!(asset_server.as_ref(), "resolve_dlss_rr_textures.wgsl"),
+            load_embedded_asset!(asset_server.as_ref(), "resolve_dlss_rr_textures.wesl"),
             Some(&bind_group_layout_resolve_dlss_rr_textures),
             vec!["DLSS_RR_GUIDE_BUFFERS".into()],
         ),

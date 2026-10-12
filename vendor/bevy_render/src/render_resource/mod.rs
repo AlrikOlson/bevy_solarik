@@ -49,18 +49,20 @@ pub use wgpu::{
     CreateBlasDescriptor, CreateTlasDescriptor, DepthBiasState, DepthStencilState, DownlevelFlags,
     Extent3d, Face, Features as WgpuFeatures, FilterMode, FragmentState as RawFragmentState,
     FrontFace, ImageSubresourceRange, IndexFormat, Limits as WgpuLimits, LoadOp, MapMode,
+    MeshPipelineDescriptor as RawMeshPipelineDescriptor, MeshState as RawMeshState,
     MipmapFilterMode, MultisampleState, Operations, Origin3d, PipelineCompilationOptions,
     PipelineLayout, PipelineLayoutDescriptor, PollType, PolygonMode, PrimitiveState,
     PrimitiveTopology, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
     RenderPassDescriptor, RenderPipelineDescriptor as RawRenderPipelineDescriptor,
     Sampler as WgpuSampler, SamplerBindingType, SamplerDescriptor, ShaderModule,
     ShaderModuleDescriptor, ShaderSource, ShaderStages, StencilFaceState, StencilOperation,
-    StencilState, StorageTextureAccess, StoreOp, TexelCopyBufferInfo, TexelCopyBufferLayout,
-    TexelCopyTextureInfo, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureFormatFeatureFlags, TextureFormatFeatures, TextureSampleType, TextureUsages,
-    TextureView as WgpuTextureView, TextureViewDescriptor, TextureViewDimension, Tlas,
-    TlasInstance, VertexAttribute, VertexBufferLayout as RawVertexBufferLayout, VertexFormat,
-    VertexState as RawVertexState, VertexStepMode,
+    StencilState, StorageTextureAccess, StoreOp, TaskState as RawTaskState, TexelCopyBufferInfo,
+    TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect, TextureChannel, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureFormatFeatureFlags, TextureFormatFeatures,
+    TextureSampleType, TextureUsages, TextureView as WgpuTextureView, TextureViewDescriptor,
+    TextureViewDimension, Tlas, TlasInstance, VertexAttribute,
+    VertexBufferLayout as RawVertexBufferLayout, VertexFormat, VertexState as RawVertexState,
+    VertexStepMode,
     util::{
         BufferInitDescriptor, DispatchIndirectArgs, DrawIndexedIndirectArgs, DrawIndirectArgs,
         TextureDataOrder,
@@ -73,8 +75,6 @@ pub mod encase {
 }
 
 pub use self::encase::{ShaderSize, ShaderType};
-
-pub use naga::ShaderStage;
 
 pub use bevy_material::{
     bind_group_layout_entries::{

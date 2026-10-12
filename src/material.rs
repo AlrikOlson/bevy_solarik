@@ -68,6 +68,7 @@ struct Owned {
 pub struct MaterialRegistration(Arc<Owned>);
 
 #[derive(Resource, Default, Clone, ExtractResource)]
+#[extract_app(RenderApp)]
 pub(crate) struct Registrations(HashMap<AssetId<StandardMaterial>, Weak<Owned>>);
 impl Registrations {
     pub(crate) fn gpu_ready(

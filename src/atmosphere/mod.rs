@@ -60,6 +60,7 @@ pub enum AtmosphereQuality {
 /// Heights and aerial distances are metres above the local planet surface.
 /// Sources are top-of-atmosphere illuminances, before atmospheric attenuation.
 #[derive(Resource, ExtractResource, Debug, Clone, PartialEq)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct AtmosphereState {
     pub physical: Option<PhysicalAtmosphere>,
     pub medium: AtmosphereMedium,

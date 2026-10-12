@@ -81,6 +81,7 @@ fn validate_row(data: &[[u32; 4]], row: [u32; 4], next: usize) -> Result<usize, 
 /// One immutable source set for all canopy regions in this scene.
 /// Changing it invalidates region readiness until matching regions prepare.
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct CanopySources(pub Option<Arc<SourceProfile>>);
 
 #[cfg(test)]

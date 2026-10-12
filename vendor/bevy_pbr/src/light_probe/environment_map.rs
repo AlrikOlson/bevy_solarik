@@ -32,8 +32,7 @@
 //!
 //! Currently, reflection probes (i.e. environment maps attached to light
 //! probes) use binding arrays (also known as bindless textures) and
-//! consequently aren't supported on WebGL2 or WebGPU. Reflection probes are
-//! also unsupported if GLSL is in use, due to `naga` limitations. Environment
+//! consequently aren't supported on WebGL2 or WebGPU. Environment
 //! maps attached to views are, however, supported on all platforms.
 //!
 //! [split-sum approximation]: https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf
@@ -49,11 +48,12 @@ use bevy_ecs::{
     query::{QueryData, QueryItem},
     system::lifetimeless::Read,
 };
+use bevy_extract::extract_instances::ExtractInstance;
 use bevy_image::Image;
 use bevy_light::{EnvironmentMapLight, ParallaxCorrection};
 use bevy_math::{Affine3A, Quat, Vec3};
 use bevy_render::{
-    extract_instances::ExtractInstance,
+    RenderApp,
     render_asset::RenderAssets,
     render_resource::{
         BindGroupLayoutEntryBuilder, Sampler, SamplerBindingType, TextureSampleType, TextureView,
@@ -139,7 +139,7 @@ pub struct EnvironmentMapViewLightProbeInfo {
     pub(crate) rotation: Quat,
 }
 
-impl ExtractInstance for EnvironmentMapIds {
+impl ExtractInstance<RenderApp> for EnvironmentMapIds {
     type QueryData = Read<EnvironmentMapLight>;
 
     type QueryFilter = ();

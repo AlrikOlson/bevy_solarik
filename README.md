@@ -1,6 +1,6 @@
 # bevy_solarik
 
-Ray-traced lighting for Bevy 0.19.1. This is a fork of Bevy's experimental `bevy_solari` renderer with sky lighting, point and spot lights, alpha-tested foliage, and a reference pathtracer that accumulates properly.
+Ray-traced lighting for Bevy 0.20.0. This is a fork of Bevy's experimental `bevy_solari` renderer with sky lighting, point and spot lights, alpha-tested foliage, and a reference pathtracer that accumulates properly.
 
 It keeps Solari's ReSTIR direct and indirect lighting and world-space radiance cache. DLSS Ray Reconstruction is available through the optional `dlss` feature.
 
@@ -91,7 +91,7 @@ Reset view histories after changing these settings. Invalid or nonfinite
 settings are rejected before GPU upload. These settings apply to reference,
 realtime, shadow and glass traversal, without prescribing world units.
 
-Use the tagged version with Bevy 0.19.1. This example enables DLSS Ray Reconstruction; see the SDK requirements below.
+The historical `v0.1.0` tag targets Bevy 0.19.1 as shown below. Current development uses Bevy 0.20.0, wgpu/Naga 30.0.1 and WESL 0.6.0; use the local checkout and all root patches in the following development example. Both examples enable DLSS Ray Reconstruction.
 
 ```toml
 [dependencies]
@@ -106,10 +106,14 @@ Cargo.toml (Cargo does not inherit dependency patches):
 
 ```toml
 [dependencies]
+bevy = { version = "=0.20.0", features = ["dlss"] }
 bevy_solarik = { path = "../bevy_solarik", features = ["dlss"] }
 
 [patch.crates-io]
 bevy_render = { path = "../bevy_solarik/vendor/bevy_render" }
+bevy_pbr = { path = "../bevy_solarik/vendor/bevy_pbr" }
+wgpu-core = { path = "../bevy_solarik/vendor/wgpu-core" }
+wgpu-hal = { path = "../bevy_solarik/vendor/wgpu-hal" }
 ```
 
 This fork is a development change; it is not included in `v0.1.0`.
@@ -157,9 +161,10 @@ Imported glTF may need its u16 indices converted to u32 and tangents generated f
 ## Requirements
 
 - A GPU with Vulkan ray query support. `SolarikPlugins::required_wgpu_features()` lists the required features.
-- Bevy 0.19.1. Use this crate in place of `bevy_solari`. Development checkouts require the root `bevy_render` patch shown above; the tagged `v0.1.0` setup does not.
+- Bevy 0.20.0 and wgpu 30.0.1, with Rust 1.98.0 pinned by this checkout (Bevy requires at least 1.97.1). Use this crate in place of `bevy_solari`. Development checkouts require all root patches shown above; the historical `v0.1.0` setup does not.
 - A zstd decoder for Bevy's KTX2 lookup tables. The default `zstd_rust` feature supplies one. For the C decoder, use `default-features = false` and enable `zstd_c`.
-- For the optional `dlss` feature: `DLSS_SDK`, `VULKAN_SDK` and libclang at build time, plus `nvngx_dlssd.dll` next to the executable. Without it, the output is raw ReSTIR lighting with no denoiser.
+- For the optional `dlss` feature: NVIDIA DLSS SDK 310.9.1 (`DLSS_SDK`), `VULKAN_SDK` and libclang at build time, plus `nvngx_dlssd.dll` next to the executable. `dlss_wgpu` 6 requires the complete SDK including its D3D helper header even for Vulkan builds. Without this feature, the output is raw ReSTIR lighting with no denoiser.
+- Composable shaders are WESL 0.6 modules with physical module imports and conditional `@if` attributes. Self-contained kernels remain WGSL. DLSS RR depth uses R32Float; local generic publication/readiness, material retention, meshlet and Vulkan storage/TLAS patches remain part of the development contract.
 
 ## Known limits
 

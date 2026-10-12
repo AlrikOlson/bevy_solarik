@@ -2,6 +2,8 @@
 //! WGSL: the transmission used for cloud shadows on the ground and on the air
 //! below the cloud must be the downward flux of the atmosphere pass's own
 //! diffuse field, which is validated against Monte Carlo elsewhere.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 const FIXTURE: &str = "
@@ -82,12 +84,12 @@ fn run(cases: &[[f32; 4]]) -> Vec<[f32; 4]> {
         };
         let source = format!(
             "{}\n{}\n{FIXTURE}",
-            strip(include_str!("../src/atmosphere/model.wgsl")),
-            strip(include_str!("../src/scene/light_medium.wgsl"))
+            strip(include_str!("../src/atmosphere/model.wesl")),
+            strip(include_str!("../src/scene/light_medium.wesl"))
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production cloud shadow"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -146,7 +148,10 @@ fn run(cases: &[[f32; 4]]) -> Vec<[f32; 4]> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU completed");
         receiver.recv().expect("map callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         bytemuck::cast_slice::<u8, [f32; 4]>(&data).to_vec()
     })
 }

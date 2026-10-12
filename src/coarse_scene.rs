@@ -9,8 +9,8 @@ use bytemuck::{Pod, Zeroable};
 #[path = "coarse_scene_pack.rs"]
 mod packing;
 pub use packing::PackedDirectional;
-pub const SHADER: &str = include_str!("coarse_scene.wgsl");
-pub const WALK_SHADER: &str = include_str!("coarse_walk.wgsl");
+pub const SHADER: &str = include_str!("coarse_scene.wesl");
+pub const WALK_SHADER: &str = include_str!("coarse_walk.wesl");
 pub const MISSING: u32 = u32::MAX;
 pub const MAX_GPU_BYTES: usize = 128 << 20;
 
@@ -35,13 +35,13 @@ pub struct GpuSource {
     pub bytes: u64,
 }
 pub(crate) fn load_shader(app: &mut bevy_app::App) {
-    bevy_shader::load_shader_library!(app, "coarse_scene.wgsl");
-    bevy_shader::load_shader_library!(app, "coarse_walk.wgsl");
-    bevy_shader::load_shader_library!(app, "coarse_transport.wgsl");
-    bevy_shader::load_shader_library!(app, "coarse_appearance.wgsl");
-    bevy_shader::load_shader_library!(app, "coarse_spatial_pack.wgsl");
-    bevy_shader::load_shader_library!(app, "coarse_spatial.wgsl");
-    bevy_shader::load_shader_library!(app, "coarse_spatial_scene.wgsl");
+    bevy_shader::load_shader_library!(app, "coarse_scene.wesl");
+    bevy_shader::load_shader_library!(app, "coarse_walk.wesl");
+    bevy_shader::load_shader_library!(app, "coarse_transport.wesl");
+    bevy_shader::load_shader_library!(app, "coarse_appearance.wesl");
+    bevy_shader::load_shader_library!(app, "coarse_spatial_pack.wesl");
+    bevy_shader::load_shader_library!(app, "coarse_spatial.wesl");
+    bevy_shader::load_shader_library!(app, "coarse_spatial_scene.wesl");
 }
 impl Grid {
     pub fn index(&self, point: [f32; 3]) -> Option<usize> {

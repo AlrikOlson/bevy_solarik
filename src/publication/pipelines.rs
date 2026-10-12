@@ -70,6 +70,7 @@ impl Drop for Request {
 }
 
 #[derive(Resource, Default, Clone, ExtractResource)]
+#[extract_app(bevy_render::RenderApp)]
 pub(super) struct Requests(Vec<Weak<Request>>);
 
 pub(super) fn request(
@@ -234,18 +235,17 @@ fn prepare(world: &mut World, request: &Request) -> Option<usize> {
     }
     let mut ready = true;
     for key in &keys {
-        let specialize = if key.prepass {
-            properties.prepass_specialize
-        } else {
-            properties.base_specialize
-        };
-        let specialize = specialize?;
-        let key = ErasedMaterialPipelineKey {
+        let pipeline_key = ErasedMaterialPipelineKey {
             type_id: request.material.type_id(),
             mesh_key: ErasedMeshPipelineKey::new(key.mesh),
             material_key: properties.material_key.clone(),
         };
-        let Ok(id) = specialize(world, key, &layout, &properties) else {
+        let specialized = if key.prepass {
+            (properties.prepass_specialize?)(world, &pipeline_key, &layout, &properties)
+        } else {
+            (properties.base_specialize?)(world, pipeline_key, &layout, &properties)
+        };
+        let Ok(id) = specialized else {
             return None;
         };
         // The specializer deduplicates. A queued ID is not a compiled GPU object.
@@ -325,7 +325,7 @@ fn first_frame(world: &mut World, request: &Request) -> Option<usize> {
         ids.extend(
             cache
                 .values()
-                .filter_map(|view| view.get(&request.entity).map(|(id, _)| *id)),
+                .filter_map(|view| view.get(&request.entity).map(|(id, _, _)| *id)),
         );
     }
     if ids.is_empty() {

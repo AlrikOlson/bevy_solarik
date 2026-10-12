@@ -1,4 +1,6 @@
 //! Actual production scheduling, indirect blending and readbacks on Vulkan.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 const CAPACITY: usize = 1 << 20;
 const BUDGET: usize = 40_000;
 const SENTINEL: u32 = 0xdead_beef;
@@ -33,31 +35,19 @@ fn item<'a>(source: &'a str, name: &str) -> &'a str {
 }
 
 fn preprocess(source: &str, adaptive: bool) -> String {
-    let mut include = true;
-    source
-        .lines()
-        .filter(|line| match line.trim() {
-            "#ifdef ADAPTIVE_CACHE_BUDGET" => {
-                include = adaptive;
-                false
-            }
-            "#else" => {
-                include = !include;
-                false
-            }
-            "#endif" => {
-                include = true;
-                false
-            }
-            _ => include,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    preprocess::select(
+        source,
+        if adaptive {
+            &["ADAPTIVE_CACHE_BUDGET"]
+        } else {
+            &[]
+        },
+    )
 }
 fn shader(adaptive: bool) -> String {
-    let priority = include_str!("../src/realtime/world_cache_priority.wgsl");
-    let update = include_str!("../src/realtime/world_cache_update.wgsl");
-    let bindings = include_str!("../src/realtime/realtime_bindings.wgsl");
+    let priority = include_str!("../src/realtime/world_cache_priority.wesl");
+    let update = include_str!("../src/realtime/world_cache_update.wesl");
+    let bindings = include_str!("../src/realtime/realtime_bindings.wesl");
     let code = format!(
         r#"
 const WORLD_CACHE_CELL_UPDATES_SOFT_CAP = 40000u;
@@ -249,7 +239,7 @@ impl Fixture {
     ) -> Vec<wgpu::ComputePipeline> {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production radiance cache priority and blending"),
-            source: wgpu::ShaderSource::Wgsl(shader(adaptive).into()),
+            source: preprocess::wgsl(shader(adaptive).into()),
         });
         [
             "clear_world_cache_priority",
@@ -386,7 +376,11 @@ impl Fixture {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU");
         receiver.recv().expect("callback").expect("map");
-        let data = self.readback.slice(..).get_mapped_range();
+        let data = self
+            .readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         let words: &[u32] = bytemuck::cast_slice(&data);
         let metrics = words[BUDGET + 64..BUDGET + 64 + 1024].to_vec();
         let selected = metrics[96] as usize;

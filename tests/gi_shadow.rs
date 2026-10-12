@@ -1,4 +1,6 @@
 //! Production GI reuse retains endpoint radiance and shades the current connection.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -38,8 +40,8 @@ fn gi_shadow_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let gi = include_str!("../src/realtime/restir_gi.wgsl");
-        let sampling = include_str!("../src/scene/sampling.wgsl");
+        let gi = include_str!("../src/realtime/restir_gi.wesl");
+        let sampling = include_str!("../src/scene/sampling.wesl");
         let mut source = include_str!("gi_shadow_fixture.wgsl").to_owned();
         for name in ["empty_reservoir", "merge_reservoirs", "jacobian", "isinf"] {
             source.push_str(&function(gi, name));
@@ -49,7 +51,7 @@ fn gi_shadow_gpu() {
         }
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production GI connection reuse"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -115,7 +117,10 @@ fn gi_shadow_gpu() {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             for (channel, expected) in tint[..3].iter().enumerate() {
                 for sample in &samples[..1] {

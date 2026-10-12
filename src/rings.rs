@@ -55,8 +55,10 @@ impl Default for RingData {
     }
 }
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct RingShadow(pub RingData);
 #[derive(Component, Clone, Default, ExtractComponent)]
+#[extract_app(RenderApp)]
 #[require(Hdr,DepthPrepass,Msaa::Off,CameraMainTextureUsages=CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING))]
 pub struct RingView(pub RingData);
 pub struct RingPlugin;
@@ -67,9 +69,9 @@ struct Gpu {
 }
 impl Plugin for RingPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "rings.wgsl");
-        load_shader_library!(app, "ring_math.wgsl");
-        load_shader_library!(app, "ring_transport.wgsl");
+        embedded_asset!(app, "rings.wesl");
+        load_shader_library!(app, "ring_math.wesl");
+        load_shader_library!(app, "ring_transport.wesl");
         app.init_resource::<RingShadow>().add_plugins((
             ExtractComponentPlugin::<RingView>::default(),
             ExtractResourcePlugin::<RingShadow>::default(),
@@ -106,7 +108,7 @@ fn initialize(mut commands: Commands, assets: Res<AssetServer>, cache: Res<Pipel
     let pipeline = cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("ring transport".into()),
         layout: vec![layout.clone()],
-        shader: load_embedded_asset!(assets.as_ref(), "rings.wgsl"),
+        shader: load_embedded_asset!(assets.as_ref(), "rings.wesl"),
         ..Default::default()
     });
     commands.insert_resource(Gpu { layout, pipeline });
@@ -134,7 +136,7 @@ fn compose(
     };
     let (Some(pipeline), Some(depth), Some(binding)) = (
         cache.get_compute_pipeline(gpu.pipeline),
-        prepass.depth_view(),
+        prepass.depth_only_view(),
         uniforms.uniforms.binding(),
     ) else {
         return;

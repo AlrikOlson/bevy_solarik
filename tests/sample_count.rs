@@ -1,4 +1,6 @@
 //! GPU sample-count diagnostic preserves integer counts through sRGB encoding.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 
 fn function(source: &str, name: &str) -> String {
@@ -39,7 +41,7 @@ fn sample_count_gpu() {
             .await
             .expect("device");
         let source = function(
-            include_str!("../src/pathtracer/pathtracer.wgsl"),
+            include_str!("../src/pathtracer/pathtracer.wesl"),
             "encode_sample_count",
         ) + r#"
 @group(0) @binding(0) var<storage> config: array<vec4<f32>>;
@@ -49,7 +51,7 @@ fn probe(@builtin(local_invocation_index) i:u32) { output[i]=vec4(encode_sample_
 "#;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production sample count"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -110,7 +112,10 @@ fn probe(@builtin(local_invocation_index) i:u32) { output[i]=vec4(encode_sample_
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("GPU");
             receiver.recv().expect("callback").expect("map");
-            let data = readback.slice(..).get_mapped_range();
+            let data = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
             for sample in samples {
                 let mut decoded = 0u32;

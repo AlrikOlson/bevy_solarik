@@ -22,7 +22,7 @@ use bevy_render::{
         *,
     },
     renderer::{RenderContext, RenderDevice, ViewQuery},
-    view::{ViewDepthTexture, ViewUniform, ViewUniformOffset, ViewUniforms},
+    view::{ViewDepthStencilTexture, ViewUniform, ViewUniformOffset, ViewUniforms},
 };
 #[derive(Resource)]
 pub(super) struct Pipelines {
@@ -60,7 +60,7 @@ pub(super) fn init(
             ),
         ),
     );
-    let shader = load_embedded_asset!(assets.as_ref(), "filtered_canopy_prepass.wgsl");
+    let shader = load_embedded_asset!(assets.as_ref(), "filtered_canopy_prepass.wesl");
     let surfaces = core::array::from_fn(|normal| {
         let mut targets = vec![
             Some(DEFERRED_PREPASS_FORMAT.into()),
@@ -83,6 +83,7 @@ pub(super) fn init(
                 },
                 entry_point: Some("fragment".into()),
                 targets,
+                ..Default::default()
             }),
             depth_stencil: Some(DepthStencilState {
                 format: CORE_3D_DEPTH_FORMAT,
@@ -109,7 +110,7 @@ pub(super) fn init(
         vertex: fullscreen.to_vertex_state(),
         fragment: Some(FragmentState {
             shader: assets
-                .load("embedded://bevy_core_pipeline/deferred/copy_deferred_lighting_id.wgsl"),
+                .load("embedded://bevy_core_pipeline/deferred/copy_deferred_lighting_id.wesl"),
             ..Default::default()
         }),
         depth_stencil: Some(DepthStencilState {
@@ -133,7 +134,7 @@ pub(super) fn render(
     view: ViewQuery<(
         &crate::prelude::SolarikLighting,
         &ViewPrepassTextures,
-        &ViewDepthTexture,
+        &ViewDepthStencilTexture,
         &ViewUniformOffset,
         &PreviousViewUniformOffset,
         &DeferredLightingIdDepthTexture,
@@ -215,7 +216,7 @@ pub(super) fn render(
             label: Some("finite canopy deferred surfaces"),
             color_attachments: &attachments,
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: depth.view(),
+                view: depth.attachment.depth_stencil_views().attachment_view(),
                 depth_ops: Some(Operations {
                     load: LoadOp::Load,
                     store: StoreOp::Store,
@@ -232,7 +233,7 @@ pub(super) fn render(
         pass.draw(0..3, 0..1);
     }
     ctx.command_encoder().copy_texture_to_texture(
-        depth.texture.as_image_copy(),
+        depth.texture().as_image_copy(),
         sampled_depth.texture.texture.as_image_copy(),
         textures.size,
     );

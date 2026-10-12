@@ -12,6 +12,7 @@ use bevy_render::{
 /// UV transforms must already be baked into the meshlet UVs. Raster materials
 /// remain opaque; ray materials must independently retain the matching alpha mask.
 #[derive(Clone, Default, Resource, ExtractResource)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct MeshletCutoutAtlas(pub Handle<Image>);
 
 /// Sample this atlas layer before writing visibility or shadow depth.

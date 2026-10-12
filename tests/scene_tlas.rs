@@ -1,4 +1,6 @@
 //! Actual ray visibility through the production persistent allocation helper.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 #[path = "../src/scene/tlas.rs"]
 mod scene_tlas;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
@@ -60,7 +62,7 @@ fn persistent_tlas_preserves_sparse_custom_slots_through_readiness_empty_return_
         queue.submit([encoder.finish()]);
 
         let shader = raw.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None, source: wgpu::ShaderSource::Wgsl(r#"
+            label: None, source: preprocess::wgsl(r#"
 enable wgpu_ray_query;
 @group(0) @binding(0) var scene:acceleration_structure;
 @group(0) @binding(1) var<storage,read_write> output:array<u32>;
@@ -221,7 +223,9 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
             readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
             raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             {
-                let bytes = readback.get_mapped_range(..);
+                let bytes = readback
+                    .get_mapped_range(..)
+                    .expect("completed GPU readback range");
                 assert_eq!(
                     bytemuck::cast_slice::<u8, u32>(&bytes),
                     expected,
@@ -296,7 +300,11 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
         both.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
         raw.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         assert_eq!(
-            bytemuck::cast_slice::<u8, u32>(&both.get_mapped_range(..)),
+            bytemuck::cast_slice::<u8, u32>(
+                &both
+                    .get_mapped_range(..)
+                    .expect("completed GPU readback range")
+            ),
             [0, 6, 12, 0]
         );
         both.unmap();

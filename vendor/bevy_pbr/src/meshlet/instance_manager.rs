@@ -1,9 +1,16 @@
 use super::{MeshletCutoutAtlas, MeshletDoubleSided, MeshletVisibilityCutout, cutout::metadata};
 use super::{MeshletMesh, MeshletMesh3d, meshlet_mesh_manager::MeshletMeshManager};
-use crate::DUMMY_MESH_MATERIAL;
+// Retained meshlet slots keep their established private no-material identity.
+// The upstream material query now uses Option; it does not own these slot keys.
+#[expect(
+    deprecated,
+    reason = "Preserve the existing private no-material slot identity during the API port"
+)]
+static DUMMY_MESH_MATERIAL: AssetId<crate::StandardMaterial> =
+    AssetId::<crate::StandardMaterial>::invalid();
 use crate::{
-    MaterialBindingId, MeshFlags, MeshTransforms, MeshUniform, PreviousGlobalTransform,
-    RenderMaterialBindings, RenderMaterialInstances, meshlet::asset::MeshletAabb,
+    MeshFlags, MeshTransforms, MeshUniform, PreviousGlobalTransform, RenderMaterialInstances,
+    meshlet::asset::MeshletAabb,
 };
 use bevy_asset::{AssetEvent, AssetId, AssetServer, Assets, UntypedAssetId};
 use bevy_camera::visibility::RenderLayers;
@@ -21,6 +28,7 @@ use bevy_math::Vec4;
 use bevy_platform::collections::{HashMap, HashSet};
 use bevy_render::{
     MainWorld,
+    material_bind_groups::{MaterialBindingId, RenderMaterialBindings},
     render_resource::StorageBuffer,
     renderer::RenderQueue,
     scene_slots::{SceneInstance, SceneSlot, SceneSlots},
@@ -278,7 +286,9 @@ impl InstanceManager {
             transform,
             previous_transform,
             render_layers,
-            mesh_material_ids.mesh_material(instance),
+            mesh_material_ids
+                .mesh_material(instance)
+                .unwrap_or_else(|| DUMMY_MESH_MATERIAL.untyped()),
             render_material_bindings,
             not_shadow_receiver,
             not_shadow_caster,
@@ -333,6 +343,7 @@ impl InstanceManager {
             &transforms,
             0,
             mesh_material_binding_id.slot,
+            None,
             None,
             None,
             None,
@@ -803,7 +814,9 @@ pub fn extract_meshlet_mesh_entities(
                     .copied()
                     .unwrap_or(true));
         let material = if material_changed || !known {
-            mesh_material_ids.mesh_material(instance.into())
+            mesh_material_ids
+                .mesh_material(instance.into())
+                .unwrap_or_else(|| DUMMY_MESH_MATERIAL.untyped())
         } else {
             instance_manager.instance_material_assets[i]
         };

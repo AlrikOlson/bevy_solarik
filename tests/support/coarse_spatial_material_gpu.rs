@@ -14,7 +14,7 @@ pub fn spatial_pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipe
     .join("\n");
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("source spatial materials"),
-        source: wgpu::ShaderSource::Wgsl(
+        source: preprocess::wgsl(
             format!(
                 "enable wgpu_ray_query;\n{shared}\n{}",
                 include_str!("../coarse_spatial_material.wgsl")

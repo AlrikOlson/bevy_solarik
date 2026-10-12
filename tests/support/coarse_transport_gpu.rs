@@ -1,4 +1,6 @@
 use super::Probe;
+#[path = "preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 pub fn pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipeline {
     let source = [
@@ -16,7 +18,7 @@ pub fn pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipeline {
     .join("\n");
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("bounded coarse transport diagnostic"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: preprocess::wgsl(source.into()),
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
@@ -87,7 +89,12 @@ pub fn run(
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let bytes = buffers.iter().map(wgpu::Buffer::size).sum::<u64>() + size * 2;
     (
-        bytemuck::cast_slice::<u8, Probe>(&readback.get_mapped_range(..)).to_vec(),
+        bytemuck::cast_slice::<u8, Probe>(
+            &readback
+                .get_mapped_range(..)
+                .expect("completed GPU readback range"),
+        )
+        .to_vec(),
         bytes,
     )
 }

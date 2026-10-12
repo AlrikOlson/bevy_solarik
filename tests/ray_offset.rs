@@ -1,5 +1,6 @@
 //! Float32 visibility-origin offsets remain representable from centimetres to planetary distances.
-extern crate alloc;
+#[path = "support/preprocess.rs"]
+mod preprocess;
 const SAMPLES: usize = 64;
 #[expect(
     clippy::print_stdout,
@@ -19,15 +20,13 @@ fn run_probe() -> Vec<[f32; 4]> {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let adapter = bevy_render::renderer::RenderAdapter(alloc::sync::Arc::new(
-            bevy_render::renderer::WgpuWrapper::new(adapter),
-        ));
+        let adapter = bevy_render::renderer::RenderAdapter::new(adapter);
         let bits = adapter
             .raster_subpixel_precision_bits()
             .expect("Vulkan raster precision");
         println!("Actual Vulkan subpixel precision: {bits} bits");
         assert!(bits >= 4);
-        let source_text = include_str!("../src/scene/raytracing_scene_bindings.wgsl");
+        let source_text = include_str!("../src/scene/raytracing_scene_bindings.wesl");
         let production = source_text
             .split("fn offset_surface_ray(")
             .nth(1)
@@ -36,7 +35,7 @@ fn run_probe() -> Vec<[f32; 4]> {
             .next()
             .unwrap();
         let production = format!("const RAY_T_MIN:f32=0.001;\nfn offset_surface_ray({production}");
-        let gbuffer = include_str!("../src/realtime/gbuffer_utils.wgsl");
+        let gbuffer = include_str!("../src/realtime/gbuffer_utils.wesl");
         let raster = gbuffer
             .split("fn raster_reconstruction_error(")
             .nth(1)
@@ -50,7 +49,7 @@ fn run_probe() -> Vec<[f32; 4]> {
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production visibility-origin offset"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -97,7 +96,10 @@ fn run_probe() -> Vec<[f32; 4]> {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU completed");
         receiver.recv().expect("map callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         bytemuck::cast_slice::<u8, [f32; 4]>(&data).to_vec()
     })
 }

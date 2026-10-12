@@ -62,6 +62,7 @@ impl CollimatedEmission {
 /// Opt-in emission profiles. Callers own handle lifetime and remove stale entries.
 /// `StandardMaterial` emission is peak radiance; ordinary materials are unchanged.
 #[derive(Resource, Clone, Default, ExtractResource)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct CollimatedMaterials(pub HashMap<AssetId<StandardMaterial>, CollimatedEmission>);
 
 /// Ray material for a mesh rendered with a custom raster material.
@@ -72,7 +73,7 @@ pub struct RaytracingMaterial3d(pub Handle<StandardMaterial>);
 pub struct CollimatedEmissionPlugin;
 impl Plugin for CollimatedEmissionPlugin {
     fn build(&self, app: &mut App) {
-        load_shader_library!(app, "collimated.wgsl");
+        load_shader_library!(app, "collimated.wesl");
         app.init_resource::<CollimatedMaterials>();
         app.add_plugins(ExtractResourcePlugin::<CollimatedMaterials>::default());
     }

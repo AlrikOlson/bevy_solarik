@@ -1,4 +1,6 @@
 //! Production point projection, overlap and photometric normalization on the GPU.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use wgpu::util::DeviceExt;
 #[test]
 #[ignore = "Vulkan GPU; serialize all captures and builds"]
@@ -16,15 +18,15 @@ fn points_conserve_flux_and_obey_distance_and_depth() {
             })
             .await
             .unwrap();
-        let source = include_str!("../src/point_sky.wgsl")
+        let source = include_str!("../src/point_sky.wesl")
             .replace(
-                "#import bevy_render::view::View",
+                "import bevy_render::view::View;",
                 "struct View {view_from_world:mat4x4<f32>,clip_from_view:mat4x4<f32>,exposure:f32}",
             )
             .replace("rgba16float", "rgba32float");
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let entries = (0..6)
             .map(|binding| wgpu::BindGroupLayoutEntry {
@@ -233,7 +235,10 @@ fn points_conserve_flux_and_obey_distance_and_depth() {
                 .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             rx.recv().unwrap().unwrap();
-            let bytes = read.slice(..).get_mapped_range();
+            let bytes = read
+                .slice(..)
+                .get_mapped_range()
+                .expect("completed GPU readback range");
             let rgb = bytemuck::cast_slice::<u8, [f32; 4]>(&bytes);
             for (c, colour) in [1., 0.5, 0.25].into_iter().enumerate() {
                 let measured = rgb

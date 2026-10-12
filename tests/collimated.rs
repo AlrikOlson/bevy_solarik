@@ -1,4 +1,6 @@
 //! Execute the shared angular-radiance law on GPU; integrate emitted power.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_math::Vec3;
 use bevy_solarik::scene::collimated::CollimatedEmission;
 use wgpu::util::DeviceExt;
@@ -19,7 +21,7 @@ fn collimated_gpu() {
             .request_device(&Default::default())
             .await
             .expect("device");
-        let production = include_str!("../src/scene/collimated.wgsl")
+        let production = include_str!("../src/scene/collimated.wesl")
             .lines()
             .filter(|line| !line.starts_with('#'))
             .collect::<Vec<_>>()
@@ -37,7 +39,7 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production collimated radiance"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: preprocess::wgsl(source.into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -103,7 +105,10 @@ fn probe(@builtin(global_invocation_id) id: vec3u) {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("GPU complete");
         rx.recv().expect("callback").expect("map");
-        let data = readback.slice(..).get_mapped_range();
+        let data = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("completed GPU readback range");
         let values: &[f32] = bytemuck::cast_slice(&data);
         for (value, direction) in values.iter().zip(&input[1..]) {
             let expected = cone.weight(Vec3::new(direction[0], direction[1], direction[2]));

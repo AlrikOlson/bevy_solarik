@@ -1,4 +1,6 @@
 // The test dispatcher uses the production immutable `RenderDevice` upload.
+#[path = "preprocess.rs"]
+mod preprocess;
 use super::Probe;
 use bevy_render::renderer::RenderDevice;
 use bevy_solarik::coarse_spatial_scene::{self, PackedSpatial};
@@ -43,7 +45,12 @@ fn execute<T: bytemuck::Pod>(
     queue.submit([encoder.finish()]);
     readback.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    bytemuck::cast_slice::<u8, T>(&readback.get_mapped_range(..)).to_vec()
+    bytemuck::cast_slice::<u8, T>(
+        &readback
+            .get_mapped_range(..)
+            .expect("completed GPU readback range"),
+    )
+    .to_vec()
 }
 pub fn run(
     device: &RenderDevice,
@@ -107,7 +114,7 @@ pub fn decode(device: &RenderDevice, queue: &wgpu::Queue, words: &[u32]) -> u64 
     let device = device.wgpu_device();
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("all spatial sparse words"),
-        source: wgpu::ShaderSource::Wgsl(
+        source: preprocess::wgsl(
             format!(
                 r#"{shared}
 @group(0) @binding(0) var<storage,read> rows:array<vec4u>;

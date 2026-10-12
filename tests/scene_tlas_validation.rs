@@ -1,4 +1,6 @@
 //! Safe-core resource deduplication must retain all distinct BLAS validation.
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_render::renderer::initialize_headless_renderer;
 use bevy_render::settings::WgpuSettings;
 use wgpu::util::DeviceExt;
@@ -94,7 +96,7 @@ fn repeated_instances_preserve_unique_resource_validation() {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(
+            source: preprocess::wgsl(
                 r#"
 enable wgpu_ray_query;
 @group(0) @binding(0) var scene: acceleration_structure;

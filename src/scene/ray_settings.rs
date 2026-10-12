@@ -7,6 +7,7 @@ use bevy_render::extract_resource::ExtractResource;
 /// relative floor can suppress self-intersections in large-coordinate scenes,
 /// but also omits nearby occluders. Reset view histories after changing settings.
 #[derive(Resource, ExtractResource, Clone, Copy, Debug)]
+#[extract_app(bevy_render::RenderApp)]
 pub struct SolarikRaySettings {
     max_distance: f32,
     relative_min_distance: f32,
