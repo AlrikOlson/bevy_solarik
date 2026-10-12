@@ -29,7 +29,8 @@ pub struct BlasManager {
     pub(super) bounds: HashMap<AssetId<Mesh>, super::history::Bounds>,
     blas: HashMap<AssetId<Mesh>, Blas>,
     triangle_edges: HashMap<AssetId<Mesh>, Vec<[Vec3; 2]>>,
-    compaction_queue: VecDeque<(AssetId<Mesh>, u32, bool)>,
+    // A mesh can be replaced while an older allocation is still queued.
+    compaction_queue: VecDeque<(AssetId<Mesh>, u64, u32, bool)>,
     opacity: OpacityBook,
     /// Meshes whose BLAS was dropped because its opacity no longer matched
     /// the materials on it; rebuilt by `prepare_raytracing_blas` next frame.
@@ -161,12 +162,14 @@ pub fn prepare_raytracing_blas(
     }
 
     // Create new BLAS for added or changed meshes
+    let mut scheduled: HashSet<AssetId<Mesh>> = HashSet::default();
     let blas_resources = extracted_meshes
         .extracted
         .iter()
         .filter(|(_, mesh)| is_mesh_raytracing_compatible(mesh))
         .map(|(asset_id, _)| *asset_id)
         .chain(rebuilds)
+        .filter(|asset_id| scheduled.insert(*asset_id))
         .map(|asset_id| {
             let vertex_slice = mesh_allocator.mesh_vertex_slice(&asset_id).unwrap();
             let index_slice = mesh_allocator.mesh_index_slice(&asset_id).unwrap();
@@ -185,9 +188,12 @@ pub fn prepare_raytracing_blas(
             let revision = blas_manager.generation;
             blas_manager.revisions.insert(asset_id, revision);
             blas_manager.opacity.record_built(asset_id, non_opaque);
-            blas_manager
-                .compaction_queue
-                .push_back((asset_id, blas_size.vertex_count, false));
+            blas_manager.compaction_queue.push_back((
+                asset_id,
+                revision,
+                blas_size.vertex_count,
+                false,
+            ));
 
             (asset_id, vertex_slice, index_slice, blas_size)
         })
@@ -236,6 +242,9 @@ pub fn publish_readiness(
     registrations: Res<crate::material::Registrations>,
 ) {
     if let Some(readiness) = readiness {
+        for id in readiness.requested::<bevy_image::Image>() {
+            readiness.publish(id.untyped(), images.get(id).is_some());
+        }
         for id in readiness.requested::<Mesh>() {
             readiness.publish(id.untyped(), manager.get(&id).is_some());
         }
@@ -280,9 +289,12 @@ fn compact_ready_blas(blas_manager: &mut BlasManager, render_queue: &RenderQueue
     {
         meshes_processed += 1;
 
-        let (mesh, vertex_count, compaction_started) =
+        let (mesh, revision, vertex_count, compaction_started) =
             blas_manager.compaction_queue.pop_front().unwrap();
 
+        if blas_manager.revision(&mesh) != revision {
+            continue;
+        }
         let Some(blas) = blas_manager.get(&mesh) else {
             continue;
         };
@@ -303,7 +315,7 @@ fn compact_ready_blas(blas_manager: &mut BlasManager, render_queue: &RenderQueue
         // BLAS not ready for compaction, put back in queue
         blas_manager
             .compaction_queue
-            .push_back((mesh, vertex_count, true));
+            .push_back((mesh, revision, vertex_count, true));
     }
 }
 

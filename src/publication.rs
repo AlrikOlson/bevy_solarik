@@ -465,13 +465,25 @@ fn retire_meshes(
     }
 }
 pub struct PublicationPlugin;
+fn retire_images(
+    mut events: MessageReader<AssetEvent<bevy_image::Image>>,
+    readiness: Res<SceneGeometryReadiness>,
+) {
+    for event in events.read() {
+        // Render-only extraction is not the last consumer releasing the image.
+        if let AssetEvent::Unused { id } = event {
+            readiness.release(id.untyped());
+        }
+    }
+}
 impl Plugin for PublicationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SceneGeometryReadiness>()
             .init_resource::<pipelines::Requests>()
             .init_resource::<RasterPipelineReadiness>()
             .add_message::<AssetEvent<Mesh>>()
-            .add_systems(PostUpdate, retire_meshes);
+            .add_message::<AssetEvent<bevy_image::Image>>()
+            .add_systems(PostUpdate, (retire_meshes, retire_images));
     }
 
     fn finish(&self, app: &mut App) {

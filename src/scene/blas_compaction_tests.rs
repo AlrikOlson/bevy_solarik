@@ -93,7 +93,12 @@ fn compaction_upload_schedule_keeps_compacted_geometry_visible() {
             queue.submit([encoder.finish()]);
             originals.push(blas.clone());
             manager.blas.insert(id, blas);
-            manager.compaction_queue.push_back((id, 3, false));
+            manager.revisions.insert(id, 1);
+            // Old unstarted and already-pending jobs must never touch this
+            // replacement allocation, including after another pass compacted it.
+            manager.compaction_queue.push_back((id, 0, 3, false));
+            manager.compaction_queue.push_back((id, 0, 3, true));
+            manager.compaction_queue.push_back((id, 1, 3, false));
         }
         let mut world = World::new();
         world.insert_resource(device.clone());

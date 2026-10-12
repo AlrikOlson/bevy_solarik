@@ -266,6 +266,50 @@ fn actual_last_asset_owner_retires_mesh_requests_not_one_consumer() {
 }
 
 #[test]
+fn image_readiness_survives_cpu_extraction_and_other_owners_until_final_release() {
+    use bevy_app::App;
+    use bevy_asset::{AssetApp, AssetPlugin};
+    use bevy_image::Image;
+    use bevy_solarik::publication::PublicationPlugin;
+    let mut app = App::new();
+    app.add_plugins(AssetPlugin::default())
+        .init_asset::<Image>()
+        .add_plugins(PublicationPlugin);
+    let first = app
+        .world_mut()
+        .resource_mut::<Assets<Image>>()
+        .add(Image::default());
+    let second = first.clone();
+    let id = first.id();
+    let readiness = app.world().resource::<SceneGeometryReadiness>().clone();
+    readiness.request(id.untyped());
+    assert!(!readiness.ready(id.untyped()));
+    // The real native fixture supplies the renderer-produced receipt. This
+    // headless control isolates the Bevy owner/event lifetime contract.
+    readiness.publish(id.untyped(), true);
+    app.world_mut().resource_mut::<Assets<Image>>().remove(id);
+    app.update();
+    assert!(
+        readiness.ready(id.untyped()),
+        "CPU extraction is not last ownership"
+    );
+    drop(first);
+    for _ in 0..5 {
+        app.update();
+    }
+    assert!(
+        readiness.ready(id.untyped()),
+        "another image consumer still owns it"
+    );
+    drop(second);
+    for _ in 0..5 {
+        app.update();
+    }
+    assert!(!readiness.ready(id.untyped()));
+    assert!(!readiness.requested::<Image>().contains(&id));
+}
+
+#[test]
 fn adopting_managed_geometry_replaces_material_and_preserves_other_consumers() {
     use bevy_solarik::{lommel::LommelMaterial, scene::collimated::RaytracingMaterial3d};
     let mut world = world();
