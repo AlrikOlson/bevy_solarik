@@ -25,7 +25,7 @@ fn planet() -> PlanetaryAtmosphere {
 fn weather_motion_rejects_nonfinite_or_reversed_belts() {
     let mut p = planet();
     p.weather_motion = [
-        Vec4::new(0.2, 6.28, 1.0, 0.0),
+        Vec4::new(0.2, 6.2, 1.0, 0.0),
         Vec4::new(0.5, 1.1, 0.04, 0.0),
     ];
     assert!(p.validate().is_ok());

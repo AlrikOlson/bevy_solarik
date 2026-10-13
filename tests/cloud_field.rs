@@ -59,7 +59,7 @@ fn cloud_field_gpu_advection_columns_and_units() {
     let top = 800.0 + 204.0 / 255.0 * 15700.0;
     let thickness = (top - 800.0) * 64.0 / 255.0;
     let base = top - thickness;
-    for (case, result) in cases.iter().zip(values.chunks_exact(4)) {
+    for (case, result) in cases.iter().zip(values.as_chunks::<4>().0) {
         assert!(result.iter().flatten().all(|v| v.is_finite()));
         assert!((f64::from(result[2][1]) - base).abs() < 1.0);
         assert!((f64::from(result[2][2]) - top).abs() < 1.0);
