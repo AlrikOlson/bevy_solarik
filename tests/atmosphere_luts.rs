@@ -673,7 +673,7 @@ fn orbit_reference(
 }
 
 /// Planetary view transport including the cloud layer, as composited.
-const VIEW_PROBE: &str = "integrate_view(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,0.0,trans,multiple,filtering,weather)";
+const VIEW_PROBE: &str = "integrate_view_sampled(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,0.0,0.37,trans,multiple,filtering,weather)";
 
 impl Luts {
     /// Clear-air transport, as used by lookup fields.

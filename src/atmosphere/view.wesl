@@ -4,7 +4,7 @@ import bevy_solarik::atmosphere::model::ATM_PI;
 import bevy_solarik::atmosphere::model::observer_position;
 import bevy_solarik::atmosphere::model::atmosphere_boundary;
 import bevy_solarik::atmosphere::model::integrate_atmosphere;
-import bevy_solarik::atmosphere::model::integrate_view;
+import bevy_solarik::atmosphere::model::integrate_view_sampled;
 import bevy_solarik::atmosphere::model::sample_transmittance;
 import bevy_solarik::atmosphere::model::sky_uv;
 import bevy_solarik::atmosphere::model::star_radiance;
@@ -86,8 +86,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             distance = length(h.xyz/h.w)*0.001;
         }
         let pixel_angle = length(view_direction(uv+vec2(1.0/f32(size.x), 0.0))-direction);
-        let result = integrate_view(p, observer_position(p), direction, distance,
-            u32(p.observer.w)*2u, pixel_angle, trans, multiple, filtering, weather);
+        // Stable per-pixel phase: sampling noise does not advance physical time
+        // or introduce a new frame-driven weather state.
+        let sample_phase = fract(52.9829189*fract(dot(vec2<f32>(id.xy), vec2(0.06711056, 0.00583715))));
+        let result = integrate_view_sampled(p, observer_position(p), direction, distance,
+            u32(p.observer.w)*2u, pixel_angle, sample_phase, trans, multiple, filtering, weather);
         var previous = textureLoad(output,id.xy).rgb;
         if pixel_depth == 0.0 && p.disks.z>0.5 {
             // Unattenuated source first, then the same cloud/air view transmittance.

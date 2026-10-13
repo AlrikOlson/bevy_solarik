@@ -580,7 +580,7 @@ fn integrate_air_below(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f
 const CLOUD_STEP: f32 = 0.25;
 const CLOUD_MIN_SAMPLES: u32 = 8u;
 
-// Air and cloud over one crossing of the cloud shell, on uniform midpoints.
+// Air and cloud over one crossing of the cloud shell, with one sample per cell.
 // The shell is a few km thick inside a ~100 km atmosphere, so it cannot share
 // the clear-air quadrature without aliasing into altitude contours.
 //
@@ -589,7 +589,7 @@ const CLOUD_MIN_SAMPLES: u32 = 8u;
 // evenly would underestimate its albedo (Cahalan et al. 1994, J. Atmos. Sci.
 // 51, 2434). Both columns are integrated and blended by the cover.
 fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, t0: f32, t1: f32, budget: u32,
-    pixel_angle: f32, trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler,
+    pixel_angle: f32, sample_phase: f32, trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler,
     weather: texture_cube<f32>) -> AtmosphereTransport {
     var clear = AtmosphereTransport(vec3(0.0), vec3(1.0));
     var cloudy = AtmosphereTransport(vec3(0.0), vec3(1.0));
@@ -602,7 +602,11 @@ fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>,
     var weight = 0.0;
     var opaque = false;
     for (var i = 0u; i < count; i++) {
-        let t = t0+(f32(i)+0.5)*dt;
+        // A negative phase selects the deterministic midpoint reference. The
+        // primary view decorrelates grazing contours without adding samples or
+        // changing the cell widths used by the transport integral.
+        let offset = select(fract(sample_phase+f32(i)*0.618033989), 0.5, sample_phase < 0.0);
+        let t = t0+(f32(i)+offset)*dt;
         let position = origin+direction*t;
         let radius = length(position);
         let normal = position/radius;
@@ -659,6 +663,14 @@ fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>,
 fn integrate_view(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32,
     pixel_angle: f32, trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler,
     weather: texture_cube<f32>) -> AtmosphereTransport {
+    return integrate_view_sampled(p, origin, direction, distance, samples, pixel_angle,
+        -1.0, trans, multi, filtering, weather);
+}
+
+// Stratification only changes numerical sample placement, never cloud state.
+fn integrate_view_sampled(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, distance: f32, samples: u32,
+    pixel_angle: f32, sample_phase: f32, trans: texture_2d<f32>, multi: texture_2d<f32>, filtering: sampler,
+    weather: texture_cube<f32>) -> AtmosphereTransport {
     let outer = sphere_interval(origin, direction, top_radius(p));
     if outer.y <= 0.0 { return AtmosphereTransport(vec3(0.0),vec3(1.0)); }
     let start = max(outer.x, 0.0);
@@ -683,7 +695,7 @@ fn integrate_view(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, 
     let scale = f32(samples)/max(end-start, 1e-6);
     var result = integrate_air(p, origin, direction, start, first.x,
         clamp(u32(ceil((first.x-start)*scale)), 8u, samples), start <= 0.0, trans, multi, filtering);
-    result = combine_transport(result, integrate_cloud(p, origin, direction, first.x, first.y, samples, pixel_angle, trans, multi, filtering, weather));
+    result = combine_transport(result, integrate_cloud(p, origin, direction, first.x, first.y, samples, pixel_angle, sample_phase, trans, multi, filtering, weather));
     let between = clamp(u32(ceil((middle-first.y)*scale)), 8u, samples);
     if base.y > base.x {
         // The ray is under the cloud base here, in the shadow of whatever
@@ -695,7 +707,7 @@ fn integrate_view(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>, 
             between, first.y <= 0.0, trans, multi, filtering));
     }
     if has_second {
-        result = combine_transport(result, integrate_cloud(p, origin, direction, second.x, second.y, samples, pixel_angle, trans, multi, filtering, weather));
+        result = combine_transport(result, integrate_cloud(p, origin, direction, second.x, second.y, samples, pixel_angle, sample_phase, trans, multi, filtering, weather));
         result = combine_transport(result, integrate_air(p, origin, direction, second.y, end,
             clamp(u32(ceil((end-second.y)*scale)), 8u, samples), false, trans, multi, filtering));
     }
