@@ -1,6 +1,7 @@
 use super::{
     SolarikLighting,
     prepare::{LIGHT_TILE_BLOCKS, SolarikLightingResources, WORLD_CACHE_SIZE},
+    view_pipelines::{DeferredPipeline, ViewLightingMode, ViewPipelineSet, ViewPipelineVariants},
 };
 use crate::scene::RaytracingSceneBindings;
 #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
@@ -59,17 +60,7 @@ pub struct SolarikLightingPipelines {
     di_spatial_and_shade_pipeline: CachedComputePipelineId,
     gi_initial_and_temporal_pipeline: CachedComputePipelineId,
     gi_spatial_and_shade_pipeline: CachedComputePipelineId,
-    specular_gi_pipeline: CachedComputePipelineId,
-    primary_glass_pipeline: CachedComputePipelineId,
-    primary_foliage_pipeline: CachedComputePipelineId,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    primary_foliage_rr_pipeline: CachedComputePipelineId,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    primary_glass_rr_pipeline: CachedComputePipelineId,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    specular_gi_with_psr_pipeline: CachedComputePipelineId,
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    resolve_dlss_rr_textures_pipeline: CachedComputePipelineId,
+    view_pipelines: ViewPipelineVariants,
 }
 
 #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
@@ -158,23 +149,10 @@ pub fn prepare_primary_glass(
         p.di_spatial_and_shade_pipeline,
         p.gi_initial_and_temporal_pipeline,
         p.gi_spatial_and_shade_pipeline,
-        p.specular_gi_pipeline,
-        p.primary_glass_pipeline,
     ];
     if ids
         .into_iter()
         .any(|id| cache.get_compute_pipeline(id).is_none())
-    {
-        return;
-    }
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    if [
-        p.primary_glass_rr_pipeline,
-        p.specular_gi_with_psr_pipeline,
-        p.resolve_dlss_rr_textures_pipeline,
-    ]
-    .into_iter()
-    .any(|id| cache.get_compute_pipeline(id).is_none())
     {
         return;
     }
@@ -187,7 +165,14 @@ pub fn prepare_primary_glass(
         #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
         let (_, extracted, _, _, textures, _, _) = view;
         #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        let (_, extracted, _, _, textures, _, _, _) = view;
+        let (_, extracted, _, _, textures, _, _, rr_textures) = view;
+        #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
+        let mode = ViewLightingMode::Standard;
+        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+        let mode = ViewLightingMode::from_view(rr_textures);
+        if !p.view_pipelines.for_view(mode).glass_ready(&cache) {
+            continue;
+        }
         if textures.deferred_view().is_none()
             || textures.depth_only_view().is_none()
             || textures.motion_vectors_view().is_none()
@@ -268,14 +253,14 @@ pub fn solarik_lighting<const PRIMARY: bool>(
         return;
     };
 
-    #[cfg(not(all(feature = "dlss", not(feature = "force_disable_dlss"))))]
-    let specular_gi_pipeline = pipelines.specular_gi_pipeline;
+    #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
+    let mode = ViewLightingMode::Standard;
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    let specular_gi_pipeline = if view_dlss_rr_textures.is_some() {
-        pipelines.specular_gi_with_psr_pipeline
-    } else {
-        pipelines.specular_gi_pipeline
-    };
+    let mode = ViewLightingMode::from_view(view_dlss_rr_textures);
+    let view_pipelines = pipelines.view_pipelines.for_view(mode);
+    let (specular_gi_pipeline, guide_pipeline_id) = view_pipelines.base_ids(&pipeline_cache);
+    #[cfg(any(not(feature = "dlss"), feature = "force_disable_dlss"))]
+    let _ = guide_pipeline_id;
 
     let (
         Some(build_sky_rows_pipeline),
@@ -340,32 +325,26 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     };
 
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    let Some(resolve_dlss_rr_textures_pipeline) =
-        pipeline_cache.get_compute_pipeline(pipelines.resolve_dlss_rr_textures_pipeline)
-    else {
-        return;
+    let resolve_dlss_rr_textures_pipeline = match guide_pipeline_id {
+        Some(id) => {
+            let Some(pipeline) = pipeline_cache.get_compute_pipeline(id) else {
+                return;
+            };
+            Some(pipeline)
+        }
+        None => None,
     };
 
-    let primary_pipeline = pipelines.primary_glass_pipeline;
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    let primary_pipeline = if view_dlss_rr_textures.is_some() {
-        pipelines.primary_glass_rr_pipeline
-    } else {
-        primary_pipeline
-    };
-    let primary_pipeline = pipeline_cache.get_compute_pipeline(primary_pipeline);
+    let primary_pipeline = (PRIMARY && owns_glass)
+        .then(|| view_pipelines.glass.id(&pipeline_cache))
+        .and_then(|id| pipeline_cache.get_compute_pipeline(id));
     if PRIMARY && owns_glass && primary_pipeline.is_none() {
         return;
     }
 
-    let foliage_pipeline = pipelines.primary_foliage_pipeline;
-    #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    let foliage_pipeline = if view_dlss_rr_textures.is_some() {
-        pipelines.primary_foliage_rr_pipeline
-    } else {
-        foliage_pipeline
-    };
-    let foliage_pipeline = pipeline_cache.get_compute_pipeline(foliage_pipeline);
+    let foliage_pipeline = (PRIMARY && (scene_bindings.has_foliage || scene_bindings.has_canopy))
+        .then(|| view_pipelines.foliage.id(&pipeline_cache))
+        .and_then(|id| pipeline_cache.get_compute_pipeline(id));
 
     let view_target_attachment = view_target.get_unsampled_color_attachment();
 
@@ -529,7 +508,10 @@ pub fn solarik_lighting<const PRIMARY: bool>(
     }
 
     #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-    if let Some(bind_group_resolve_dlss_rr_textures) = &bind_group_resolve_dlss_rr_textures {
+    if let (Some(bind_group_resolve_dlss_rr_textures), Some(resolve_dlss_rr_textures_pipeline)) = (
+        &bind_group_resolve_dlss_rr_textures,
+        resolve_dlss_rr_textures_pipeline,
+    ) {
         pass.set_bind_group(2, bind_group_resolve_dlss_rr_textures, &[]);
         pass.set_pipeline(resolve_dlss_rr_textures_pipeline);
         pass.dispatch_workgroups(dx, dy, 1);
@@ -814,11 +796,11 @@ pub fn init_solari_lighting_pipelines(
     .then(|| {
         super::query_capture::PrimaryQueryCapture::new(&device, &pipeline_cache, direct_capture)
     });
-    let create_pipeline = |label: &'static str,
-                           entry_point: &'static str,
-                           shader: Handle<Shader>,
-                           extra_bind_group_layout: Option<&BindGroupLayoutDescriptor>,
-                           extra_shader_defs: Vec<ShaderDefVal>| {
+    let pipeline_descriptor = |label: &'static str,
+                               entry_point: &'static str,
+                               shader: Handle<Shader>,
+                               extra_bind_group_layout: Option<&BindGroupLayoutDescriptor>,
+                               extra_shader_defs: Vec<ShaderDefVal>| {
         let mut layout = vec![
             scene_bindings.bind_group_layout.clone(),
             bind_group_layout.clone(),
@@ -880,7 +862,7 @@ pub fn init_solari_lighting_pipelines(
             layout.push(capture.layout.clone());
         }
 
-        pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+        ComputePipelineDescriptor {
             label: Some(label.into()),
             layout,
             immediate_size: 16,
@@ -888,7 +870,15 @@ pub fn init_solari_lighting_pipelines(
             shader_defs,
             entry_point: Some(entry_point.into()),
             ..default()
-        })
+        }
+    };
+
+    let create_pipeline = |label, entry, shader, layout, defs| {
+        pipeline_cache
+            .queue_compute_pipeline(pipeline_descriptor(label, entry, shader, layout, defs))
+    };
+    let deferred_pipeline = |label, entry, shader, layout, defs| {
+        DeferredPipeline::new(pipeline_descriptor(label, entry, shader, layout, defs))
     };
 
     commands.insert_resource(SolarikLightingPipelines {
@@ -1031,68 +1021,72 @@ pub fn init_solari_lighting_pipelines(
             None,
             vec![],
         ),
-        primary_foliage_pipeline: create_pipeline(
-            "solarik_primary_foliage",
-            "primary_foliage",
-            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wesl"),
-            None,
-            vec!["FOLIAGE_TRANSMISSION".into()],
-        ),
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        primary_foliage_rr_pipeline: create_pipeline(
-            "solarik_primary_foliage_rr",
-            "primary_foliage",
-            load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wesl"),
-            Some(&bind_group_layout_resolve_dlss_rr_textures),
-            vec![
-                "FOLIAGE_TRANSMISSION".into(),
-                "DLSS_RR_GUIDE_BUFFERS".into(),
-            ],
-        ),
-        primary_glass_pipeline: create_pipeline(
-            "solarik_primary_glass",
-            "primary_glass",
-            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wesl"),
-            None,
-            vec!["FOLIAGE_TRANSMISSION".into()],
-        ),
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        primary_glass_rr_pipeline: create_pipeline(
-            "solarik_primary_glass_rr",
-            "primary_glass",
-            load_embedded_asset!(asset_server.as_ref(), "primary_glass.wesl"),
-            Some(&bind_group_layout_resolve_dlss_rr_textures),
-            vec![
-                "FOLIAGE_TRANSMISSION".into(),
-                "DLSS_RR_GUIDE_BUFFERS".into(),
-            ],
-        ),
-        specular_gi_pipeline: create_pipeline(
-            "solarik_lighting_specular_gi_pipeline",
-            "specular_gi",
-            load_embedded_asset!(asset_server.as_ref(), "specular_gi.wesl"),
-            None,
-            vec!["FOLIAGE_TRANSMISSION".into()],
-        ),
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        specular_gi_with_psr_pipeline: create_pipeline(
-            "solarik_lighting_specular_gi_with_psr_pipeline",
-            "specular_gi",
-            load_embedded_asset!(asset_server.as_ref(), "specular_gi.wesl"),
-            Some(&bind_group_layout_resolve_dlss_rr_textures),
-            vec![
-                "FOLIAGE_TRANSMISSION".into(),
-                "DLSS_RR_GUIDE_BUFFERS".into(),
-            ],
-        ),
-        #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
-        resolve_dlss_rr_textures_pipeline: create_pipeline(
-            "solarik_lighting_resolve_dlss_rr_textures_pipeline",
-            "resolve_dlss_rr_textures",
-            load_embedded_asset!(asset_server.as_ref(), "resolve_dlss_rr_textures.wesl"),
-            Some(&bind_group_layout_resolve_dlss_rr_textures),
-            vec!["DLSS_RR_GUIDE_BUFFERS".into()],
-        ),
+        view_pipelines: ViewPipelineVariants {
+            standard: ViewPipelineSet {
+                foliage: deferred_pipeline(
+                    "solarik_primary_foliage",
+                    "primary_foliage",
+                    load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wesl"),
+                    None,
+                    vec!["FOLIAGE_TRANSMISSION".into()],
+                ),
+                glass: deferred_pipeline(
+                    "solarik_primary_glass",
+                    "primary_glass",
+                    load_embedded_asset!(asset_server.as_ref(), "primary_glass.wesl"),
+                    None,
+                    vec!["FOLIAGE_TRANSMISSION".into()],
+                ),
+                specular: deferred_pipeline(
+                    "solarik_lighting_specular_gi_pipeline",
+                    "specular_gi",
+                    load_embedded_asset!(asset_server.as_ref(), "specular_gi.wesl"),
+                    None,
+                    vec!["FOLIAGE_TRANSMISSION".into()],
+                ),
+                guides: None,
+            },
+            #[cfg(all(feature = "dlss", not(feature = "force_disable_dlss")))]
+            ray_reconstruction: ViewPipelineSet {
+                foliage: deferred_pipeline(
+                    "solarik_primary_foliage_rr",
+                    "primary_foliage",
+                    load_embedded_asset!(asset_server.as_ref(), "primary_foliage.wesl"),
+                    Some(&bind_group_layout_resolve_dlss_rr_textures),
+                    vec![
+                        "FOLIAGE_TRANSMISSION".into(),
+                        "DLSS_RR_GUIDE_BUFFERS".into(),
+                    ],
+                ),
+                glass: deferred_pipeline(
+                    "solarik_primary_glass_rr",
+                    "primary_glass",
+                    load_embedded_asset!(asset_server.as_ref(), "primary_glass.wesl"),
+                    Some(&bind_group_layout_resolve_dlss_rr_textures),
+                    vec![
+                        "FOLIAGE_TRANSMISSION".into(),
+                        "DLSS_RR_GUIDE_BUFFERS".into(),
+                    ],
+                ),
+                specular: deferred_pipeline(
+                    "solarik_lighting_specular_gi_with_psr_pipeline",
+                    "specular_gi",
+                    load_embedded_asset!(asset_server.as_ref(), "specular_gi.wesl"),
+                    Some(&bind_group_layout_resolve_dlss_rr_textures),
+                    vec![
+                        "FOLIAGE_TRANSMISSION".into(),
+                        "DLSS_RR_GUIDE_BUFFERS".into(),
+                    ],
+                ),
+                guides: Some(deferred_pipeline(
+                    "solarik_lighting_resolve_dlss_rr_textures_pipeline",
+                    "resolve_dlss_rr_textures",
+                    load_embedded_asset!(asset_server.as_ref(), "resolve_dlss_rr_textures.wesl"),
+                    Some(&bind_group_layout_resolve_dlss_rr_textures),
+                    vec!["DLSS_RR_GUIDE_BUFFERS".into()],
+                )),
+            },
+        },
     });
     #[cfg(feature = "graphics_debug")]
     if let Some(capture) = query_capture {

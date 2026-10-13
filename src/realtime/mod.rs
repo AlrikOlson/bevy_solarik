@@ -5,6 +5,7 @@ mod node;
 mod prepare;
 #[cfg(feature = "graphics_debug")]
 pub mod query_capture;
+mod view_pipelines;
 
 use crate::SolarikPlugins;
 use bevy_app::{App, Plugin};

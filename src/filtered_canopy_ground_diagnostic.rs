@@ -57,7 +57,7 @@ fn report(
     original: &[GroundTriangle],
     prepared: &[Triangle],
 ) -> Result<GroundFailure, &'static str> {
-    let polygon = footprint(&cell.cell)?.map(|p| p.as_dvec2());
+    let polygon = footprint(&cell.cell)?.map(bevy_math::Vec2::as_dvec2);
     let polygons: Vec<_> = link
         .triangles
         .iter()

@@ -34,7 +34,7 @@ pub fn diagnostic_scene_rows(
     if values.len() > 4096 || mode > 2 {
         return Err("diagnostic scene limit or mode");
     }
-    let identities: std::collections::BTreeSet<_> = values.iter().map(|v| v.identity).collect();
+    let identities: alloc::collections::BTreeSet<_> = values.iter().map(|v| v.identity).collect();
     if identities.len() != values.len() {
         return Err("duplicate diagnostic scene identity");
     }
