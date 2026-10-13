@@ -1,3 +1,4 @@
+import bevy_solarik::cloud_field::weather_shadow_column;
 import bevy_solarik::scene::scene_hit::SceneHit;
 import bevy_solarik::scene::scene_hit::scene_miss;
 import bevy_solarik::scene::scene_hit::scene_triangle;
@@ -230,24 +231,9 @@ fn cloud_shadow(origin: vec3<f32>, direction: vec3<f32>) -> f32 {
     let m = sky_light.medium;
     if m.radius <= 0.0 || m.cloud.w <= 0.0 { return 1.0; }
     let p = origin - m.centre;
-    let r = length(p);
-    if r >= m.cloud.y { return 1.0; }
-    let at_base = p + direction * select(0.0, sphere_exit(p, direction, m.cloud.x), r < m.cloud.x);
-    let mu = dot(normalize(at_base), direction);
-    // Below the horizon the planet itself is in the way.
-    if mu <= 0.0 { return 1.0; }
-    let low = textureSampleLevel(weather_texture, weather_sampler, normalize(at_base), 0.0);
-    let shell = m.cloud.y - m.cloud.x;
-    let middle = m.cloud.x + 0.5 * low.g * shell;
-    let at_middle = p + direction * select(0.0, sphere_exit(p, direction, middle), r < middle);
-    let high = textureSampleLevel(weather_texture, weather_sampler, normalize(at_middle), 0.0);
-    let weather = 0.5 * (low + high);
-    if weather.r <= 0.0 { return 1.0; }
-    let thickness = weather.g * shell;
-    // Inside the layer only the cloud above the point shades it.
-    let above = clamp((m.cloud.x + thickness - r) / max(thickness, 1.0), 0.0, 1.0);
-    let column = m.cloud.z * weather.b * thickness * MEDIUM_CLOUD_COLUMN * above;
-    return 1.0 - weather.r * (1.0 - cloud_transmission(mu, column));
+    let column = weather_shadow_column(p,direction,m.cloud.x,m.cloud.y,
+        m.weather_motion,weather_texture,weather_sampler);
+    return 1.0-column.x*(1.0-cloud_transmission(column.z,m.cloud.z*column.y));
 }
 
 const RAY_T_MIN = 0.001f;

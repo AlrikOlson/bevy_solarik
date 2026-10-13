@@ -66,6 +66,7 @@ impl Plugin for RaytracingScenePlugin {
         app.add_plugins(crate::rings::RingPlugin);
         app.add_plugins(crate::filtered_canopy::CanopyPlugin);
         crate::coarse_scene::load_shader(app);
+        crate::load_cloud_field(app);
         load_shader_library!(app, "brdf.wesl");
         load_shader_library!(app, "light_medium.wesl");
         load_shader_library!(app, "thin_glass.wesl");

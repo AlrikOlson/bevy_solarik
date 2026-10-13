@@ -1,6 +1,7 @@
 
 
 
+import bevy_solarik::cloud_field::{weather_coordinates, weather_sample, weather_shadow_column};
 // Original implementation of the transport equations in Hillaire 2020,
 // https://sebh.github.io/publications/egsr2020.pdf, and Earth density profiles
 // in Bruneton 2017, https://ebruneton.github.io/precomputed_atmospheric_scattering/.
@@ -24,6 +25,7 @@ struct AtmosphereParams {
     sun_colour: vec4<f32>,
     moon_colour: vec4<f32>,
     physical: array<vec4<f32>,5>,
+    weather_motion: array<vec4<f32>,2>,
 }
 
 fn ground_radius(p: AtmosphereParams) -> f32 { return select(GROUND_RADIUS, p.planet.w, p.planet.w > 0.0); }
@@ -91,6 +93,7 @@ struct CloudWeather {
     cover: f32, // horizontal cover in 0..1
     top: f32, // cloud-top altitude, km
     density: f32, // extinction scale in 0..1
+    base: f32, // local cloud-base altitude, km
 }
 
 // Built-in cover when no weather map is supplied: warped value noise with no
@@ -137,22 +140,30 @@ fn cloud_detail(position: vec3<f32>, texel: f32, footprint: f32) -> f32 {
 // edge; zero disables detail.
 fn cloud_weather(p: AtmosphereParams, position: vec3<f32>, footprint: f32,
     weather: texture_cube<f32>, filtering: sampler) -> CloudWeather {
-    if p.shell.y <= 0.0 { return CloudWeather(0.0, p.cloud.y, 0.0); }
+    if p.shell.y <= 0.0 { return CloudWeather(0.0, p.cloud.y, 0.0, p.cloud.x); }
     let unit = normalize(position);
     if p.cloud.z > 0.5 {
         // A footprint wider than a texel reads the mip that averages it;
         // a map without mips clamps to its only level.
         let texel_size = 2.0*ground_radius(p)/f32(textureDimensions(weather).x);
-        let texel = textureSampleLevel(weather, filtering, unit, log2(max(footprint/texel_size, 1.0)));
+        let coordinates = weather_coordinates(unit, p.weather_motion);
+        let texel = weather_sample(weather, filtering, coordinates, log2(max(footprint/texel_size, 1.0)));
         var cover = texel.r;
         if p.cloud.w > 0.0 && cover > 0.02 && cover < 0.98 && footprint < 0.5*texel_size {
             // Detail moves the edge where cover is partial and leaves clear
             // and overcast interiors alone.
-            cover = clamp(cover+p.cloud.w*4.0*cover*(1.0-cover)*cloud_detail(position, texel_size, footprint), 0.0, 1.0);
+            var detail = 0.0;
+            for(var i=0u;i<3u;i++) {
+                if coordinates.weights[i]>0.0 {
+                    detail += coordinates.weights[i]*cloud_detail(coordinates.departure[i]*length(position), texel_size, footprint);
+                }
+            }
+            cover = clamp(cover+p.cloud.w*4.0*cover*(1.0-cover)*detail, 0.0, 1.0);
         }
-        return CloudWeather(cover, mix(p.cloud.x, p.cloud.y, texel.g), texel.b);
+        let top = mix(p.cloud.x, p.cloud.y, texel.g);
+        return CloudWeather(cover, top, texel.b, top-(top-p.cloud.x)*texel.a);
     }
-    return CloudWeather(cloud_noise_cover(p, unit, footprint), p.cloud.y, 1.0);
+    return CloudWeather(cloud_noise_cover(p, unit, footprint), p.cloud.y, 1.0, p.cloud.x);
 }
 
 // Liquid water rises adiabatically above the cloud base, so extinction grows
@@ -185,9 +196,9 @@ fn cloud_peak_extinction(p: AtmosphereParams, w: CloudWeather) -> f32 {
 
 // Extinction of the delta-scaled medium at altitude h km, km^-1.
 fn cloud_extinction(p: AtmosphereParams, w: CloudWeather, h: f32) -> f32 {
-    let thickness = w.top-p.cloud.x;
+    let thickness = w.top-w.base;
     if thickness <= 0.0 { return 0.0; }
-    return cloud_peak_extinction(p, w)*cloud_profile((h-p.cloud.x)/thickness);
+    return cloud_peak_extinction(p, w)*cloud_profile((h-w.base)/thickness);
 }
 
 // Cloud droplet scattering: Jendersie & d'Eon (2023), "An Approximate Mie
@@ -264,6 +275,11 @@ fn cloud_shade(p: AtmosphereParams, position: vec3<f32>, weather: texture_cube<f
     return cloud_shade_source(p,position,p.sun.xyz,weather,filtering);
 }
 fn cloud_shade_source(p: AtmosphereParams, position: vec3<f32>, light:vec3<f32>, weather: texture_cube<f32>, filtering: sampler) -> f32 {
+    if p.cloud.z>0.5 {
+        let column=weather_shadow_column(position,light,ground_radius(p)+p.cloud.x,
+            ground_radius(p)+p.cloud.y,p.weather_motion,weather,filtering);
+        return 1.0-column.x*(1.0-cloud_slab_transmission(column.z,p.shell.z*CLOUD_DRAINE_WEIGHT*column.y));
+    }
     let exit = sphere_interval(position, light, ground_radius(p)+p.cloud.x).y;
     if exit <= 0.0 { return 1.0; }
     let crossing = position+light*exit;
@@ -272,7 +288,7 @@ fn cloud_shade_source(p: AtmosphereParams, position: vec3<f32>, light:vec3<f32>,
     if mu <= 0.0 { return 1.0; }
     let w = cloud_weather(p, crossing, 0.0, weather, filtering);
     if w.cover <= 0.0 { return 1.0; }
-    let column = p.shell.z*CLOUD_DRAINE_WEIGHT*w.density*(w.top-p.cloud.x)*cloud_profile_above(0.0);
+    let column = p.shell.z*CLOUD_DRAINE_WEIGHT*w.density*(w.top-w.base)*cloud_profile_above(0.0);
     return 1.0-w.cover*(1.0-cloud_slab_transmission(mu, column));
 }
 
@@ -287,7 +303,7 @@ fn cloud_sun_depth(p: AtmosphereParams, position: vec3<f32>, direction: vec3<f32
     if exit <= 0.0 { return vec2(0.0); }
     let reach = min(exit, 200.0);
     let segments = f32((1u<<CLOUD_SUN_SAMPLES)-1u);
-    let overcast = CloudWeather(1.0, local.top, local.density);
+    let overcast = CloudWeather(1.0, local.top, local.density, local.base);
     var own = 0.0;
     var depth = 0.0;
     var local_depth = 0.0;
@@ -600,7 +616,7 @@ fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>,
         var extinction = m.extinction;
         let local = cloud_weather(p, position, max(dt, t*pixel_angle), weather, filtering);
         var cloud = 0.0;
-        if local.cover > 0.0 { cloud = cloud_extinction(p, CloudWeather(1.0, local.top, local.density), h); }
+        if local.cover > 0.0 { cloud = cloud_extinction(p, CloudWeather(1.0, local.top, local.density, local.base), h); }
         if cloud > 0.0 {
             covered += local.cover*cloud*dt;
             weight += cloud*dt;
@@ -613,11 +629,11 @@ fn integrate_cloud(p: AtmosphereParams, origin: vec3<f32>, direction: vec3<f32>,
             if max(irradiance.x, max(irradiance.y, irradiance.z)) > 0.0 {
                 let sun_depth = cloud_sun_depth(p, position, light.xyz, local, weather, filtering);
                 let single = phase_draine(dot(direction, light.xyz))*exp(-sun_depth.x-sun_depth.y);
-                let thickness = local.top-p.cloud.x;
+                let thickness = local.top-local.base;
                 let column = p.shell.z*CLOUD_DRAINE_WEIGHT*local.density*thickness;
                 // Neighbouring cloud that shadows the direct beam also starves
                 // the diffuse field; applying its excess depth is a heuristic.
-                let diffuse = cloud_diffuse(cloud_profile_above((h-p.cloud.x)/thickness)*column,
+                let diffuse = cloud_diffuse(cloud_profile_above((h-local.base)/thickness)*column,
                     cloud_profile_above(0.0)*column, dot(normal, light.xyz), dot(direction, normal),
                     dot(p.ground.rgb, vec3(1.0/3.0)))*exp(-sun_depth.y);
                 cloudy_source += cloud*irradiance*(single+diffuse);

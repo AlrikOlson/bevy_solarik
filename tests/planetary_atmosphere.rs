@@ -1,5 +1,5 @@
 //! Public finite-shell configuration validation.
-use bevy_math::Vec3;
+use bevy_math::{Vec3, Vec4};
 use bevy_solarik::atmosphere::PlanetaryAtmosphere;
 
 fn planet() -> PlanetaryAtmosphere {
@@ -13,10 +13,29 @@ fn planet() -> PlanetaryAtmosphere {
         cloud_base: 2_000.0,
         cloud_top: 8_000.0,
         weather: None,
+        weather_motion: [Vec4::ZERO; 2],
         cloud_detail: 0.0,
         seed: 137,
         occluder: Vec3::ZERO,
         occluder_radius: 0.0,
+    }
+}
+
+#[test]
+fn weather_motion_rejects_nonfinite_or_reversed_belts() {
+    let mut p = planet();
+    p.weather_motion = [
+        Vec4::new(0.2, 6.28, 1.0, 0.0),
+        Vec4::new(0.5, 1.1, 0.04, 0.0),
+    ];
+    assert!(p.validate().is_ok());
+    for bad in [
+        Vec4::splat(f32::NAN),
+        Vec4::new(1.1, 0.5, 0.04, 0.0),
+        Vec4::new(0.5, 1.1, -0.1, 0.0),
+    ] {
+        p.weather_motion[1] = bad;
+        assert!(p.validate().is_err());
     }
 }
 

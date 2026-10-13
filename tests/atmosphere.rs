@@ -157,6 +157,8 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {{
                     [0.0; 4],
                     [0.0; 4],
                     [0.0; 4],
+                    [0.0; 4],
+                    [0.0; 4],
                 ];
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,

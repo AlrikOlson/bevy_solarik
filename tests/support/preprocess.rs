@@ -15,5 +15,9 @@ pub fn select(source: &str, defines: &[&str]) -> String {
     wesl::pass::condcomp(&mut module, &features).expect("production WESL variant");
     // The fixture supplies these dependencies explicitly; full graph tests verify their linking.
     module.imports.clear();
-    module.to_string()
+    if source.contains("import bevy_solarik::cloud_field") {
+        alloc::format!("{}\n{}", include_str!("../../src/cloud_field.wesl"), module)
+    } else {
+        module.to_string()
+    }
 }

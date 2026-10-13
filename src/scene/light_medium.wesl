@@ -23,6 +23,7 @@ struct LightMedium {
     // weather map gives it shape (above zero).
     cloud: vec4<f32>,
     physical: array<vec4<f32>,5>,
+    weather_motion: array<vec4<f32>,2>,
 }
 
 const MEDIUM_RAYLEIGH_HEIGHT: f32 = 8000.0;

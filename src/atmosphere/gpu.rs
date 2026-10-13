@@ -89,6 +89,7 @@ pub struct AtmospherePlugin;
 
 impl Plugin for AtmospherePlugin {
     fn build(&self, app: &mut App) {
+        crate::load_cloud_field(app);
         load_shader_library!(app, "model.wesl");
         embedded_asset!(app, "luts.wesl");
         embedded_asset!(app, "view.wesl");
@@ -462,6 +463,7 @@ fn generate_atmosphere(
             != planet.as_deref().map(|p| (p.radius, p.height));
     *gpu.uniform.get_mut() = state.uniform();
     if let Some(planet) = planet.as_deref() {
+        gpu.uniform.get_mut().weather_motion = planet.weather_motion;
         gpu.uniform.get_mut().planet = (planet.observer * 0.001).extend(planet.radius * 0.001);
         gpu.uniform.get_mut().shell = bevy_math::Vec4::new(
             (planet.radius + planet.height) * 0.001,

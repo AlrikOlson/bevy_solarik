@@ -8,6 +8,10 @@
 
 extern crate alloc;
 
+pub(crate) fn load_cloud_field(app: &mut bevy_app::App) {
+    bevy_shader::load_shader_library!(app, "cloud_field.wesl");
+}
+
 pub mod atmosphere;
 pub mod coarse_appearance;
 pub mod coarse_cache;

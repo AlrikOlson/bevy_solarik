@@ -483,7 +483,8 @@ pub(crate) fn prepare_raytracing_scene_bindings(
             weather
                 .and_then(|image| texture_assets.get(image.id()))
                 .is_some(),
-        ),
+        )
+        .history_key(),
         weather: weather.map(Handle::id),
         dfg: dfg_lut.texture.id(),
         rings: rings.0.clone(),
@@ -601,6 +602,18 @@ pub(crate) fn prepare_raytracing_scene_bindings(
         f64::from(scene_cache.history_stable_radius == 0.0),
         "count",
     );
+    // Motion only updates this fixed-size buffer. Do it before either fast
+    // return: moving weather must not rebuild the scene or reset all history.
+    let motion = planet
+        .as_deref()
+        .map_or([Vec4::ZERO; 2], |p| p.weather_motion);
+    if raytracing_scene_bindings.bind_group.is_some() {
+        let sky = &mut scene_cache.storage.sky;
+        if sky.get().medium.weather_motion != motion {
+            sky.get_mut().medium.weather_motion = motion;
+            sky.write_buffer_changed(&render_device, &render_queue);
+        }
+    }
     let reused = dirty_indices.is_empty()
         && !canopy.bindings_changed
         && removed.is_empty()
@@ -1680,6 +1693,7 @@ struct GpuLightMedium {
     mie: f32,
     cloud: Vec4,
     physical: [Vec4; 5],
+    weather_motion: [Vec4; 2],
 }
 
 /// Extinction of Earth's air at the ground, per metre: the atmosphere pass's
@@ -1693,6 +1707,12 @@ const MIE_EXTINCTION: f32 = 3.996e-6 / 0.9;
 const CLOUD_SCALED_SHARE: f32 = 0.498_159;
 
 impl GpuLightMedium {
+    /// Motion phases evolve under the existing temporal lighting machinery;
+    /// changing the flow model or actual optical medium still invalidates it.
+    fn history_key(mut self) -> Self {
+        self.weather_motion[0] = Vec4::ZERO;
+        self
+    }
     /// The air directional light crosses: that of the planetary atmosphere,
     /// when the scene has a valid one.
     fn new(
@@ -1709,6 +1729,7 @@ impl GpuLightMedium {
             mie: 0.0,
             cloud: Vec4::ZERO,
             physical: [Vec4::ZERO; 5],
+            weather_motion: [Vec4::ZERO; 2],
         };
         let (Some(planet), Some(atmosphere)) = (planet, atmosphere) else {
             return none;
@@ -1721,6 +1742,7 @@ impl GpuLightMedium {
                 [Vec4::ZERO; 5],
                 crate::atmosphere::PhysicalAtmosphere::gpu_fields,
             ),
+            weather_motion: planet.weather_motion,
             centre: planet.world_centre,
             radius: planet.radius,
             rayleigh: RAYLEIGH_EXTINCTION * atmosphere.medium.rayleigh,
@@ -1748,6 +1770,22 @@ fn tlas_transform(transform: &Mat4) -> [f32; 12] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weather_phases_preserve_scene_history_but_medium_and_belts_do_not() {
+        let base = GpuLightMedium::default();
+        let mut moving = base;
+        moving.weather_motion[0] = Vec4::new(0.4, 0.7, 0.9, 0.0);
+        assert_eq!(base.history_key(), moving.history_key());
+        moving.weather_motion[1].x = 0.5;
+        assert_ne!(base.history_key(), moving.history_key());
+        moving = base;
+        moving.cloud.z = 0.01;
+        assert_ne!(base.history_key(), moving.history_key());
+        moving = base;
+        moving.centre.x = 1.0;
+        assert_ne!(base.history_key(), moving.history_key());
+    }
     use bevy_transform::components::GlobalTransform;
     use bevy_transform::components::Transform;
 

@@ -254,6 +254,7 @@ impl AtmosphereState {
             ),
             sun_colour: self.sun_colour.extend(0.0),
             moon_colour: self.moon_colour.extend(0.0),
+            weather_motion: [Vec4::ZERO; 2],
         }
     }
 }
@@ -273,4 +274,5 @@ pub(crate) struct AtmosphereParams {
     sun_colour: Vec4,
     moon_colour: Vec4,
     physical: [Vec4; 5],
+    weather_motion: [Vec4; 2],
 }

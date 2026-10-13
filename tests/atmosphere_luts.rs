@@ -125,7 +125,7 @@ fn lut_source(definition: &str) -> String {
     )
 }
 
-fn parameters(state: &AtmosphereState) -> [[f32; 4]; 17] {
+fn parameters(state: &AtmosphereState) -> [[f32; 4]; 19] {
     [
         [
             state.medium.rayleigh,
@@ -161,6 +161,8 @@ fn parameters(state: &AtmosphereState) -> [[f32; 4]; 17] {
         ],
         state.sun_colour.extend(0.0).to_array(),
         state.moon_colour.extend(0.0).to_array(),
+        [0.0; 4],
+        [0.0; 4],
         [0.0; 4],
         [0.0; 4],
         [0.0; 4],
@@ -276,7 +278,7 @@ impl Luts {
         self.generate_parameters(&parameters(state));
     }
 
-    fn generate_parameters(&self, parameters: &[[f32; 4]; 17]) {
+    fn generate_parameters(&self, parameters: &[[f32; 4]; 19]) {
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -675,7 +677,7 @@ const VIEW_PROBE: &str = "integrate_view(p,observer_position(p),d.xyz,d.w,u32(p.
 
 impl Luts {
     /// Clear-air transport, as used by lookup fields.
-    fn probe(&self, params: &[[f32; 4]; 17], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    fn probe(&self, params: &[[f32; 4]; 19], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
         self.probe_with(
             "integrate_atmosphere(p,observer_position(p),d.xyz,d.w,u32(p.observer.w)*2u,trans,multiple,filtering,false)",
             params,
@@ -684,14 +686,14 @@ impl Luts {
     }
 
     /// Planetary view transport including the cloud shell, as composited.
-    fn probe_view(&self, params: &[[f32; 4]; 17], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    fn probe_view(&self, params: &[[f32; 4]; 19], directions: &[[f32; 4]]) -> Vec<[f32; 4]> {
         self.probe_with(VIEW_PROBE, params, directions)
     }
 
     fn probe_with(
         &self,
         call: &str,
-        params: &[[f32; 4]; 17],
+        params: &[[f32; 4]; 19],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
         self.probe_program("", call, [0; 4], params, directions)
@@ -705,7 +707,7 @@ impl Luts {
         helpers: &str,
         call: &str,
         weather_texel: [u8; 4],
-        params: &[[f32; 4]; 17],
+        params: &[[f32; 4]; 19],
         directions: &[[f32; 4]],
     ) -> Vec<[f32; 4]> {
         let model = include_str!("../src/atmosphere/model.wesl")

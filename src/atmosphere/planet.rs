@@ -1,7 +1,7 @@
 use bevy_asset::Handle;
 use bevy_ecs::resource::Resource;
 use bevy_image::Image;
-use bevy_math::Vec3;
+use bevy_math::{Vec3, Vec4};
 use bevy_render::extract_resource::ExtractResource;
 
 /// Thinnest cloud shell the view march is expected to resolve, metres.
@@ -37,10 +37,17 @@ pub struct PlanetaryAtmosphere {
     /// Optional cube weather map, sampled with the body-fixed unit direction
     /// using the standard cube face convention. R: cover in 0..1. G: local
     /// cloud-top height as a fraction between `cloud_base` and `cloud_top`.
-    /// B: extinction scale in 0..1. The application owns its contents. If it
+    /// B: extinction scale in 0..1. A: local thickness divided by the distance
+    /// from the global base to the local top (one preserves the old base).
+    /// The application owns its contents. If it
     /// has mips, a footprint wider than a texel reads the level that averages
     /// it; averaging cover is exact under the independent-column blend.
     pub weather: Option<Handle<Image>>,
+    /// Prescribed body-fixed advection. First row: three longitude departure
+    /// phases in radians (reduce in f64 before uploading), reserved. Second:
+    /// absolute-latitude belt edges, transition half-width, reserved. Zero
+    /// width keeps the static map. Blend columns across belts, never phases.
+    pub weather_motion: [Vec4; 2],
     /// Sub-texel detail for a weather map, 0..1: the cover change that one
     /// standard deviation of the first octave below the map's texel size
     /// causes at a cloud edge. Zero disables it.
@@ -55,6 +62,16 @@ pub struct PlanetaryAtmosphere {
 impl PlanetaryAtmosphere {
     /// Validate finite geometry before generating lookup fields.
     pub fn validate(&self) -> Result<(), &'static str> {
+        let belts = self.weather_motion[1];
+        if self.weather_motion.iter().any(|v| !v.is_finite())
+            || belts.z < 0.0
+            || (belts.z > 0.0
+                && (belts.x < belts.z
+                    || belts.y <= belts.x + 2.0 * belts.z
+                    || belts.y + belts.z > core::f32::consts::FRAC_PI_2))
+        {
+            return Err("invalid cloud advection phases or latitude belts");
+        }
         if !self.radius.is_finite()
             || !(100_000.0..=100_000_000.0).contains(&self.radius)
             || !self.height.is_finite()
