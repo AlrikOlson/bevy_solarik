@@ -21,6 +21,12 @@ const RECIPE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/meshlet-compiler
 static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
 
 impl MeshletMesh {
+    /// Identity of the compiler implementation, policy and toolchain used by derived assets.
+    /// Higher-level cooked source packages must include this in their input identity.
+    pub fn compiler_recipe() -> &'static [u8] {
+        RECIPE
+    }
+
     /// Compile or load byte-identical derived geometry. The key includes every
     /// mesh input, conversion policy, source recipe and verified build toolchain.
     /// Corrupt, obsolete, unavailable or full caches fall back without affecting
