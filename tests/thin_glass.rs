@@ -135,7 +135,7 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
                 let samples: &[[f32; 4]] = bytemuck::cast_slice(&data);
                 let mut reflections = 0;
                 let mut energy = [0.0f64; 3];
-                for sample in samples.chunks_exact(3) {
+                for sample in samples.as_chunks::<3>().0 {
                     assert!(
                         sample.iter().flatten().all(|x| x.is_finite()),
                         "finite at endpoints"

@@ -552,7 +552,9 @@ impl PipelineCache {
 
         create_pipeline_task(
             async move {
+                trace_pipeline(id, "render-wait", descriptor.label.as_deref());
                 let mut shader_cache = shader_cache.lock().unwrap();
+                trace_pipeline(id, "render-link", descriptor.label.as_deref());
                 let mut layout_cache = layout_cache.lock().unwrap();
 
                 let vertex_module = match shader_cache.get(
@@ -647,9 +649,10 @@ impl PipelineCache {
                     cache: None,
                 };
 
-                Ok(Pipeline::RenderPipeline(
-                    device.create_render_pipeline(&descriptor),
-                ))
+                trace_pipeline(id, "render-driver", descriptor.label);
+                let pipeline = device.create_render_pipeline(&descriptor);
+                trace_pipeline(id, "render-ready", descriptor.label);
+                Ok(Pipeline::RenderPipeline(pipeline))
             },
             self.synchronous_pipeline_compilation,
         )
@@ -674,7 +677,9 @@ impl PipelineCache {
 
         create_pipeline_task(
             async move {
+                trace_pipeline(id, "compute-wait", descriptor.label.as_deref());
                 let mut shader_cache = shader_cache.lock().unwrap();
+                trace_pipeline(id, "compute-link", descriptor.label.as_deref());
                 let mut layout_cache = layout_cache.lock().unwrap();
 
                 let compute_module =
@@ -709,9 +714,10 @@ impl PipelineCache {
                     cache: None,
                 };
 
-                Ok(Pipeline::ComputePipeline(
-                    device.create_compute_pipeline(&descriptor),
-                ))
+                trace_pipeline(id, "compute-driver", descriptor.label);
+                let pipeline = device.create_compute_pipeline(&descriptor);
+                trace_pipeline(id, "compute-ready", descriptor.label);
+                Ok(Pipeline::ComputePipeline(pipeline))
             },
             self.synchronous_pipeline_compilation,
         )
@@ -987,6 +993,14 @@ impl PipelineCache {
                 }
             }
         }
+    }
+}
+
+// Opt-in startup diagnostics; no frame polling or output in ordinary runs.
+fn trace_pipeline(id: CachedPipelineId, stage: &str, label: Option<&str>) {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var("BEVY_PIPELINE_TRACE").is_ok_and(|v| v == "1")) {
+        bevy_log::info!(id, stage, label, "pipeline startup trace");
     }
 }
 

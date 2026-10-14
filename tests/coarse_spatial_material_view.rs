@@ -140,7 +140,7 @@ fn native_spatial_material_views() {
                 )
                 .unwrap();
                 assert_eq!(old.len(), samples.len() * 16);
-                for (s, bytes) in samples.iter().zip(old.chunks_exact(16)) {
+                for (s, bytes) in samples.iter().zip(old.as_chunks::<16>().0) {
                     let previous: [f32; 4] = bytemuck::pod_read_unaligned(bytes);
                     assert_eq!(s.meta[1], 0);
                     assert_eq!(s.meta[0] as f32, previous[0]);

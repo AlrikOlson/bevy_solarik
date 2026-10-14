@@ -1,7 +1,6 @@
 // The test dispatcher uses the production immutable `RenderDevice` upload.
-#[path = "preprocess.rs"]
-mod preprocess;
 use super::Probe;
+use super::preprocess;
 use bevy_render::renderer::RenderDevice;
 use bevy_solarik::coarse_spatial_scene::{self, PackedSpatial};
 use wgpu::util::DeviceExt;

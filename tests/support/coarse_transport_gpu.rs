@@ -1,6 +1,5 @@
 use super::Probe;
-#[path = "preprocess.rs"]
-mod preprocess;
+use super::preprocess;
 use wgpu::util::DeviceExt;
 pub fn pipeline(device: &wgpu::Device, entry: &str) -> wgpu::ComputePipeline {
     let source = [

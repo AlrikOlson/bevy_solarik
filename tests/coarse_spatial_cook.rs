@@ -13,6 +13,8 @@ mod cook_gpu;
 mod gpu;
 #[path = "support/source_coverage_input.rs"]
 mod input;
+#[path = "support/preprocess.rs"]
+mod preprocess;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
 use bevy_solarik::{coarse_cache, coarse_spatial::SpatialCache};
 use std::{path::Path, time::Instant};

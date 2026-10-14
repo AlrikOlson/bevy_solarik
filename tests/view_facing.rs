@@ -45,6 +45,7 @@ fn run_probe() -> Vec<[f32; 4]> {
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
+        let production = preprocess::select(&production, &[]);
         let production = format!("{lommel}\n{gaussian}\n{production}");
         let source = format!("{production}\n{}", include_str!("view_facing_fixture.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -132,7 +133,7 @@ fn view_facing_gpu() {
         rough > 5.0 * smooth,
         "a rough surface seen edge-on is not dark"
     );
-    for sample in samples.chunks_exact(4) {
+    for sample in samples.as_chunks::<4>().0 {
         assert!(sample.iter().flatten().all(|x| x.is_finite()));
         let (given, mirrored) = (sample[0], sample[1]);
         let cosine = mirrored[3];

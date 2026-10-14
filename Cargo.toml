@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "vendor/bevy_render", "vendor/bevy_pbr"]
-exclude = ["vendor/wgpu-core", "vendor/wgpu-hal"]
+members = ["vendor/bevy_render", "vendor/bevy_pbr"]
+exclude = ["vendor/wgpu-core", "vendor/wgpu-hal", "vendor/meshopt"]
 resolver = "3"
 
 [package]

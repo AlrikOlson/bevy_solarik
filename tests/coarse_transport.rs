@@ -11,6 +11,7 @@ mod input;
 mod reference;
 use bevy_render::{renderer::initialize_headless_renderer, settings::WgpuSettings};
 use bevy_solarik::{coarse_cache, coarse_scene::PackedSource, coarse_transport};
+use reference::preprocess;
 use std::{path::Path, time::Instant};
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]

@@ -64,8 +64,10 @@ fn decode(bytes: &[u8], key: [u8; 32], count: usize) -> Option<Vec<[f32; 4]>> {
         return None;
     }
     let values: Vec<[f32; 4]> = bytes[HEADER..]
-        .chunks_exact(16)
-        .map(bytemuck::pod_read_unaligned)
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|bytes| bytemuck::pod_read_unaligned(bytes))
         .collect();
     values
         .iter()

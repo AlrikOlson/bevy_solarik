@@ -75,7 +75,9 @@ pub(super) fn triangle_edges(mesh: &Mesh) -> Vec<[Vec3; 2]> {
     };
     let indices: Vec<_> = indices.iter().collect();
     indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .filter_map(|triangle| {
             let a = Vec3::from_array(*positions.get(triangle[0])?);
             let b = Vec3::from_array(*positions.get(triangle[1])?);

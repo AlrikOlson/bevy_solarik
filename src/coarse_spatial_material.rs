@@ -89,12 +89,16 @@ impl MaterialCache {
         let cache = Self {
             identity,
             materials: bytes[HEADER..end]
-                .chunks_exact(48)
-                .map(bytemuck::pod_read_unaligned)
+                .as_chunks::<48>()
+                .0
+                .iter()
+                .map(|bytes| bytemuck::pod_read_unaligned(bytes))
                 .collect(),
             surfaces: bytes[end..]
-                .chunks_exact(48)
-                .map(bytemuck::pod_read_unaligned)
+                .as_chunks::<48>()
+                .0
+                .iter()
+                .map(|bytes| bytemuck::pod_read_unaligned(bytes))
                 .collect(),
         };
         cache.valid(spatial, source).then_some(cache)

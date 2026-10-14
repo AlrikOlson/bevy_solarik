@@ -200,15 +200,19 @@ fn spatial_source_materials_match_original_hit_selection() {
             let bytes =
                 std::fs::read(Path::new(&spatial_root).join(format!("rays-{id}.bin"))).unwrap();
             let rays: Vec<[f32; 8]> = bytes
-                .chunks_exact(32)
-                .map(bytemuck::pod_read_unaligned)
+                .as_chunks::<32>()
+                .0
+                .iter()
+                .map(|bytes| bytemuck::pod_read_unaligned(bytes))
                 .collect();
             assert_eq!(rays.len(), 655360);
             let old =
                 std::fs::read(Path::new(&references).join(format!("reference-{id}.bin"))).unwrap();
             let expected: Vec<[f32; 4]> = old
-                .chunks_exact(16)
-                .map(bytemuck::pod_read_unaligned)
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .map(|bytes| bytemuck::pod_read_unaligned(bytes))
                 .collect();
             assert_eq!(expected.len(), rays.len());
             let mut values = Vec::new();

@@ -1,6 +1,5 @@
 use super::acceleration::Scene;
-#[path = "preprocess.rs"]
-mod preprocess;
+use super::preprocess;
 use wgpu::util::DeviceExt;
 pub fn pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
     let shared = bevy_solarik::coarse_spatial::PACK_SHADER

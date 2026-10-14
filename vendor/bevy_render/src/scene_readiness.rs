@@ -70,10 +70,10 @@ impl SceneGeometryReadiness {
         }
     }
     pub fn revoke(&self, id: UntypedAssetId) {
-        if let Ok(mut state) = self.0.state.lock() {
-            if state.ready.remove(&id) {
-                self.0.revision.fetch_add(1, Ordering::Release);
-            }
+        if let Ok(mut state) = self.0.state.lock()
+            && state.ready.remove(&id)
+        {
+            self.0.revision.fetch_add(1, Ordering::Release);
         }
     }
     pub fn requested<A: Asset>(&self) -> Vec<AssetId<A>> {

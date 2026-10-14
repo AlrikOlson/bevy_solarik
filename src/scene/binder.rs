@@ -667,10 +667,8 @@ pub(crate) fn prepare_raytracing_scene_bindings(
     raytracing_scene_bindings.has_foliage = false;
 
     let mut this_frame_entity_to_light_id = HashMap::<SceneInstance, u32>::default();
-    let previous_frame_light_entities: Vec<_> = raytracing_scene_bindings
-        .previous_frame_light_entities
-        .drain(..)
-        .collect();
+    let previous_frame_light_entities =
+        core::mem::take(&mut raytracing_scene_bindings.previous_frame_light_entities);
 
     if instances_query.len() == 0 {
         scene_cache.tlas.prepare(&render_device, 0);

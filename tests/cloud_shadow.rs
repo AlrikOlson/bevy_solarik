@@ -49,7 +49,7 @@ fn cloud_shadow_gpu() {
         assert!(scene > 0.0 && scene < 1.0, "{case:?}: {scene}");
     }
     // Thicker cloud is darker beneath, at every sun height.
-    for sun in results.chunks_exact(6) {
+    for sun in results.as_chunks::<6>().0 {
         assert!(
             sun.windows(2).all(|pair| pair[1][1] < pair[0][1]),
             "{sun:?}"

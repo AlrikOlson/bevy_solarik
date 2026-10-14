@@ -53,6 +53,11 @@ fn scene_consumers_compose_across_production_feature_variants() {
                 stage_definitions.push("WORLD_CACHE_FIRST_BOUNCE_LIGHT_LEAK_PREVENTION".into());
             }
             graph.validate(&module, &stage_definitions);
+            if consumer == "realtime::restir_gi" {
+                let mut direct_definitions = stage_definitions.clone();
+                direct_definitions.push("NO_WORLD_CACHE".into());
+                graph.validate(&module, &direct_definitions);
+            }
             if consumer == "realtime::primary_foliage" {
                 let mut direct_definitions = stage_definitions.clone();
                 direct_definitions.push("PRIMARY_CANOPY_DIRECT_ONLY".into());

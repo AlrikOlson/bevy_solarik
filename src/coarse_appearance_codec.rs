@@ -59,13 +59,17 @@ pub fn decode(bytes: &[u8], identity: [u8; 32], source: &SourceCache) -> Option<
         identity,
         materials: bytes
             .get(HEADER..split)?
-            .chunks_exact(size_of::<Material>())
-            .map(bytemuck::pod_read_unaligned)
+            .as_chunks::<{ size_of::<Material>() }>()
+            .0
+            .iter()
+            .map(|bytes| bytemuck::pod_read_unaligned(bytes))
             .collect(),
         moments: bytes
             .get(split..)?
-            .chunks_exact(size_of::<Moment>())
-            .map(bytemuck::pod_read_unaligned)
+            .as_chunks::<{ size_of::<Moment>() }>()
+            .0
+            .iter()
+            .map(|bytes| bytemuck::pod_read_unaligned(bytes))
             .collect(),
     };
     cache.valid(source).then_some(cache)

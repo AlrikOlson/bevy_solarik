@@ -21,7 +21,7 @@ fn unit_axis_fit_has_analytic_optical_depth_and_reciprocity() {
         assert_eq!(lengths, vec![1.; 64]);
         assert!((f64::from(fit(0.5, &lengths).unwrap()) - 2.0_f64.ln()).abs() < 3e-8);
     }
-    for pair in directions().chunks_exact(2) {
+    for pair in directions().as_chunks::<2>().0 {
         let mut a = chords(pair[0], 8);
         let mut b = chords(pair[1], 8);
         a.sort_by(f64::total_cmp);

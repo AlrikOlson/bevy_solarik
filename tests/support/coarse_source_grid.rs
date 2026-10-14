@@ -30,7 +30,7 @@ pub fn cells(input: &Input, resolution: u32) -> Vec<Cell> {
     };
     let mut occupied = vec![false; volume];
     let mut work = 0u64;
-    for triangle in input.indices.chunks_exact(3) {
+    for triangle in input.indices.as_chunks::<3>().0 {
         let points = [
             addresses[triangle[0] as usize],
             addresses[triangle[1] as usize],

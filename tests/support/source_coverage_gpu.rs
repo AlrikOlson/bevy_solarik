@@ -1,6 +1,6 @@
 use super::{Probe, acceleration::Scene};
 #[path = "preprocess.rs"]
-mod preprocess;
+pub(super) mod preprocess;
 
 pub fn pipeline(device: &wgpu::Device, source: &str) -> wgpu::ComputePipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

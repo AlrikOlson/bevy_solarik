@@ -21,7 +21,7 @@ impl PackedSpatial {
         }
         let mut rows = Vec::with_capacity(words.len() / 64);
         let mut hits = Vec::new();
-        for chunk in words.chunks_exact(64) {
+        for chunk in words.as_chunks::<64>().0 {
             let mut row = [0, 0, hits.len() as u32, 0];
             for (i, &word) in chunk.iter().enumerate() {
                 if word != 0 {

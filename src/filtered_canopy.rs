@@ -133,7 +133,9 @@ impl PreparedRegion {
     pub fn cell_inputs(&self) -> impl Iterator<Item = CellInput> + '_ {
         let start = self.rows[0][2] as usize;
         self.rows[start..start + self.cells * CELL_ROWS]
-            .chunks_exact(CELL_ROWS)
+            .as_chunks::<CELL_ROWS>()
+            .0
+            .iter()
             .map(|rows| CellInput {
                 cell: core::array::from_fn(|i| rows[i].map(f32::from_bits)),
                 identity: u64::from(rows[7][0]) | (u64::from(rows[7][1]) << 32),

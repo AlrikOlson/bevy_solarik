@@ -105,7 +105,7 @@ fn gaussian_gpu_readback() {
     let values = run_probe();
     for (wind, samples) in [1.0_f64, 5.0, 12.0]
         .into_iter()
-        .zip(values.chunks_exact(4096))
+        .zip(values.as_chunks::<4096>().0)
     {
         let a2 = 0.003 + 0.00508 * wind;
         let (mut integral, mut moment) = (0.0, 0.0);

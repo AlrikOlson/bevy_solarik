@@ -1250,7 +1250,7 @@ fn profile_probe(d:vec4<f32>)->AtmosphereTransport {
     let m=sample_medium(p,d.x);
     return AtmosphereTransport(m.scattering,m.extinction);
 }"#, "profile_probe(d)",[0;4],&p,&samples);
-            for (i, pair) in result.chunks_exact(2).enumerate() {
+            for (i, pair) in result.as_chunks::<2>().0.iter().enumerate() {
                 let h = i as f64 - 12.0;
                 // Independent hydrostatic pressure integration with 10m midpoint cells.
                 let count = ((h.abs() * 100.0) as usize).max(1);

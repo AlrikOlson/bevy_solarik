@@ -46,6 +46,7 @@ fn foliage_gpu() {
             .filter(|l| !l.starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n");
+        let production = preprocess::select(&production, &[]);
         let production = format!("{lommel}\n{gaussian}\n{production}");
         let source = format!(
             "{production}\n{math}\n{}",
@@ -122,7 +123,7 @@ fn foliage_gpu() {
 
             let mut back = 0;
             let mut energy = [0.0f64; 3];
-            for sample in samples.chunks_exact(3) {
+            for sample in samples.as_chunks::<3>().0 {
                 assert!(sample.iter().flatten().all(|x| x.is_finite()));
                 assert_eq!(sample[0][3], 1.0, "depth ownership and PDF conversion");
                 back += usize::from(sample[0][2] < 0.0);

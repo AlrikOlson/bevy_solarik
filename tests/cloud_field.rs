@@ -49,11 +49,8 @@ fn cloud_field_gpu_advection_columns_and_units() {
         "quarter turn reaches -Z face"
     );
     for (a, b) in [(2, 3), (4, 5)] {
-        for i in 0..4 {
-            assert!(
-                (values[a * 4][i] - values[b * 4][i]).abs() < 1e-5,
-                "phase wrap in belt blend"
-            );
+        for (left, right) in values[a * 4].iter().zip(&values[b * 4]) {
+            assert!((left - right).abs() < 1e-5, "phase wrap in belt blend");
         }
     }
     let top = 800.0 + 204.0 / 255.0 * 15700.0;

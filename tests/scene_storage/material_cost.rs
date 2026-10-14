@@ -62,13 +62,17 @@ fn material_only_updates_do_not_need_to_serialize_unchanged_banks() {
         let identity = Mat4::IDENTITY.to_cols_array().map(f32::to_bits);
         assert!(
             read(&device, &queue, &current)[1..]
-                .chunks_exact(16)
-                .all(|m| m == identity)
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .all(|m| *m == identity)
         );
         assert!(
             read(&device, &queue, &previous)[1..]
-                .chunks_exact(16)
-                .all(|m| m == identity)
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .all(|m| *m == identity)
         );
         assert!(
             read(&device, &queue, &geometry)[1..]

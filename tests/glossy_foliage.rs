@@ -10,6 +10,12 @@ fn shader_body(source: &str, rr: bool) -> String {
             "return textureSampleLevel(brdf_dfg_lut, brdf_dfg_lut_sampler, vec2<f32>(NdotV, perceptual_roughness), 0.0).rg;",
             "return vec2(1.0 - pow(1.0 - NdotV, 5.0), pow(1.0 - NdotV, 5.0));");
     preprocess::select(&source, if rr { &["DLSS_RR_GUIDE_BUFFERS"] } else { &[] })
+        .lines()
+        // This fixture supplies deterministic scene I/O and does not issue ray queries.
+        // Production feature validation retains the real capability declarations.
+        .filter(|line| !line.starts_with("enable "))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
@@ -140,7 +146,7 @@ fn glossy_foliage_gpu() {
                     .expect("completed GPU readback range");
                 let values: &[[f32; 4]] = bytemuck::cast_slice(&data);
                 let mut mean = [0.0f64; 3];
-                for sample in values.chunks_exact(2) {
+                for sample in values.as_chunks::<2>().0 {
                     assert!(
                         sample.iter().flatten().all(|v| v.is_finite()),
                         "{name}: finite"

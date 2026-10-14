@@ -60,7 +60,7 @@ fn cook_original_source_cells() {
                     let tasks = grid::tasks(batch, 8);
                     queue.write_buffer(&scene.buffers[4], 0, bytemuck::cast_slice(&tasks));
                     let rows = gpu::trace(device, queue, &pipeline, &scene, tasks.len());
-                    for (cell, rows) in batch.iter_mut().zip(rows.chunks_exact(DIRECTIONS)) {
+                    for (cell, rows) in batch.iter_mut().zip(rows.as_chunks::<DIRECTIONS>().0) {
                         for (direction, row) in rows.iter().enumerate() {
                             assert!(
                                 row.validate(8),

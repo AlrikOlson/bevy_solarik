@@ -136,7 +136,9 @@ fn cache_support_rejects_moving_distant_blockers_and_preserves_bounded_unaffecte
         .with_inserted_attribute(
             bevy_mesh::Mesh::ATTRIBUTE_POSITION,
             vertices
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|v| [v[0], v[1], v[2]])
                 .collect::<Vec<_>>(),
         );

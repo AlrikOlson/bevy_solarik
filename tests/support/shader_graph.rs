@@ -1,8 +1,9 @@
 //! Link the same physical WESL modules and compiler used by Bevy's pipeline cache.
+extern crate alloc;
+use alloc::collections::BTreeMap;
 use bevy_asset::{AssetId, Assets};
 use bevy_shader::{Shader, ShaderCache, ShaderCacheSource, ShaderDefVal};
 use std::{
-    collections::BTreeMap,
     path::{Path, PathBuf},
     process::Command,
 };

@@ -75,7 +75,7 @@ pub fn check(
         let uploaded = gpu::upload(device, queue, &appearance);
         queue.write_buffer(&scene.buffers[4], 0, bytemuck::cast_slice(&tasks));
         let (rows, _) = gpu::run::<Sample>(device, queue, pipeline, &scene, &uploaded, 128, None);
-        for (face, row) in rows.chunks_exact(64).enumerate() {
+        for (face, row) in rows.as_chunks::<64>().0.iter().enumerate() {
             let count = row.iter().filter(|v| v.meta[0] != 0).count();
             assert_eq!(
                 count,

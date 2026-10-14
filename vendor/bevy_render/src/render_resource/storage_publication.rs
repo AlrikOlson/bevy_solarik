@@ -59,7 +59,7 @@ mod tests {
             .collect();
         let packed = coalesce(ranges);
         assert_eq!(packed.len(), 1);
-        assert_eq!(packed, [0..1024 * 32 - 4]);
+        assert_eq!(packed[0], 0..1024 * 32 - 4);
         assert!(packed[0].len() <= 4 * 1024 * 2 * 4);
     }
 
@@ -90,7 +90,7 @@ mod tests {
                 .map(|i| i * (4 + gap)..i * (4 + gap) + 4)
                 .collect();
             let packed = coalesce(ranges.clone());
-            assert!(packed.iter().map(|r| r.len()).sum::<usize>() <= 4 * 4096);
+            assert!(packed.iter().map(ExactSizeIterator::len).sum::<usize>() <= 4 * 4096);
             for original in &ranges {
                 assert!(
                     packed

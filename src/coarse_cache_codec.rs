@@ -48,8 +48,10 @@ pub fn decode(bytes: &[u8], identity: [u8; 32]) -> Option<SourceCache> {
         return None;
     }
     let cells = payload
-        .chunks_exact(size_of::<Cell>())
-        .map(bytemuck::pod_read_unaligned)
+        .as_chunks::<{ size_of::<Cell>() }>()
+        .0
+        .iter()
+        .map(|bytes| bytemuck::pod_read_unaligned(bytes))
         .collect();
     let cache = SourceCache {
         identity,

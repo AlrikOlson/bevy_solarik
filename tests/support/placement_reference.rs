@@ -38,7 +38,12 @@ pub fn fixture() -> (Vec<Case>, usize) {
     assert_eq!(stride, 172);
     assert!(synthetic >= 1000 && real > 0 && count == synthetic + real);
     assert_eq!(bytes.len(), 24 + count as usize * stride as usize);
-    let cases = bytes[24..].chunks_exact(172).map(case).collect();
+    let cases = bytes[24..]
+        .as_chunks::<172>()
+        .0
+        .iter()
+        .map(|bytes| case(bytes))
+        .collect();
     (cases, synthetic as usize)
 }
 

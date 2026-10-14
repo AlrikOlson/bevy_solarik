@@ -56,7 +56,7 @@ fn validate_row(data: &[[u32; 4]], row: [u32; 4], next: usize) -> Result<usize, 
         return Err("invalid canopy source row");
     }
     let mut cdf = 0.;
-    for mark in data[next..end].chunks_exact(3) {
+    for mark in data[next..end].as_chunks::<3>().0 {
         let n = mark[0].map(f32::from_bits);
         let color = mark[1][..3].iter().map(|x| f32::from_bits(*x));
         let surface = mark[2].map(f32::from_bits);

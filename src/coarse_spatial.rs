@@ -24,9 +24,9 @@ impl SpatialCache {
         for (cell, samples) in source
             .cells
             .iter()
-            .zip(self.samples.chunks_exact(WORDS_PER_CELL))
+            .zip(self.samples.as_chunks::<WORDS_PER_CELL>().0)
         {
-            for (direction, row) in cell.directions[..6].iter().zip(samples.chunks_exact(64)) {
+            for (direction, row) in cell.directions[..6].iter().zip(samples.as_chunks::<64>().0) {
                 let mut counts = [0u32; 8];
                 for &word in row {
                     if word == 0 {
@@ -97,15 +97,19 @@ impl SpatialCache {
             parts: meta & 255,
             two_sided: (meta >> 8) & 255,
             samples: bytes[HEADER..]
-                .chunks_exact(4)
-                .map(bytemuck::pod_read_unaligned)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| bytemuck::pod_read_unaligned(bytes))
                 .collect(),
         };
         cache.valid(source).then_some(cache)
     }
     pub fn unknown_cells(&self) -> Vec<u32> {
         self.samples
-            .chunks_exact(WORDS_PER_CELL)
+            .as_chunks::<WORDS_PER_CELL>()
+            .0
+            .iter()
             .map(|c| u32::from(c.iter().all(|&w| w == 0)))
             .collect()
     }
