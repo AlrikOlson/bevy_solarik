@@ -340,6 +340,7 @@ fn persistent_raw_scene_receipt_handles_motion_catchup_optional_removals_and_mem
     }
     inputs = capture(&mut world);
     world.entity_mut(entity).insert(MeshletVisibilityCutout {
+        offset: bevy_math::UVec2::ZERO,
         size: bevy_math::UVec2::ZERO,
         layer: 1,
         cutoff: 0.5,
@@ -352,6 +353,16 @@ fn persistent_raw_scene_receipt_handles_motion_catchup_optional_removals_and_mem
         .unwrap()
         .cutoff = 0.4;
     assert!(!matches(&mut world, &inputs));
+    inputs = capture(&mut world);
+    world
+        .entity_mut(entity)
+        .get_mut::<MeshletVisibilityCutout>()
+        .unwrap()
+        .offset = bevy_math::UVec2::ONE;
+    assert!(
+        !matches(&mut world, &inputs),
+        "changing physical origin must invalidate cached metadata"
+    );
     inputs = capture(&mut world);
     world.entity_mut(entity).remove::<MeshletVisibilityCutout>();
     assert!(!matches(&mut world, &inputs));

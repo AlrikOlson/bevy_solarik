@@ -1,4 +1,7 @@
-use super::{MeshletCutoutAtlas, MeshletDoubleSided, MeshletVisibilityCutout, cutout::metadata};
+use super::{
+    MeshletCutoutAtlas, MeshletDoubleSided, MeshletVisibilityCutout,
+    cutout::{metadata, with_sidedness},
+};
 use super::{MeshletMesh, MeshletMesh3d, meshlet_mesh_manager::MeshletMeshManager};
 // Retained meshlet slots keep their established private no-material identity.
 // The upstream material query now uses Option; it does not own these slot keys.
@@ -58,7 +61,7 @@ pub(crate) struct InstanceInput {
     layers: RenderLayers,
     not_shadow_receiver: bool,
     not_shadow_caster: bool,
-    cutout: Option<(u32, u32, u32, u32)>,
+    cutout: Option<[u32; 6]>,
     double_sided: bool,
 }
 
@@ -90,7 +93,7 @@ impl InstanceInput {
             layers: layers.cloned().unwrap_or_default(),
             not_shadow_receiver: receiver,
             not_shadow_caster: caster,
-            cutout: cutout.map(|c| (c.layer, c.cutoff.to_bits(), c.size.x, c.size.y)),
+            cutout: cutout.map(MeshletVisibilityCutout::key),
             double_sided,
         }
     }
@@ -109,7 +112,7 @@ impl InstanceInput {
             && self.layers == *layers.unwrap_or_default()
             && self.not_shadow_receiver == receiver
             && self.not_shadow_caster == caster
-            && self.cutout == cutout.map(|c| (c.layer, c.cutoff.to_bits(), c.size.x, c.size.y))
+            && self.cutout == cutout.map(MeshletVisibilityCutout::key)
             && self.double_sided == double_sided
     }
 }
@@ -767,8 +770,7 @@ pub fn extract_meshlet_mesh_entities(
     let mut mesh_metadata: HashMap<AssetId<MeshletMesh>, Option<(u32, MeshletAabb, u32)>> =
         HashMap::default();
     // Shared alpha metadata is validated once per exact source layer/cutoff/sidedness.
-    let mut alpha_metadata: HashMap<(Option<(u32, u32, u32, u32)>, bool), Option<Vec4>> =
-        HashMap::default();
+    let mut alpha_metadata: HashMap<(Option<[u32; 6]>, bool), Option<Vec4>> = HashMap::default();
 
     // Iterate over every instance
     let mut query_count = 0;
@@ -849,10 +851,7 @@ pub fn extract_meshlet_mesh_entities(
         let alpha = *alpha_metadata
             .entry((input.cutout, double_sided))
             .or_insert_with(|| {
-                metadata(cutout, &atlas, &images).map(|mut value| {
-                    value.z = f32::from(double_sided);
-                    value
-                })
+                metadata(cutout, &atlas, &images).map(|value| with_sidedness(value, double_sided))
             });
         instance_manager.inputs[query_position] = Some(input);
         let Some(cutout) = alpha else {

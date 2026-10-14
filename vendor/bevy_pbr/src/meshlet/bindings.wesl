@@ -316,25 +316,27 @@ fn meshlet_cutout_visible(instance_id: u32, uv: vec2<f32>) -> bool {
         return textureSampleLevel(meshlet_cutout_atlas, meshlet_cutout_sampler, uv, i32(cutout.x), 0.0).a >= cutout.y;
     }
     // Preserve source-resolution periodic bilinear alpha across heterogeneous
-    // padded layers. Filtering must wrap at the logical mask, not at padding.
+    // packed rectangles. Filtering must wrap at the logical mask, not at padding.
     let packed = u32(abs(cutout.w)) - 1u;
     let size = vec2<i32>(i32(packed >> 12u) + 1, i32(packed & 4095u) + 1);
+    let origin_code = u32(max(abs(cutout.z), 1.0)) - 1u;
+    let origin = vec2<i32>(i32(origin_code >> 12u), i32(origin_code & 4095u));
     let pixel = fract(uv) * vec2<f32>(size) - vec2<f32>(0.5);
     let low = vec2<i32>(floor(pixel));
     let a = ((low % size) + size) % size;
     let b = (a + vec2<i32>(1)) % size;
     let weight = fract(pixel);
-    let p00 = textureLoad(meshlet_cutout_atlas, a, i32(cutout.x), 0);
-    let p10 = textureLoad(meshlet_cutout_atlas, vec2<i32>(b.x, a.y), i32(cutout.x), 0);
-    let p01 = textureLoad(meshlet_cutout_atlas, vec2<i32>(a.x, b.y), i32(cutout.x), 0);
-    let p11 = textureLoad(meshlet_cutout_atlas, b, i32(cutout.x), 0);
+    let p00 = textureLoad(meshlet_cutout_atlas, origin + a, i32(cutout.x), 0);
+    let p10 = textureLoad(meshlet_cutout_atlas, origin + vec2<i32>(b.x, a.y), i32(cutout.x), 0);
+    let p01 = textureLoad(meshlet_cutout_atlas, origin + vec2<i32>(a.x, b.y), i32(cutout.x), 0);
+    let p11 = textureLoad(meshlet_cutout_atlas, origin + b, i32(cutout.x), 0);
     let value = mix(mix(p00, p10, weight.x), mix(p01, p11, weight.x), weight.y);
     return select(value.a, value.r, cutout.w < 0.0) >= cutout.y;
 }
 
 @if((MESHLET_VISIBILITY_BUFFER_RASTER_PASS))
 fn meshlet_double_sided(instance_id: u32) -> bool {
-    return meshlet_instance_cutouts[instance_id].z != 0.0;
+    return meshlet_instance_cutouts[instance_id].z > 0.0;
 }
 
 // TODO: Load only twice, instead of 3x in cases where you load 3 indices per thread?

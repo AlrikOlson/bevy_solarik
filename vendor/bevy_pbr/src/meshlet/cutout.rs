@@ -23,6 +23,30 @@ pub struct MeshletVisibilityCutout {
     pub cutoff: f32,
     /// Original mask dimensions inside a padded layer. Zero keeps legacy full-layer UVs.
     pub size: UVec2,
+    /// Texel origin of the native mask within its physical atlas layer.
+    pub offset: UVec2,
+}
+
+impl MeshletVisibilityCutout {
+    pub(super) fn key(&self) -> [u32; 6] {
+        [
+            self.layer,
+            self.cutoff.to_bits(),
+            self.size.x,
+            self.size.y,
+            self.offset.x,
+            self.offset.y,
+        ]
+    }
+}
+
+pub(super) fn with_sidedness(mut value: Vec4, double_sided: bool) -> Vec4 {
+    value.z = if double_sided {
+        value.z.abs().max(1.0)
+    } else {
+        -value.z.abs()
+    };
+    value
 }
 
 /// Rasterize both windings of a meshlet surface. Its material must also enable
@@ -53,12 +77,17 @@ pub(super) fn metadata(
     } else {
         cutout.size
     };
-    let valid = valid && size.min_element() > 0 && size.cmple(full).all();
+    let valid = valid
+        && size.min_element() > 0
+        && size.cmple(full).all()
+        && cutout.offset.cmple(full - size).all();
     if !valid {
         return None;
     }
     // Both dimensions fit exactly in one f32 integer (24 bits). No instance
-    // buffer/layout growth; z remains the double-sided flag. Negative selects R8.
+    // buffer/layout growth. The sign of z carries sidedness, its magnitude the
+    // exact 24-bit texel origin plus one. Zero retains legacy origin/single-sided.
+    // Negative w selects R8.
     let code = if cutout.size == UVec2::ZERO && desc.format != TextureFormat::R8Unorm {
         0.0
     } else {
@@ -69,7 +98,12 @@ pub(super) fn metadata(
     } else {
         code
     };
-    valid.then_some(Vec4::new(cutout.layer as f32, cutout.cutoff, 0.0, code))
+    let origin = if cutout.offset == UVec2::ZERO {
+        0.0
+    } else {
+        -(((cutout.offset.x << 12) + cutout.offset.y + 1) as f32)
+    };
+    valid.then_some(Vec4::new(cutout.layer as f32, cutout.cutoff, origin, code))
 }
 
 pub(super) fn valid_atlas(
@@ -125,6 +159,7 @@ mod tests {
             UVec2::splat(4096),
         ] {
             let cutout = MeshletVisibilityCutout {
+                offset: UVec2::ZERO,
                 layer: 1,
                 cutoff: 0.5,
                 size,
@@ -135,6 +170,7 @@ mod tests {
             assert_eq!(UVec2::new((packed >> 12) + 1, (packed & 4095) + 1), size);
         }
         let invalid = MeshletVisibilityCutout {
+            offset: UVec2::ZERO,
             layer: 0,
             cutoff: 0.5,
             size: UVec2::new(0, 1),
@@ -159,6 +195,47 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn packed_origins_preserve_sidedness_and_reject_out_of_bounds_rectangles() {
+        let (mut images, atlas) = atlas();
+        images.get_mut(&atlas.0).unwrap().texture_descriptor.size = Extent3d {
+            width: 4096,
+            height: 4096,
+            depth_or_array_layers: 2,
+        };
+        for offset in [UVec2::ZERO, UVec2::new(17, 31), UVec2::splat(4095)] {
+            let mask = MeshletVisibilityCutout {
+                layer: 0,
+                cutoff: 0.5,
+                size: UVec2::ONE,
+                offset,
+            };
+            let m = metadata(Some(&mask), &atlas, &images).unwrap();
+            for sided in [false, true] {
+                let m = with_sidedness(m, sided);
+                assert_eq!(m.z > 0.0, sided);
+                let packed = m.z.abs().max(1.0) as u32 - 1;
+                assert_eq!(UVec2::new(packed >> 12, packed & 4095), offset);
+            }
+        }
+        for offset in [UVec2::new(4096, 0), UVec2::new(0, u32::MAX)] {
+            let mask = MeshletVisibilityCutout {
+                layer: 0,
+                cutoff: 0.5,
+                size: UVec2::ONE,
+                offset,
+            };
+            assert!(metadata(Some(&mask), &atlas, &images).is_none());
+        }
+        let mask = MeshletVisibilityCutout {
+            layer: 0,
+            cutoff: 0.5,
+            size: UVec2::ZERO,
+            offset: UVec2::ONE,
+        };
+        assert!(metadata(Some(&mask), &atlas, &images).is_none());
+    }
+
     fn atlas() -> (Assets<Image>, MeshletCutoutAtlas) {
         let mut images = Assets::<Image>::default();
         let mut image = Image::default();
@@ -177,6 +254,7 @@ mod tests {
         let images = Assets::<Image>::default();
         let atlas = MeshletCutoutAtlas::default();
         let cutout = MeshletVisibilityCutout {
+            offset: UVec2::ZERO,
             size: UVec2::ZERO,
             layer: 0,
             cutoff: 0.5,
@@ -189,6 +267,7 @@ mod tests {
     fn validates_layer_cutoff_and_single_mip_array_contract() {
         let (mut images, atlas) = atlas();
         let cutout = MeshletVisibilityCutout {
+            offset: UVec2::ZERO,
             size: UVec2::ZERO,
             layer: 1,
             cutoff: 0.5,
@@ -199,21 +278,25 @@ mod tests {
         );
         for invalid in [
             MeshletVisibilityCutout {
+                offset: UVec2::ZERO,
                 size: UVec2::ZERO,
                 layer: 2,
                 cutoff: 0.5,
             },
             MeshletVisibilityCutout {
+                offset: UVec2::ZERO,
                 size: UVec2::ZERO,
                 layer: 0,
                 cutoff: f32::NAN,
             },
             MeshletVisibilityCutout {
+                offset: UVec2::ZERO,
                 size: UVec2::ZERO,
                 layer: 0,
                 cutoff: -0.1,
             },
             MeshletVisibilityCutout {
+                offset: UVec2::ZERO,
                 size: UVec2::ZERO,
                 layer: 0,
                 cutoff: 1.1,

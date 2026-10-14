@@ -114,7 +114,7 @@ struct Sources<'a> {
     atlas: &'a MeshletCutoutAtlas,
     images: &'a Assets<Image>,
     geometry: HashMap<AssetId<MeshletMesh>, Option<(u32, MeshletAabb, u32)>>,
-    alpha: HashMap<(Option<(u32, u32, u32, u32)>, bool), Option<Vec4>>,
+    alpha: HashMap<(Option<[u32; 6]>, bool), Option<Vec4>>,
 }
 impl Sources<'_> {
     fn prepare(&mut self, part: &MeshletAssemblyPart) -> Option<Prepared> {
@@ -122,16 +122,12 @@ impl Sources<'_> {
             return None;
         }
         let key = (
-            part.cutout
-                .as_ref()
-                .map(|c| (c.layer, c.cutoff.to_bits(), c.size.x, c.size.y)),
+            part.cutout.as_ref().map(MeshletVisibilityCutout::key),
             part.double_sided,
         );
         let alpha = *self.alpha.entry(key).or_insert_with(|| {
-            metadata(part.cutout.as_ref(), self.atlas, self.images).map(|mut m| {
-                m.z = f32::from(part.double_sided);
-                m
-            })
+            metadata(part.cutout.as_ref(), self.atlas, self.images)
+                .map(|value| with_sidedness(value, part.double_sided))
         });
         let (root, bounds, depth) = (*self.geometry.entry(part.mesh.id()).or_insert_with(|| {
             if self.server.is_managed(part.mesh.id())
