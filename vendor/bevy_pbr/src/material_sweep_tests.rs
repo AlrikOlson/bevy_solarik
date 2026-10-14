@@ -46,7 +46,7 @@ fn material_sweep_preserves_virtual_owner_but_retires_removed_materials() {
     let instances = render.resource::<RenderMaterialInstances>();
     assert_eq!(
         instances.mesh_material(virtual_owner.into()),
-        material,
+        Some(material),
         "removing ordinary raster must retain the live virtual mesh material"
     );
     assert!(!instances.instances.contains_key(&MainEntity::from(retired)));

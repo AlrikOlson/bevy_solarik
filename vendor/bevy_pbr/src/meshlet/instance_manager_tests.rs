@@ -340,6 +340,7 @@ fn persistent_raw_scene_receipt_handles_motion_catchup_optional_removals_and_mem
     }
     inputs = capture(&mut world);
     world.entity_mut(entity).insert(MeshletVisibilityCutout {
+        size: bevy_math::UVec2::ZERO,
         layer: 1,
         cutoff: 0.5,
     });

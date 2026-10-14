@@ -86,6 +86,7 @@ mod tests {
         change_and_remove!(NotShadowCaster, NotShadowCaster);
         change_and_remove!(
             MeshletVisibilityCutout {
+                size: bevy_math::UVec2::ZERO,
                 layer: 1,
                 cutoff: 0.5
             },

@@ -58,7 +58,7 @@ pub(crate) struct InstanceInput {
     layers: RenderLayers,
     not_shadow_receiver: bool,
     not_shadow_caster: bool,
-    cutout: Option<(u32, u32)>,
+    cutout: Option<(u32, u32, u32, u32)>,
     double_sided: bool,
 }
 
@@ -90,7 +90,7 @@ impl InstanceInput {
             layers: layers.cloned().unwrap_or_default(),
             not_shadow_receiver: receiver,
             not_shadow_caster: caster,
-            cutout: cutout.map(|c| (c.layer, c.cutoff.to_bits())),
+            cutout: cutout.map(|c| (c.layer, c.cutoff.to_bits(), c.size.x, c.size.y)),
             double_sided,
         }
     }
@@ -109,7 +109,7 @@ impl InstanceInput {
             && self.layers == *layers.unwrap_or_default()
             && self.not_shadow_receiver == receiver
             && self.not_shadow_caster == caster
-            && self.cutout == cutout.map(|c| (c.layer, c.cutoff.to_bits()))
+            && self.cutout == cutout.map(|c| (c.layer, c.cutoff.to_bits(), c.size.x, c.size.y))
             && self.double_sided == double_sided
     }
 }
@@ -767,7 +767,8 @@ pub fn extract_meshlet_mesh_entities(
     let mut mesh_metadata: HashMap<AssetId<MeshletMesh>, Option<(u32, MeshletAabb, u32)>> =
         HashMap::default();
     // Shared alpha metadata is validated once per exact source layer/cutoff/sidedness.
-    let mut alpha_metadata: HashMap<(Option<(u32, u32)>, bool), Option<Vec4>> = HashMap::default();
+    let mut alpha_metadata: HashMap<(Option<(u32, u32, u32, u32)>, bool), Option<Vec4>> =
+        HashMap::default();
 
     // Iterate over every instance
     let mut query_count = 0;

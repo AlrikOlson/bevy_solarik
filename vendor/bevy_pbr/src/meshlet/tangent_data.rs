@@ -28,7 +28,7 @@ pub(super) fn source_tangents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_math::primitives::Cuboid;
+    use bevy_shape::Cuboid;
 
     #[test]
     fn tangentless_mesh_retains_legacy_reconstruction() {

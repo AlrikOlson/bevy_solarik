@@ -114,7 +114,7 @@ struct Sources<'a> {
     atlas: &'a MeshletCutoutAtlas,
     images: &'a Assets<Image>,
     geometry: HashMap<AssetId<MeshletMesh>, Option<(u32, MeshletAabb, u32)>>,
-    alpha: HashMap<(Option<(u32, u32)>, bool), Option<Vec4>>,
+    alpha: HashMap<(Option<(u32, u32, u32, u32)>, bool), Option<Vec4>>,
 }
 impl Sources<'_> {
     fn prepare(&mut self, part: &MeshletAssemblyPart) -> Option<Prepared> {
@@ -122,7 +122,9 @@ impl Sources<'_> {
             return None;
         }
         let key = (
-            part.cutout.as_ref().map(|c| (c.layer, c.cutoff.to_bits())),
+            part.cutout
+                .as_ref()
+                .map(|c| (c.layer, c.cutoff.to_bits(), c.size.x, c.size.y)),
             part.double_sided,
         );
         let alpha = *self.alpha.entry(key).or_insert_with(|| {
